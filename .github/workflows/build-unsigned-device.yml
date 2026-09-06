@@ -23,48 +23,176 @@ jobs:
         with:
           xcode-version: '26.6'
 
-      - name: Repair stale FlekSt0re Xcode project references
+      - name: Strip remaining FlekSt0re access and payment remnants
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
+          # Xcode's synchronized group retained one deleted file in
+          # membershipExceptions, which makes an otherwise-clean source tree fail
+          # before Swift compilation.
           project = Path('LiveContainer.xcodeproj/project.pbxproj')
-          text = project.read_text(encoding='utf-8')
-          original = text
-
-          stale = [
+          ptext = project.read_text(encoding='utf-8')
+          stale_project_entries = [
               'FlekStore/Models/DeviceStatusResponse.swift',
               'FlekStore/Models/AccessVerification.swift',
               'FlekStore/Screens/Premium/PremiumRequiredView.swift',
               'FlekStore/Views/AccessBlockedView.swift',
           ]
+          for item in stale_project_entries:
+              ptext = ptext.replace(f'\t\t\t\t{item},\n', '')
+              ptext = ptext.replace(f'\t\t\t\t"{item}",\n', '')
+          project.write_text(ptext, encoding='utf-8')
 
-          for item in stale:
-              text = text.replace(f'\t\t\t\t{item},\n', '')
-              text = text.replace(f'\t\t\t\t"{item}",\n', '')
+          # Settings still contained the old FlekSt0re subscription panel and
+          # /device-service/get-status client. Remove the feature, not merely the
+          # missing response type.
+          settings = Path('LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift')
+          s = settings.read_text(encoding='utf-8')
 
-          project.write_text(text, encoding='utf-8')
+          if '@State private var udid: String = ""' in s:
+              s, n = re.subn(
+                  r'    @State private var udid: String = ""\n\s*\n'
+                  r'    @State private var subscriptionEndDate: String\?\n'
+                  r'    @State private var hasSubscription: Bool = false\n'
+                  r'    @State private var isSubscriptionLoading: Bool = false\n\s*\n',
+                  '', s, count=1
+              )
+              if n != 1:
+                  raise SystemExit('Could not remove subscription state')
 
-          leftovers = [item for item in stale if item in text]
-          if leftovers:
-              raise SystemExit('Stale Xcode references remain: ' + ', '.join(leftovers))
+          s = s.replace('    @AppStorage("FSDeviceUDID") private var fsDeviceUDID: String = ""\n', '')
 
-          removed = sum(original.count(item) for item in stale)
-          print(f'Removed {removed} stale FlekSt0re project reference(s)')
+          if '///Flekstore user defaults' in s:
+              s, n = re.subn(
+                  r'    ///Flekstore user defaults\n'
+                  r'    @AppStorage\("FSEncryptedUDID"\).*?'
+                  r'    private var subscriptionInitialized: Bool = false\n\s*\n',
+                  '', s, count=1, flags=re.S
+              )
+              if n != 1:
+                  raise SystemExit('Could not remove FlekSt0re subscription storage')
+
+          if 'private static let subscriptionDateFormatter' in s:
+              s, n = re.subn(
+                  r'    private static let subscriptionDateFormatter: DateFormatter = \{.*?    \}\(\)\n\s*\n',
+                  '', s, count=1, flags=re.S
+              )
+              if n != 1:
+                  raise SystemExit('Could not remove subscription date formatter')
+
+          if 'private func formattedSubscriptionDate' in s:
+              s, n = re.subn(
+                  r'    private func formattedSubscriptionDate\(_ dateString: String\) -> String \{.*?    \}\n\s*\n',
+                  '', s, count=1, flags=re.S
+              )
+              if n != 1:
+                  raise SystemExit('Could not remove subscription date helper')
+
+          if '// MARK: - UDID' in s:
+              s, n = re.subn(
+                  r'    // MARK: - UDID\n.*?(?=    /// Name of the step the haptics slider)',
+                  '', s, count=1, flags=re.S
+              )
+              if n != 1:
+                  raise SystemExit('Could not remove subscription UDID helpers')
+
+          if 'Image(systemName: "wallet.pass.fill")' in s:
+              s, n = re.subn(
+                  r'                    HStack\(spacing: 12\) \{\n'
+                  r'                        Image\(systemName: "wallet\.pass\.fill"\).*?'
+                  r'                    \.padding\(\.vertical, 6\)\n',
+                  '', s, count=1, flags=re.S
+              )
+              if n != 1:
+                  raise SystemExit('Could not remove FlekSt0re UDID settings row')
+
+          if '// MARK: - Subscription Status' in s:
+              s, n = re.subn(
+                  r'\n                    // MARK: - Subscription Status\n'
+                  r'                    HStack\(spacing: 12\) \{.*?'
+                  r'                    \.padding\(\.vertical, 6\)\n',
+                  '\n', s, count=1, flags=re.S
+              )
+              if n != 1:
+                  raise SystemExit('Could not remove premium subscription settings row')
+
+          bootstrap = '''            .onAppear {
+                loadEncryptedUDIDFromPlist()
+                hydrateSubscriptionStateFromStorage()
+
+                // Fetch once for initial subscription bootstrap only.
+                if !subscriptionInitialized {
+                    Task {
+                        await checkSubscription()
+                        subscriptionInitialized = true
+                    }
+                }
+            }
+            .onChange(of: deviceUDID) { newValue in
+                udid = newValue
+            }
+            .onChange(of: subscriptionStatusStored) { newValue in
+                hasSubscription = newValue
+            }
+            .onChange(of: subscriptionEndDateStored) { newValue in
+                subscriptionEndDate = newValue.isEmpty ? nil : newValue
+            }
+'''
+          s = s.replace(bootstrap, '')
+
+          # These three functions are the final methods in LCSettingsView and exist
+          # only for the removed access/subscription service.
+          tail_marker = '\n    private func loadEncryptedUDIDFromPlist() {'
+          if tail_marker in s:
+              s = s[:s.index(tail_marker)] + '\n}\n'
+
+          settings.write_text(s, encoding='utf-8')
+
+          forbidden = [
+              'DeviceStatusResponse',
+              'PremiumRequiredView',
+              'Premium Subscription',
+              'FSSubscriptionStatus',
+              'FSSubscriptionEndDate',
+              'FSSubscriptionInitialized',
+              'FSEncryptedUDID',
+              'device-service/get-status',
+              'Unable to verify access',
+              'User UDID is empty',
+              'checkSubscription()',
+              'hasSubscription',
+          ]
+          roots = [Path('LiveContainerSwiftUI'), Path('LiveContainer.xcodeproj/project.pbxproj')]
+          violations = []
+          for root in roots:
+              files = [root] if root.is_file() else list(root.rglob('*'))
+              for f in files:
+                  if not f.is_file() or f.suffix not in {'.swift', '.pbxproj'}:
+                      continue
+                  text = f.read_text(encoding='utf-8', errors='ignore')
+                  for token in forbidden:
+                      if token in text:
+                          violations.append(f'{f}: {token}')
+          if violations:
+              raise SystemExit('FlekSt0re payment/access remnants remain:\n' + '\n'.join(violations))
+
+          print('FlekDeck payment/access cleanup audit passed')
           PY
 
-      - name: Persist Xcode project repair
+      - name: Persist standalone cleanup
         run: |
           set -euo pipefail
-          if git diff --quiet -- LiveContainer.xcodeproj/project.pbxproj; then
-            echo 'Xcode project already clean'
+          if git diff --quiet -- LiveContainer.xcodeproj/project.pbxproj LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift; then
+            echo 'Standalone source already clean'
             exit 0
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add LiveContainer.xcodeproj/project.pbxproj
-          git commit -m 'Remove stale FlekSt0re Xcode project references'
+          git add LiveContainer.xcodeproj/project.pbxproj LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          git commit -m 'Remove remaining FlekSt0re payment settings'
           git push origin HEAD:main
 
       - name: Build unsigned real-device archive
