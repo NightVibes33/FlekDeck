@@ -1,0 +1,48 @@
+name: Strip FlekSt0re Access Gates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/strip_flekstore_entitlements.py
+      - .github/workflows/strip-flekstore-access.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  strip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Remove FlekSt0re access and premium code
+        run: python3 tools/strip_flekstore_entitlements.py
+
+      - name: Verify forbidden access/payment strings are gone
+        run: |
+          set -euo pipefail
+          if grep -RniE 'PremiumRequiredView|showPremium|requiresPremium|hasSubscription|refreshSubscriptionStatus|FSEncryptedUDID|AccessVerificationService|AccessVerdictStore|AccessBlockedView|device-service/get-status|Unable to verify access|User UDID is empty|chargeback' \
+            LiveContainerSwiftUI/FlekStore \
+            LiveContainerSwiftUI/FlekDeck \
+            LiveContainerSwiftUI/Views/LCTabView.swift; then
+            echo 'FlekSt0re access/payment remnants remain' >&2
+            exit 1
+          fi
+
+      - name: Commit standalone cleanup
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No cleanup changes required'
+          else
+            git commit -m 'Remove FlekSt0re access and premium gates'
+            git push origin HEAD:main
+          fi
