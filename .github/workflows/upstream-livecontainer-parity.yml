@@ -1,0 +1,161 @@
+name: Upstream LiveContainer Signing/JIT-Less Parity
+
+on:
+  push:
+    branches: [sync-upstream-livecontainer-jitless]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  parity-build:
+    runs-on: macos-latest
+    env:
+      UPSTREAM_SHA: 12377cf3b91d51739a33f14a302e5f522b238593
+    steps:
+      - name: Checkout FlekDeck parity branch
+        uses: actions/checkout@v4
+        with:
+          ref: sync-upstream-livecontainer-jitless
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fetch official Duy LiveContainer
+        run: |
+          set -euo pipefail
+          git remote remove duy-upstream 2>/dev/null || true
+          git remote add duy-upstream https://github.com/LiveContainer/LiveContainer.git
+          git fetch --no-tags duy-upstream "$UPSTREAM_SHA"
+
+      - name: Replace signing/JIT-less core with exact upstream files
+        run: |
+          set -euo pipefail
+          U="$UPSTREAM_SHA"
+
+          # Certificate/app-group/team identity foundation.
+          git checkout "$U" -- \
+            LiveContainer/LCSharedUtils.h \
+            LiveContainer/LCSharedUtils.m \
+            LiveContainerSwiftUI/Utilities/LCUtils.h \
+            LiveContainerSwiftUI/Utilities/LCUtils.m \
+            LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+
+          # Exact upstream patch -> sign-after-install implementation.
+          git checkout "$U" -- \
+            LiveContainerSwiftUI/Models/LCAppInfo.h \
+            LiveContainerSwiftUI/Models/LCAppInfo.m \
+            LiveContainerSwiftUI/Models/LCAppModel.swift \
+            LiveContainer/LCMachOUtils.h \
+            LiveContainer/LCMachOUtils.m
+
+          # Exact runtime signature/JIT-less validation pieces.
+          git checkout "$U" -- \
+            LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift \
+            LiveContainer/dyld_bypass_validation.h \
+            LiveContainer/dyld_bypass_validation.m \
+            LiveContainer/main.c \
+            TestJITLess/TestJITLess.m \
+            entitlements.xml
+
+          # Exact signer and hook dependency used by upstream.
+          rm -rf ZSign
+          git checkout "$U" -- ZSign litehook
+          git submodule update --init --recursive litehook OpenSSL
+
+          # SideStoreSupport and OpenSSL are intentionally not rewritten: SHA parity
+          # is checked below and the fork currently matches upstream byte-for-byte.
+
+      - name: Prove core parity against upstream
+        run: |
+          set -euo pipefail
+          U="$UPSTREAM_SHA"
+          paths=(
+            LiveContainer/LCSharedUtils.h
+            LiveContainer/LCSharedUtils.m
+            LiveContainerSwiftUI/Utilities/LCUtils.h
+            LiveContainerSwiftUI/Utilities/LCUtils.m
+            LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+            LiveContainerSwiftUI/Models/LCAppInfo.h
+            LiveContainerSwiftUI/Models/LCAppInfo.m
+            LiveContainerSwiftUI/Models/LCAppModel.swift
+            LiveContainer/LCMachOUtils.h
+            LiveContainer/LCMachOUtils.m
+            LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+            LiveContainer/dyld_bypass_validation.h
+            LiveContainer/dyld_bypass_validation.m
+            LiveContainer/main.c
+            TestJITLess/TestJITLess.m
+            entitlements.xml
+          )
+          for p in "${paths[@]}"; do
+            test "$(git hash-object "$p")" = "$(git rev-parse "$U:$p")" || { echo "PARITY FAIL: $p"; exit 1; }
+            echo "UPSTREAM EXACT: $p"
+          done
+          test "$(git rev-parse HEAD:SideStoreSupport)" = "$(git rev-parse "$U:SideStoreSupport")" || { echo 'SideStoreSupport drift'; exit 1; }
+          test "$(git rev-parse HEAD:OpenSSL)" = "$(git rev-parse "$U:OpenSSL")" || { echo 'OpenSSL drift'; exit 1; }
+          test "$(git rev-parse :ZSign)" = "$(git rev-parse "$U:ZSign")" || { echo 'ZSign drift'; exit 1; }
+          test "$(git rev-parse :litehook)" = "$(git rev-parse "$U:litehook")" || { echo 'litehook drift'; exit 1; }
+          echo "UPSTREAM EXACT: SideStoreSupport"
+          echo "UPSTREAM EXACT: OpenSSL"
+          echo "UPSTREAM EXACT: ZSign"
+          echo "UPSTREAM EXACT: litehook"
+
+      - name: Persist upstream parity core
+        run: |
+          set -euo pipefail
+          if git diff --quiet && git diff --cached --quiet; then
+            echo 'Parity core already persisted'
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add LiveContainer LiveContainerSwiftUI/Utilities LiveContainerSwiftUI/Models LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift ZSign TestJITLess entitlements.xml litehook
+            git commit -m "Sync signing install and JIT-less core to Duy LiveContainer $UPSTREAM_SHA"
+            git push origin HEAD:sync-upstream-livecontainer-jitless
+          fi
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Parse upstream Swift core
+        run: |
+          set -euo pipefail
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+
+      - name: Build unsigned real-device archive
+        run: |
+          set -euo pipefail
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck-UpstreamCore.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP="$(find "$PWD/build/FlekDeck-UpstreamCore.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build
+          zip -qry FlekDeck-Duy-LiveContainer-core.ipa Payload
+          unzip -t FlekDeck-Duy-LiveContainer-core.ipa >/dev/null
+          test -s FlekDeck-Duy-LiveContainer-core.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-Duy-LiveContainer-core-ipa
+          path: build/FlekDeck-Duy-LiveContainer-core.ipa
+          if-no-files-found: error
