@@ -20,41 +20,17 @@
 #include "Utils.hpp"
 #include "zsigner.h"
 
-// Give the file a new inode so the kernel drops the signature blob it cached
-// against the old one, see https://developer.apple.com/documentation/security/updating-mac-software
-//
-// Every step is checked. The previous version ignored all three errors, which
-// meant a failed copy still deleted the original and then renamed a leftover
-// .tmp - debris from an earlier run that was killed partway through - back over
-// it. The bundle then got signed with a stale binary in place, zsign reported
-// success, and the post-sign signature check failed for no visible reason.
-bool refreshFile(NSString* path) {
-    NSFileManager* fm = NSFileManager.defaultManager;
-    if(![fm fileExistsAtPath:path]) {
-        return true;
+// copy, remove and rename back the file to prevent crash due to kernel signature cache
+// see https://developer.apple.com/documentation/security/updating-mac-software
+void refreshFile(NSString* path) {
+    if(![NSFileManager.defaultManager fileExistsAtPath:path]) {
+        return;
     }
     NSString* newPath = [NSString stringWithFormat:@"%@.tmp", path];
-    NSError* error = nil;
-
-    // Never reuse a .tmp we did not just write - it predates this file.
-    [fm removeItemAtPath:newPath error:nil];
-
-    if(![fm copyItemAtPath:path toPath:newPath error:&error]) {
-        // Leave the original alone. It keeps the old inode, but a stale inode
-        // beats a missing or outdated executable.
-        NSLog(@"[LC] refreshFile: failed to copy %@: %@", path, error);
-        return false;
-    }
-
-    // rename(2) rather than -moveItemAtPath:, which refuses to clobber an
-    // existing destination. The swap is atomic, so being killed here can no
-    // longer leave the path without a file.
-    if(rename(newPath.fileSystemRepresentation, path.fileSystemRepresentation) != 0) {
-        NSLog(@"[LC] refreshFile: failed to rename %@ into place: %s", newPath, strerror(errno));
-        [fm removeItemAtPath:newPath error:nil];
-        return false;
-    }
-    return true;
+    NSError* error;
+    [NSFileManager.defaultManager copyItemAtPath:path toPath:newPath error:&error];
+    [NSFileManager.defaultManager removeItemAtPath:path error:&error];
+    [NSFileManager.defaultManager moveItemAtPath:newPath toPath:path error:&error];
 }
 
 
@@ -291,22 +267,12 @@ int checkCert(NSData *key,
     NSFileManager *fm = [NSFileManager defaultManager];
     NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:bundleURL includingPropertiesForKeys:@[NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
     NSMutableArray* filesToSign = [NSMutableArray new];
-    NSMutableArray* staleTmpFiles = [NSMutableArray new];
-
+    
     NSError* error;
-
+    
     for (NSURL *fileURL in enumerator) {
         NSNumber *isRegularFile = nil;
         if (![fileURL getResourceValue:&isRegularFile forKey:NSURLIsRegularFileKey error:&error] || ![isRegularFile boolValue]) {
-            continue;
-        }
-        // A "<file>.tmp" sitting next to "<file>" is debris left by a refreshFile
-        // that was interrupted. Signing it is pointless, and it would race with the
-        // refresh of its sibling, which writes to that exact path. Requiring the
-        // sibling to exist keeps us from touching a .tmp the app genuinely ships.
-        if ([fileURL.pathExtension isEqualToString:@"tmp"] &&
-            [fm fileExistsAtPath:fileURL.path.stringByDeletingPathExtension]) {
-            [staleTmpFiles addObject:fileURL];
             continue;
         }
         if(!is_64bit_macho(fileURL.path.UTF8String)) {
@@ -314,13 +280,7 @@ int checkCert(NSData *key,
         }
         [filesToSign addObject:fileURL.path];
     }
-
-    // Deleted after the walk rather than during it, so we never mutate the tree
-    // the enumerator is still descending.
-    for (NSURL *staleURL in staleTmpFiles) {
-        [fm removeItemAtURL:staleURL error:nil];
-    }
-
+    
     return [ZSigner signMachOPathArr:filesToSign bundleId:bundleId cert:key pass:pass completionHandler:completionHandler];
 }
 

@@ -7,6 +7,7 @@
 import SwiftUI
 
 struct LCEntitlementView : View {
+    @State var isLiveProcess: Bool
     @State var loaded = false
     @State var entitlementReadSuccess = false
     
@@ -23,16 +24,17 @@ struct LCEntitlementView : View {
         if loaded {
             Form {
                 Section {
-                    HStack {
-                        Text("lc.jitlessDiag.bundleId".loc)
-                        Spacer()
-                        Text(Bundle.main.bundleIdentifier ?? "lc.common.unknown".loc)
-                            .foregroundStyle(entitlementReadSuccess && teamId != nil ? (isBundleIdCorrect ? .green : .red): .gray)
-                            .textSelection(.enabled)
+                    if !isLiveProcess {
+                        HStack {
+                            Text("lc.jitlessDiag.bundleId".loc)
+                            Spacer()
+                            Text(Bundle.main.bundleIdentifier ?? "lc.common.unknown".loc)
+                                .foregroundStyle(entitlementReadSuccess && teamId != nil ? (isBundleIdCorrect ? .green : .red): .gray)
+                                .textSelection(.enabled)
+                        }
                     }
-                    
                     if entitlementReadSuccess {
-                        if !isBundleIdCorrect && teamId != nil {
+                        if !isLiveProcess && !isBundleIdCorrect && teamId != nil {
                             HStack {
                                 Text("lc.jitlessDiag.bundleIdExpected".loc)
                                 Spacer()
@@ -79,8 +81,8 @@ struct LCEntitlementView : View {
                         .font(.system(.subheadline, design: .monospaced))
                 }
             }
+            .navigationTitle(isLiveProcess ? "LiveProcess Entitlements" : "LiveContainer Entitlements")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .principal) { Text("lc.jielessDiag.entitlement".loc).font(.headline) } }
         } else {
             Text("lc.common.loading".loc)
                 .onAppear() {
@@ -98,7 +100,19 @@ struct LCEntitlementView : View {
             loaded = true
         }
         
-        guard let entitlementXML = getLCEntitlementXML() else {
+        let executablePath: String?
+        
+        if !isLiveProcess {
+            executablePath = Bundle.main.executablePath
+        } else {
+            executablePath = Bundle.main.builtInPlugInsURL?.appendingPathComponent("LiveProcess.appex/LiveProcess").path
+            if let executablePath, !FileManager.default.fileExists(atPath: executablePath) {
+                entitlementContent = "LiveProcess is not installed."
+                return
+            }
+        }
+
+        guard let entitlementXML = getExecutableEntitlementXML(executablePath) else {
             entitlementContent = "Failed to load entitlement."
             return
         }
@@ -160,9 +174,6 @@ struct LCJITLessDiagnoseView : View {
     
     @State var isJITLessTestInProgress = false
     
-    @State private var debugTapCount = 0
-    @State private var showDebugSections = UserDefaults.standard.bool(forKey: "LCShowDebugSections")
-    
     @State var errorShow = false
     @State var errorInfo = ""
     @State var successShow = false
@@ -175,50 +186,55 @@ struct LCJITLessDiagnoseView : View {
     var body: some View {
         if loaded {
             Form {
-                if showDebugSections {
-                    Section {
-                        HStack {
-                            Text("lc.jitlessDiag.bundleId".loc)
-                            Spacer()
-                            Text(Bundle.main.bundleIdentifier ?? "lc.common.unknown".loc)
-                                .foregroundStyle(.gray)
-                                .textSelection(.enabled)
-                        }
+                Section {
+                    HStack {
+                        Text("lc.jitlessDiag.bundleId".loc)
+                        Spacer()
+                        Text(Bundle.main.bundleIdentifier ?? "lc.common.unknown".loc)
+                            .foregroundStyle(.gray)
+                            .textSelection(.enabled)
+                    }
 
-                        HStack {
-                            Text("lc.jitlessDiag.appGroupId".loc)
-                            Spacer()
-                            Text(appGroupId)
-                                .foregroundStyle(appGroupId == "Unknown" ? .red : .green)
+                    HStack {
+                        Text("lc.jitlessDiag.appGroupId".loc)
+                        Spacer()
+                        Text(appGroupId)
+                            .foregroundStyle(appGroupId == "Unknown" ? .red : .green)
+                    }
+                    HStack {
+                        Text("lc.jitlessDiag.appGroupAccessible".loc)
+                        Spacer()
+                        Text(appGroupAccessible ? "lc.common.yes".loc : "lc.common.no".loc)
+                            .foregroundStyle(appGroupAccessible ? .green : .red)
+                    }
+                    HStack {
+                        Text("lc.jitlessDiag.store".loc)
+                        Spacer()
+                        if store == .AltStore {
+                            Text("AltStore")
+                                .foregroundStyle(.gray)
+                        } else if store == .SideStore {
+                            Text("SideStore")
+                                .foregroundStyle(.gray)
+                        } else if store == .ADP {
+                            Text("lc.common.ADP".loc)
+                                .foregroundStyle(.gray)
+                        } else {
+                            Text("lc.common.unknown".loc)
+                                .foregroundStyle(.gray)
                         }
-                        HStack {
-                            Text("lc.jitlessDiag.appGroupAccessible".loc)
-                            Spacer()
-                            Text(appGroupAccessible ? "lc.common.yes".loc : "lc.common.no".loc)
-                                .foregroundStyle(appGroupAccessible ? .green : .red)
-                        }
-                        HStack {
-                            Text("lc.jitlessDiag.store".loc)
-                            Spacer()
-                            if store == .AltStore {
-                                Text("AltStore")
-                                    .foregroundStyle(.gray)
-                            } else if store == .SideStore {
-                                Text("SideStore")
-                                    .foregroundStyle(.gray)
-                            } else if store == .ADP {
-                                Text("lc.common.ADP".loc)
-                                    .foregroundStyle(.gray)
-                            } else {
-                                Text("lc.common.unknown".loc)
-                                    .foregroundStyle(.gray)
-                            }
-                            
-                        }
+                        
+                    }
+                    NavigationLink {
+                        LCEntitlementView(isLiveProcess: false)
+                    } label: {
+                        Text("LiveContainer Entitlements".loc)
+                    }
+                    if sharedModel.multiLCStatus == 0 {
                         NavigationLink {
-                            LCEntitlementView()
+                            LCEntitlementView(isLiveProcess: true)
                         } label: {
-                            Text("lc.jielessDiag.entitlement".loc)
+                            Text("LiveProcess Entitlements".loc)
                         }
                     }
                 }
@@ -238,36 +254,32 @@ struct LCJITLessDiagnoseView : View {
                             .foregroundStyle(certificatePasswordFound ? .green : .red)
                     }
                     
-                    if showDebugSections {
-                        HStack {
-                            Text("lc.jitlessDiag.certLastUpdate".loc)
-                            Spacer()
-                            if let certLastUpdateDateStr {
-                                Text(certLastUpdateDateStr)
-                                    .foregroundStyle(.green)
-                            } else {
-                                Text("lc.common.unknown".loc)
-                                    .foregroundStyle(.red)
-                            }
-                            
+                    HStack {
+                        Text("lc.jitlessDiag.certLastUpdate".loc)
+                        Spacer()
+                        if let certLastUpdateDateStr {
+                            Text(certLastUpdateDateStr)
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("lc.common.unknown".loc)
+                                .foregroundStyle(.red)
                         }
-                        if certificateDataFound && certTeamId != nil && certTeamId != expectedTeamId {
-                            HStack {
-                                Text("lc.jitlessDiag.expectedTeamId".loc)
-                                Spacer()
-                                Text(expectedTeamId ?? "lc.common.unknown".loc)
-                                    .foregroundStyle(.gray)
-                            }
+                        
+                    }
+                    if certificateDataFound && certTeamId != nil && certTeamId != expectedTeamId {
+                        HStack {
+                            Text("lc.jitlessDiag.expectedTeamId".loc)
+                            Spacer()
+                            Text(expectedTeamId ?? "lc.common.unknown".loc)
+                                .foregroundStyle(.gray)
                         }
                     }
                     if certificateDataFound {
-                        if showDebugSections {
-                            HStack {
-                                Text("lc.jitlessDiag.certTeamId".loc)
-                                Spacer()
-                                Text(certTeamId ?? "lc.common.unknown".loc)
-                                    .foregroundStyle(certTeamId != nil && certTeamId == expectedTeamId ? .green : .red)
-                            }
+                        HStack {
+                            Text("lc.jitlessDiag.certTeamId".loc)
+                            Spacer()
+                            Text(certTeamId ?? "lc.common.unknown".loc)
+                                .foregroundStyle(certTeamId != nil && certTeamId == expectedTeamId ? .green : .red)
                         }
                         HStack {
                             Text("lc.jitlessDiag.certificateStatus".loc)
@@ -275,13 +287,11 @@ struct LCJITLessDiagnoseView : View {
                             Text(certificateStatus == -1 ? "lc.jitlessDiag.checking".loc : getStatusText(status: certificateStatus))
                                 .foregroundStyle(certificateStatus == 0 ? .green : .red)
                         }
-                        if showDebugSections {
-                            HStack {
-                                Text("lc.jitlessDiag.certificateValidateUntil".loc)
-                                Spacer()
-                                Text(certificateValidateUntil != nil ? certificateValidateUntil! : "lc.common.unknown".loc)
-                                    .foregroundStyle(certificateStatus == 0 ? .green : .red)
-                            }
+                        HStack {
+                            Text("lc.jitlessDiag.certificateValidateUntil".loc)
+                            Spacer()
+                            Text(certificateValidateUntil != nil ? certificateValidateUntil! : "lc.common.unknown".loc)
+                                .foregroundStyle(certificateStatus == 0 ? .green : .red)
                         }
                     }
                     
@@ -295,34 +305,20 @@ struct LCJITLessDiagnoseView : View {
                     }
                     .disabled(isJITLessTestInProgress)
                     
-                    if showDebugSections {
-                        Button {
-                            getHelp()
-                        } label: {
-                            Text("lc.jitlessDiag.getHelp".loc)
-                                .bold()
-                                .rainbow()
-                        }
+                    Button {
+                        getHelp()
+                    } label: {
+                        // we apply a super cool rainbow effect so people will never miss this button
+                        Text("lc.jitlessDiag.getHelp".loc)
+                            .bold()
+                            .rainbow()
                     }
                 }
 
             }
+            .navigationTitle("lc.settings.jitlessDiagnose".loc)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("lc.settings.jitlessDiagnose".loc)
-                        .font(.headline)
-                        .onTapGesture {
-                            debugTapCount += 1
-                            if debugTapCount >= 10 {
-                                withAnimation {
-                                    showDebugSections.toggle()
-                                }
-                                UserDefaults.standard.set(showDebugSections, forKey: "LCShowDebugSections")
-                                debugTapCount = 0
-                            }
-                        }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         onAppear()

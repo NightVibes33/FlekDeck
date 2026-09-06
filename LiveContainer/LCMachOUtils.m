@@ -236,20 +236,11 @@ int LCPatchExecSlice(const char *path, struct mach_header_64 *header, bool doInj
 
 NSString *LCParseMachO(const char *path, bool readOnly, LCParseMachOCallback callback) {
     int fd = open(path, readOnly ? O_RDONLY : O_RDWR, (mode_t)readOnly ? 0400 : 0600);
-    if (fd < 0) {
-        return [NSString stringWithFormat:@"Failed to open %s: %s", path, strerror(errno)];
-    }
     struct stat s;
-    if (fstat(fd, &s) != 0) {
-        NSString *error = [NSString stringWithFormat:@"Failed to stat %s: %s", path, strerror(errno)];
-        close(fd);
-        return error;
-    }
+    fstat(fd, &s);
     void *map = mmap(NULL, s.st_size, readOnly ? PROT_READ : (PROT_READ | PROT_WRITE), readOnly ? MAP_PRIVATE : MAP_SHARED, fd, 0);
     if (map == MAP_FAILED) {
-        NSString *error = [NSString stringWithFormat:@"Failed to map %s: %s", path, strerror(errno)];
-        close(fd);
-        return error;
+        return [NSString stringWithFormat:@"Failed to map %s: %s", path, strerror(errno)];
     }
 
     uint32_t magic = *(uint32_t *)map;
@@ -267,8 +258,6 @@ NSString *LCParseMachO(const char *path, bool readOnly, LCParseMachOCallback cal
     } else if (magic == MH_MAGIC_64 || magic == MH_MAGIC) {
         callback(path, (struct mach_header_64 *)map, fd, map);
     } else {
-        munmap(map, s.st_size);
-        close(fd);
         return @"Not a Mach-O file";
     }
 
@@ -528,63 +517,17 @@ NSString* getEntitlementXML(struct mach_header_64* header, void** entitlementXML
     return ans;
 }
 
-// Give `path` a brand new inode, keeping its contents and attributes.
-//
-// The kernel attaches a code signature blob to a file's vnode the first time
-// that file is validated and will not re-read it while the vnode is alive, so a
-// file re-signed in place can still be checked against the blob it carried
-// before. Renaming a fresh copy over the path drops the old inode and forces
-// the next validation to read the signature off disk again.
-// See https://developer.apple.com/documentation/security/updating-mac-software
-bool LCRefreshFileInode(NSString* path, NSError** errorOut) {
-    NSFileManager* fm = NSFileManager.defaultManager;
-    if (![fm fileExistsAtPath:path]) {
-        return true;
-    }
-
-    NSString* tmpPath = [NSString stringWithFormat:@"%@.tmp", path];
-    NSError* error = nil;
-
-    // A .tmp sitting here is debris from a run that died partway through. It
-    // predates whatever the caller just wrote, so it must never be renamed back
-    // over the real file.
-    [fm removeItemAtPath:tmpPath error:nil];
-
-    if (![fm copyItemAtPath:path toPath:tmpPath error:&error]) {
-        // The original is untouched - the caller still has a usable file, it
-        // just keeps the old inode and whatever the kernel cached against it.
-        if (errorOut) *errorOut = error;
-        return false;
-    }
-
-    // rename(2) rather than -moveItemAtPath:, which refuses to clobber an
-    // existing destination. This swap is atomic: the path never stops
-    // resolving, so an interrupted run cannot leave the file missing.
-    if (rename(tmpPath.fileSystemRepresentation, path.fileSystemRepresentation) != 0) {
-        if (errorOut) {
-            *errorOut = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{
-                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to rename %@ into place: %s", tmpPath, strerror(errno)]
-            }];
-        }
-        [fm removeItemAtPath:tmpPath error:nil];
-        return false;
-    }
-    return true;
-}
-
-bool checkCodeSignatureWithError(const char* path, NSString** errorOut) {
+bool checkCodeSignature(const char* path) {
     __block bool checked = false;
     __block bool ans = false;
-    __block NSString* failureReason = nil;
-    NSString* parseError = LCParseMachO(path, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
+    LCParseMachO(path, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
         if(checked || header->cputype != CPU_TYPE_ARM64) {
             return;
         }
         checked = true;
-
+        
         struct code_signature_command* codeSignatureCommand = findSignatureCommand(header);
         if(!codeSignatureCommand) {
-            failureReason = @"No LC_CODE_SIGNATURE load command - the file carries no signature at all.";
             return;
         }
         off_t sliceOffset = (void*)header - filePtr;
@@ -594,11 +537,10 @@ bool checkCodeSignatureWithError(const char* path, NSString** errorOut) {
         siginfo.fs_blob_size  = codeSignatureCommand->datasize;
         int addFileSigsReault = fcntl(fd, F_ADDFILESIGS_RETURN, &siginfo);
         if ( addFileSigsReault == -1 ) {
-            failureReason = [NSString stringWithFormat:@"F_ADDFILESIGS_RETURN failed: %s (errno %d)", strerror(errno), errno];
             ans = false;
             return;
         }
-
+        
         fchecklv_t checkInfo;
         char     messageBuffer[512];
         messageBuffer[0]                = '\0';
@@ -606,44 +548,22 @@ bool checkCodeSignatureWithError(const char* path, NSString** errorOut) {
         checkInfo.lv_error_message      = messageBuffer;
         checkInfo.lv_file_start= sliceOffset;
         int checkLVresult = fcntl(fd, F_CHECK_LV, &checkInfo);
-
+        
         if (checkLVresult == 0) {
             ans = true;
             return;
         } else {
-            // The kernel writes the actual reason into messageBuffer - it is the
-            // only thing that distinguishes a stale cached blob from a genuinely
-            // bad signature, so keep it.
-            failureReason = [NSString stringWithFormat:@"F_CHECK_LV rejected the signature: %s (errno %d)",
-                             messageBuffer[0] ? messageBuffer : "kernel gave no message", errno];
             ans = false;
             return;
         }
     });
-
-    if (!ans && !failureReason) {
-        if (parseError) {
-            failureReason = parseError;
-        } else if (!checked) {
-            failureReason = @"No arm64 slice found in the file.";
-        } else {
-            failureReason = @"Unknown code signature failure.";
-        }
-    }
-    if (errorOut) {
-        *errorOut = ans ? nil : failureReason;
-    }
     return ans;
 }
 
-bool checkCodeSignature(const char* path) {
-    return checkCodeSignatureWithError(path, NULL);
-}
-
-NSString* getLCEntitlementXML(void) {
+NSString* getExecutableEntitlementXML(NSString* path) {
     __block NSString* ans = @"Failed to find main executable?";
     // it seems the debug build messes the code signature region up, so we search the executable file on the disk instead.
-    LCParseMachO(NSBundle.mainBundle.executablePath.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
+    LCParseMachO(path.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
         ans = getEntitlementXML(header, 0);
     });
     return ans;

@@ -118,24 +118,6 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
     return appGroupPath;
 }
 
-// Where the share extension parks a file it is handing over to be installed.
-// It cannot hand over the file it was given: that URL is reachable only from
-// the extension -- it is either a file provider's, which only the extension
-// holds a scope for, or a copy iOS made inside the extension's own container,
-// and the extension is torn down the moment it opens the install URL. The app
-// group is the one place both processes can read, so the file is copied here
-// and LiveContainer installs from -- and then removes -- the copy.
-//
-// nil when there is no app group, which leaves the extension to hand over the
-// original URL as it did before.
-+ (NSURL*) shareInboxPath {
-    NSURL* appGroupPath = [self appGroupPath];
-    if(!appGroupPath) {
-        return nil;
-    }
-    return [appGroupPath URLByAppendingPathComponent:@"LiveContainer/ShareInbox"];
-}
-
 + (NSString *)certificatePassword {
     NSUserDefaults* nud = NSUserDefaults.lcSharedDefaults ?: NSUserDefaults.standardUserDefaults;
     return [nud objectForKey:@"LCCertificatePassword"];
@@ -282,7 +264,7 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
     return errno==ESRCH ? nil : appUsageInfo[@"runningLC"];
 }
 
-// lc can be something like flekdeck or flekdeck2.liveprocess, such that one LC can jump to another LC hosting the multitask app when user presses run while it's running
+// lc can be something like livecontainer or livecontainer2.liveprocess, such that one LC can jump to another LC hosting the multitask app when user presses run while it's running
 + (void)setContainerUsingByLC:(NSString*)lc folderName:(NSString*)folderName auditToken:(uint64_t)val57 {
     NSURL* infoPath = [self containerLockPath];
     
@@ -331,7 +313,7 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
     
     // something went wrong with app group
     if(!appGroupFolder && sharedDataFoldersToMove.count > 0) {
-        [lcUserDefaults setObject:@"FlekDeck was unable to move the data of shared app back because FlekDeck cannot access app group. Please check JITLess diagnose page in FlekDeck settings for more information." forKey:@"error"];
+        [lcUserDefaults setObject:@"LiveContainer was unable to move the data of shared app back because LiveContainer cannot access app group. Please check JITLess diagnose page in LiveContainer settings for more information." forKey:@"error"];
         return;
     }
     
@@ -417,7 +399,7 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
 }
 
 + (NSArray<NSString*>*)lcUnorderedUrlSchemes {
-    NSArray<NSString *> *defaultSchemes = @[@"flekdeck", @"flekdeck2", @"flekdeck3"];
+    NSArray<NSString *> *defaultSchemes = @[@"livecontainer", @"livecontainer2", @"livecontainer3"];
     return defaultSchemes;
 }
 

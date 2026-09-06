@@ -318,12 +318,12 @@ extension LCUtils {
                     }
                 }
                 guard let appToLaunch else {
-                    onServerMessage?("StosDebug is not installed in FlekDeck.")
+                    onServerMessage?("StosDebug is not installed in LiveContainer.")
                     return false
                 }
                 
                 if !appToLaunch.uiIsShared {
-                    onServerMessage?("StosDebug is installed in FlekDeck, but is not a shared app. Convert it to a shared app to continue.")
+                    onServerMessage?("StosDebug is installed in LiveContainer, but is not a shared app. Convert it to a shared app to continue.")
                     return false
                 }
                 // check if stosdebug is already running
@@ -337,7 +337,7 @@ extension LCUtils {
                     }
                 }
                 guard let freeScheme else {
-                    onServerMessage?("No free FlekDeck is available. Please either: \n(1)close one, \n(2)install a new one, \n(3)choose another method to enable JIT.")
+                    onServerMessage?("No free LiveContainer is available. Please either: \n(1)close one, \n(2)install a new one, \n(3)choose another method to enable JIT.")
                     return false
                 }
                 
@@ -345,7 +345,7 @@ extension LCUtils {
                 LCUtils.appGroupUserDefault.set(freeScheme, forKey: "LCLaunchExtensionScheme")
                 LCUtils.appGroupUserDefault.set(appToLaunch.appInfo.relativeBundlePath, forKey: "LCLaunchExtensionBundleID")
                 LCUtils.appGroupUserDefault.set(Date.now, forKey: "LCLaunchExtensionLaunchDate")
-                onServerMessage?("JIT acquisition will continue in another FlekDeck.")
+                onServerMessage?("JIT acquisition will continue in another LiveContainer.")
                 
                 await UIApplication.shared.open(launchURL)
             } else {
@@ -379,12 +379,12 @@ extension LCUtils {
                     }
                 }
                 guard let appToLaunch else {
-                    onServerMessage?("StikDebug is not installed in FlekDeck.")
+                    onServerMessage?("StikDebug is not installed in LiveContainer.")
                     return false
                 }
                 
                 if !appToLaunch.uiIsShared {
-                    onServerMessage?("StikDebug is installed in FlekDeck, but is not a shared app. Convert it to a shared app to continue.")
+                    onServerMessage?("StikDebug is installed in LiveContainer, but is not a shared app. Convert it to a shared app to continue.")
                     return false
                 }
                 // check if stikdebug is already running
@@ -398,7 +398,7 @@ extension LCUtils {
                     }
                 }
                 guard let freeScheme else {
-                    onServerMessage?("No free FlekDeck is available. Please either: \n(1)close one, \n(2)install a new one, \n(3)choose another method to enable JIT.")
+                    onServerMessage?("No free LiveContainer is available. Please either: \n(1)close one, \n(2)install a new one, \n(3)choose another method to enable JIT.")
                     return false
                 }
                 
@@ -406,7 +406,7 @@ extension LCUtils {
                 LCUtils.appGroupUserDefault.set(freeScheme, forKey: "LCLaunchExtensionScheme")
                 LCUtils.appGroupUserDefault.set(appToLaunch.appInfo.relativeBundlePath, forKey: "LCLaunchExtensionBundleID")
                 LCUtils.appGroupUserDefault.set(Date.now, forKey: "LCLaunchExtensionLaunchDate")
-                onServerMessage?("JIT acquisition will continue in another FlekDeck.")
+                onServerMessage?("JIT acquisition will continue in another LiveContainer.")
                 
             } else {
                 launchURL = URL(string: launchURLStr)!
@@ -419,45 +419,6 @@ extension LCUtils {
             await UIApplication.shared.open(launchURL)
         }
         return false
-    }
-
-    /// What a single move in a batch still has to do.
-    ///
-    /// Converting an app between private and shared is a batch of moves, and the
-    /// batch does not always start from a clean slate. An attempt that failed
-    /// partway leaves some items sitting at their destination already, and a
-    /// container folder is only created the first time the app runs, so it can be
-    /// on neither side. Both are "nothing to do for this item" rather than a
-    /// reason to refuse the whole conversion.
-    enum MoveStep {
-        /// The source is there and still has to be moved.
-        case pending
-        /// The source is gone but the destination holds it — an earlier run of
-        /// this same move already went through.
-        case alreadyDone
-        /// Neither side has it.
-        case missing
-        /// Both sides have it: something unrelated already occupies the name we
-        /// would move into. The move cannot settle that on its own — one of the
-        /// two has to go first — so it is kept out of the batch, where it would
-        /// only fail preflight with a path the user cannot make sense of.
-        case blocked
-    }
-
-    static func planMove(from source: URL, to destination: URL) -> MoveStep {
-        let fileManager = FileManager.default
-        let sourceExists = fileManager.fileExists(atPath: source.standardizedFileURL.path)
-        let destinationExists = fileManager.fileExists(atPath: destination.standardizedFileURL.path)
-        switch (sourceExists, destinationExists) {
-        case (true, false):
-            return .pending
-        case (true, true):
-            return .blocked
-        case (false, true):
-            return .alreadyDone
-        case (false, false):
-            return .missing
-        }
     }
 
     static func moveFilesAtomicallyAfterPreflight(_ moves: [(URL, URL)]) throws {
@@ -542,21 +503,10 @@ extension LCUtils {
 
         // MARK: - Execute only after all preflight checks pass
 
-        // Preflight cannot rule out a failure halfway through the batch, and a
-        // half-done batch is worse than one that never started: the app's bundle
-        // ends up on one side while its record still points at the other, which
-        // leaves it neither launchable, convertible, nor removable. So undo what
-        // went through before reporting the failure.
-        var completed: [(URL, URL)] = []
-
         for (source, destination) in normalizedMoves {
             do {
                 try fileManager.moveItem(at: source, to: destination)
-                completed.append((source, destination))
             } catch {
-                for (rolledBackSource, rolledBackDestination) in completed.reversed() {
-                    try? fileManager.moveItem(at: rolledBackDestination, to: rolledBackSource)
-                }
                 throw BatchMoveError.moveFailed(
                     source: source,
                     destination: destination,

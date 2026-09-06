@@ -10,6 +10,7 @@ typedef NS_ENUM(NSInteger, Store){
     Unknown = -1
 };
 
+void refreshFile(NSString* execPath);
 int dyld_get_program_sdk_version(void);
 uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 
@@ -35,6 +36,9 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 + (NSProgress *)signFilesWithZSignWithURLs:(NSArray<NSURL*>*)urls completionHandler:(void (^)(BOOL success, NSError *error))completionHandler;
 + (NSString*)getCertTeamIdWithKeyData:(NSData*)keyData password:(NSString*)password;
 + (int)validateCertificateWithCompletionHandler:(void(^)(int status, NSDate *expirationDate, NSString *organizationalUnitName, NSString *error))completionHandler;
+
++ (BOOL)isTXMScriptRequired;
++ (NSString *)base64EncodedUniversalJITScript;
 
 + (BOOL)isAppGroupAltStoreLike;
 + (Store)store;
