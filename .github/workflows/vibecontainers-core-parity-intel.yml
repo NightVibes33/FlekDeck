@@ -1,0 +1,57 @@
+name: VibeContainers Core Parity Intel
+
+on:
+  push:
+    branches: [sync-upstream-livecontainer-jitless]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vibecontainers-intel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity-intel:
+    runs-on: macos-26-intel
+    env:
+      VIBE_SHA: 318d7b0380898840da81c99278b39729147f7fea
+      VIBE_ROOT: /tmp/vibe/LiveContainer-3.8.0
+    steps:
+      - name: Checkout FlekDeck
+        uses: actions/checkout@v4
+        with:
+          ref: sync-upstream-livecontainer-jitless
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Select Xcode 26.6
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Execute canonical Vibe parity build steps
+        run: |
+          set -euo pipefail
+          ruby <<'RUBY' > /tmp/vibe-parity-runsteps.sh
+          require 'yaml'
+          doc = YAML.load_file('.github/workflows/vibecontainers-core-parity-v2.yml', aliases: true)
+          steps = doc.fetch('jobs').fetch('parity-build').fetch('steps')
+          steps.each do |step|
+            next unless step['run']
+            next if step['name'] == 'Persist proven Vibe core'
+            next if step['name'] == 'Select Xcode 26.6'
+            puts "echo '=== #{step['name']} ==='"
+            puts step['run']
+          end
+          RUBY
+          bash /tmp/vibe-parity-runsteps.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-VibeContainers-core-ipa-intel
+          path: build/FlekDeck-VibeContainers-core.ipa
+          if-no-files-found: error
