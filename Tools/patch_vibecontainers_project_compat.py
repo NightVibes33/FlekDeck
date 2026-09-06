@@ -45,4 +45,18 @@ p.write_text(s)
 # Apply the separate UI-only adapter after the Vibe core has been copied.
 exec(Path("Tools/patch_vibecontainers_applist_compat.py").read_text(), {})
 
+# FlekDeck's newer OfflineClassicModeProbe is shell-only, but it previously got
+# dyld_get_sdk_version() through the newer LCUtils.h. Vibe 3.8.0's exact header
+# intentionally lacks that declaration. Declare the exported dyld helper only in
+# this Flek-only probe so the copied Vibe header remains byte-identical.
+p = Path("LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m")
+s = p.read_text()
+probe_anchor = '#import "LCUtils.h"\n'
+probe_decl = '#import "LCUtils.h"\n\nuint32_t dyld_get_sdk_version(const struct mach_header *mh);\n'
+if "uint32_t dyld_get_sdk_version(const struct mach_header *mh);" not in s:
+    if probe_anchor not in s:
+        raise SystemExit("Could not find OfflineClassicModeProbe LCUtils import")
+    s = s.replace(probe_anchor, probe_decl, 1)
+p.write_text(s)
+
 print("Restored Vibe TweakLoader project membership and adapted Flek shell to Vibe runtime semantics.")
