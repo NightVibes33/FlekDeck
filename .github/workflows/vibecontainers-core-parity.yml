@@ -68,6 +68,10 @@ jobs:
           cp "$V/LiveProcess/SideStoreLiveProcessHandler.m" LiveProcess/SideStoreLiveProcessHandler.m
           cp "$V/LiveProcess/LiveProcess.entitlements" LiveProcess/LiveProcess.entitlements
 
+          for f in DocumentPicker.m Notification.m TweakLoader.m UIKit+GuestHooks.m utils.h utils.m; do
+            cp "$V/TweakLoader/$f" "TweakLoader/$f"
+          done
+
           rm -rf TestJITLess
           cp -R "$V/TestJITLess" TestJITLess
           rm -rf ZSign
@@ -130,6 +134,12 @@ jobs:
             LiveProcess/main.m
             LiveProcess/SideStoreLiveProcessHandler.m
             LiveProcess/LiveProcess.entitlements
+            TweakLoader/DocumentPicker.m
+            TweakLoader/Notification.m
+            TweakLoader/TweakLoader.m
+            TweakLoader/UIKit+GuestHooks.m
+            TweakLoader/utils.h
+            TweakLoader/utils.m
             entitlements.xml
             entitlements.catalyst.xml
           )
@@ -168,7 +178,9 @@ jobs:
 
       - name: Build unsigned real-device archive
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          mkdir -p build
+          set +e
           xcodebuild clean archive \
             -project LiveContainer.xcodeproj \
             -scheme LiveContainer \
@@ -178,7 +190,14 @@ jobs:
             CODE_SIGN_IDENTITY='' \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            | xcpretty
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- compiler/linker errors ---'
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -200 || true
+            exit "$status"
+          fi
 
       - name: Package IPA
         run: |
@@ -218,7 +237,10 @@ jobs:
               LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
               LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
               LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift \
-              LiveProcess TestJITLess ZSign litehook OpenSSL \
+              LiveProcess \
+              TweakLoader/DocumentPicker.m TweakLoader/Notification.m TweakLoader/TweakLoader.m \
+              TweakLoader/UIKit+GuestHooks.m TweakLoader/utils.h TweakLoader/utils.m \
+              TestJITLess ZSign litehook OpenSSL \
               entitlements.xml entitlements.catalyst.xml
             git commit -m "Match VibeContainers signing and JIT core"
             git push origin HEAD:sync-upstream-livecontainer-jitless
