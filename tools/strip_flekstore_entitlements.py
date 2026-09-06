@@ -27,10 +27,7 @@ def regex(text: str, pattern: str, replacement: str, label: str) -> str:
     return out
 
 
-# ---------------------------------------------------------------------------
-# New FlekDeck installer: remove every premium branch instead of spoofing a
-# subscription response. External sources become ordinary install sources.
-# ---------------------------------------------------------------------------
+# New installer: no premium state/modal/guards and no blocked-access branch.
 installer_path = "LiveContainerSwiftUI/FlekDeck/Install/FlekInstallerView.swift"
 s = load(installer_path)
 s = exact(s, "    @State private var showPremium = false\n", "", "installer showPremium state")
@@ -53,12 +50,23 @@ s = regex(
     """    private func install(_ app: FSAppModel) {\n        enqueueInstall(app, fromFlekstore: viewModel.repository == .flekstore)\n    }\n\n    private func installSearchResult(_ app: FSAppModel, fromFlekstore: Bool) {\n        enqueueInstall(app, fromFlekstore: fromFlekstore)\n    }\n\n    /// Queues the download + install and counts the FlekSt0re download.""",
     "installer premium install guards",
 )
+s = exact(
+    s,
+    "    private enum ContentState: Equatable { case blocked, search, loading, error, list }\n",
+    "    private enum ContentState: Equatable { case search, loading, error, list }\n",
+    "installer blocked content state",
+)
+s = exact(s, "        if viewModel.isBanned { return .blocked }\n", "", "installer banned content state")
+s = exact(
+    s,
+    """        if viewModel.isBanned {\n            AccessBlockedView(reason: viewModel.banReason, message: viewModel.banMessage)\n                .frame(maxHeight: .infinity)\n        } else if searchActive {\n""",
+    """        if searchActive {\n""",
+    "installer blocked view",
+)
 save(installer_path, s)
 
 
-# ---------------------------------------------------------------------------
 # App detail sheet: install/cancel directly; no premium state or modal.
-# ---------------------------------------------------------------------------
 detail_path = "LiveContainerSwiftUI/FlekDeck/Install/FlekAppDetailSheet.swift"
 s = load(detail_path)
 s = regex(
@@ -84,10 +92,37 @@ s = exact(
 save(detail_path, s)
 
 
-# ---------------------------------------------------------------------------
-# Root view: remove the FlekSt0re UDID/device-status gate completely. Startup is
-# local and deterministic; no access-verification/ban/payment screen exists.
-# ---------------------------------------------------------------------------
+# Remove the compatibility subscription/ban state from the catalog model too.
+model_path = "LiveContainerSwiftUI/FlekStore/Screens/Apps/FlekstoreAppsListViewModel.swift"
+s = load(model_path)
+s = exact(
+    s,
+    """    // Compatibility properties retained because existing views bind to them.\n    // Standalone FlekDeck has no paid tier, remote subscription state, or ban UI.\n    @Published var hasSubscription: Bool = true\n    @Published var subscriptionEndDate: String? = nil\n    @Published var isBanned: Bool = false\n    @Published var banReason: String = \"\"\n    @Published var banMessage: String = \"\"\n    @Published var deviceDateErrorMessage: String? = nil\n\n""",
+    "",
+    "catalog compatibility subscription state",
+)
+s = exact(
+    s,
+    """    // Existing views still call this when they appear. It is intentionally local\n    // and idempotent: there is no FlekSt0re device/subscription request anymore.\n    func refreshSubscriptionStatus() async {\n        hasSubscription = true\n        subscriptionEndDate = nil\n        isBanned = false\n        banReason = \"\"\n        banMessage = \"\"\n        deviceDateErrorMessage = nil\n    }\n\n""",
+    "",
+    "catalog compatibility subscription method",
+)
+save(model_path, s)
+
+
+# Search model no longer initializes a subscription state.
+search_path = "LiveContainerSwiftUI/FlekDeck/Search/FlekSearchView.swift"
+s = load(search_path)
+s = exact(
+    s,
+    "        Task { await flekstoreVM.refreshSubscriptionStatus() }\n",
+    "",
+    "search subscription refresh",
+)
+save(search_path, s)
+
+
+# Root view: remove the FlekSt0re UDID/device-status gate completely.
 tab_path = "LiveContainerSwiftUI/Views/LCTabView.swift"
 s = load(tab_path)
 s = exact(
@@ -142,7 +177,7 @@ s = regex(
 save(tab_path, s)
 
 
-# The shared model no longer needs to synthesize an access-service UDID.
+# No synthetic access-service UDID is needed anymore.
 shared_path = "LiveContainerSwiftUI/FlekStore/Models/FlekstoreSharedModel.swift"
 save(
     shared_path,
@@ -150,7 +185,7 @@ save(
 )
 
 
-# These types existed only to enforce/display FlekSt0re access and premium state.
+# Types used only by the removed access/premium system.
 for rel in [
     "LiveContainerSwiftUI/FlekStore/Models/AccessVerification.swift",
     "LiveContainerSwiftUI/FlekStore/Models/DeviceStatusResponse.swift",
@@ -162,9 +197,7 @@ for rel in [
         p.unlink()
 
 
-# Fail loudly if an entitlement/payment path remains in the app source. Public
-# FlekSt0re catalog APIs are intentionally allowed; this audit targets access,
-# UDID, ban, subscription and premium-gate behavior only.
+# Fail loudly if an entitlement/payment path remains in app source.
 forbidden = [
     "PremiumRequiredView",
     "showPremium",
