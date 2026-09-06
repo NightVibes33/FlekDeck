@@ -57,7 +57,8 @@ void installSideStoreHooks(void);
 }
 
 - (void) relaunchLC {
-    [LCSharedUtils launchToGuestAppWithClassicMode:0];
+    // VibeContainers 3.8.0 uses the non-Classic-Mode guest relaunch path.
+    [LCSharedUtils launchToGuestApp];
 }
 
 - (void)refreshAllAppsWithIdentifier:(NSString*)identifier mangledTypeName:(NSString *)mangledTypeName {
