@@ -59,7 +59,6 @@ p.write_text(s)
 p = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift")
 s = p.read_text()
 
-# Remove cleanup for the retired staged-share-inbox flow outside the installer.
 staged_cleanup = '''                        // A copy the share extension staged in the app group is
                         // ours to remove, and exists for no other reason than to
                         // have reached us. It sits in a folder of its own.
@@ -266,7 +265,62 @@ s = s[:start] + installer + s[end:]
 p.write_text(s)
 
 
-# 4) Flek's conversion UI had a resumable move classifier that Duy upstream does
+# 4) Certificate persistence: use Duy's exact manual p12 path and exact callback
+# storage keys. The only SideStore callback difference elsewhere is the FlekDeck
+# URL scheme required to route the callback into this app.
+p = Path("LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift")
+s = p.read_text()
+start = s.index("    func importCertificate() async {")
+end = s.index("\n    func importEmbeddedCertificate() async {", start)
+manual_import = '''    func importCertificate() async {
+        guard let doImport = await certificateImportAlert.open(), doImport else {
+            return
+        }
+        guard let certificateURL = await certificateImportFileAlert.open() else {
+            return
+        }
+        guard let certificatePassword = await certificateImportPasswordAlert.open() else {
+            return
+        }
+        let certificateData : Data
+        do {
+            certificateData = try Data(contentsOf: certificateURL)
+        } catch {
+            errorInfo = error.localizedDescription
+            errorShow = true
+            return
+        }
+
+        guard let _ = LCUtils.getCertTeamId(withKeyData: certificateData, password: certificatePassword) else {
+            errorInfo = "lc.settings.invalidCertError".loc
+            errorShow = true
+            return
+        }
+
+        LCUtils.appGroupUserDefault.set(certificateData, forKey: "LCCertificateData")
+        LCUtils.appGroupUserDefault.set(certificatePassword, forKey: "LCCertificatePassword")
+        LCUtils.appGroupUserDefault.set(NSDate.now, forKey: "LCCertificateUpdateDate")
+        certificateDataFound = true
+
+        UserDefaults.standard.set(LCSharedUtils.appGroupID(), forKey: "LCAppGroupID")
+    }
+'''
+s = s[:start] + manual_import + s[end:]
+
+cb_start = s.index("    func onSideStoreCertificateCallback(certificateData: Data, password: String) {")
+cb_end = s.index("\n    func removeCertificate() async {", cb_start)
+callback = '''    func onSideStoreCertificateCallback(certificateData: Data, password: String) {
+        LCUtils.appGroupUserDefault.set(certificateData, forKey: "LCCertificateData")
+        LCUtils.appGroupUserDefault.set(password, forKey: "LCCertificatePassword")
+        LCUtils.appGroupUserDefault.set(NSDate.now, forKey: "LCCertificateUpdateDate")
+        certificateDataFound = true
+    }
+'''
+s = s[:cb_start] + callback + s[cb_end:]
+p.write_text(s)
+
+
+# 5) Flek's conversion UI had a resumable move classifier that Duy upstream does
 # not expose. Localize only the classifier; the actual atomic mover remains the
 # exact upstream LCUtils.moveFilesAtomicallyAfterPreflight implementation.
 p = Path("LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift")
@@ -299,8 +353,6 @@ if "private enum FlekMoveStep" not in s:
     idx = s.index(classifier_anchor)
     s = s[:idx] + classifier + s[idx:]
 
-# Flek's home/banner uninstall UX uses helpers removed from Duy's current model.
-# Keep them in this fork-only extension instead of modifying upstream LCAppModel.
 if "private enum FlekUninstallRefused" not in s:
     s += '''
 
@@ -354,4 +406,4 @@ extension LCAppModel {
 
 p.write_text(s)
 
-print("Applied Flek shell compatibility and Duy-parity IPA install/sign sequence.")
+print("Applied Flek shell compatibility with Duy-parity certificate, IPA install, signing and JIT core.")
