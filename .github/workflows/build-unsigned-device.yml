@@ -139,11 +139,74 @@ jobs:
               if n != 1:
                   raise SystemExit('Could not remove subscription lifecycle hooks')
 
+          # Certificate ownership fix: never silently import FlekSt0re's embedded
+          # identity. Keep the LiveContainer/SideStore PKCS#12 picker as the user-
+          # controlled path, and allow it to replace existing persisted cert state.
+          s = s.replace(
+              '                if sharedModel.multiLCStatus != 2 && !certificateDataFound {\n',
+              '                if sharedModel.multiLCStatus != 2 {\n',
+              1
+          )
+          s = s.replace(
+              '                        Button("Import Flekstore certificate") {\n'
+              '                            Task { await importEmbeddedCertificate() }\n'
+              '                        }\n'
+              '                        \n',
+              ''
+          )
+          s = s.replace(
+              '        .onAppear {\n'
+              '            if !certificateDataFound {\n'
+              '                Task { await importEmbeddedCertificate() }\n'
+              '            }\n',
+              '        .onAppear {\n'
+          )
+
+          # The file importer must stay SideStore/LiveContainer-compatible PKCS#12.
+          if '.betterFileImporter(isPresented: $certificateImportFileAlert.show, types: [.p12]' not in s:
+              raise SystemExit('PKCS#12 (.p12) certificate picker is missing')
+
+          # Remove the separate Settings beta warning card as well as the overlay.
+          s, beta_cards = re.subn(
+              r'\n                if isBetaiOS \{\n'
+              r'                    Section \{.*?'
+              r'                    \}\n'
+              r'                \}\n',
+              '\n', s, count=1, flags=re.S
+          )
+          if beta_cards:
+              print('Removed Settings beta warning card')
+
           tail_marker = '\n    private func loadEncryptedUDIDFromPlist() {'
           if tail_marker in s:
               s = s[:s.index(tail_marker)] + '\n}\n'
 
           settings.write_text(s, encoding='utf-8')
+
+          # The always-on beta badge is managed separately by LCTabView. Force it
+          # hidden regardless of stale LC app-group preferences from older builds.
+          tab = Path('LiveContainerSwiftUI/Views/LCTabView.swift')
+          t = tab.read_text(encoding='utf-8')
+          t = t.replace(
+              '@AppStorage("LCBetaBannerOverride", store: LCUtils.appGroupUserDefault) private var betaBannerOverride: Int = 0',
+              '@AppStorage("LCBetaBannerOverride", store: LCUtils.appGroupUserDefault) private var betaBannerOverride: Int = 2'
+          )
+          t, overlay_replacements = re.subn(
+              r'    private func updateBetaOverlay\(\) \{\n'
+              r'        let shouldShow: Bool\n'
+              r'        switch betaBannerOverride \{.*?'
+              r'        \}\n'
+              r'    \}\n',
+              '    private func updateBetaOverlay() {\n'
+              '        if sceneDelegate.window?.windowScene != nil {\n'
+              '            BetaOverlayManager.shared.hide()\n'
+              '        }\n'
+              '    }\n',
+              t, count=1, flags=re.S
+          )
+          if overlay_replacements != 1 and 'BetaOverlayManager.shared.hide()' not in t:
+              raise SystemExit('Could not force beta overlay off')
+          tab.write_text(t, encoding='utf-8')
 
           forbidden = [
               'DeviceStatusResponse',
@@ -174,25 +237,26 @@ jobs:
           if violations:
               raise SystemExit('FlekSt0re payment/access remnants remain: ' + '; '.join(violations))
 
-          print('FlekDeck payment/access cleanup audit passed')
+          print('FlekDeck payment/access cleanup + beta/certificate audit passed')
           PY
 
-      - name: Parse cleaned Settings source
+      - name: Parse cleaned Swift sources
         run: |
           set -euo pipefail
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
 
       - name: Persist standalone cleanup
         run: |
           set -euo pipefail
-          if git diff --quiet -- LiveContainer.xcodeproj/project.pbxproj LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift; then
+          if git diff --quiet -- LiveContainer.xcodeproj/project.pbxproj LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift LiveContainerSwiftUI/Views/LCTabView.swift; then
             echo 'Standalone source already clean'
             exit 0
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add LiveContainer.xcodeproj/project.pbxproj LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
-          git commit -m 'Repair standalone FlekDeck settings cleanup'
+          git add LiveContainer.xcodeproj/project.pbxproj LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift LiveContainerSwiftUI/Views/LCTabView.swift
+          git commit -m 'Fix beta warning and certificate import flow'
           git push origin HEAD:main
 
       - name: Build unsigned real-device archive
