@@ -333,12 +333,8 @@ struct LCSettingsView: View {
 
                 }
                 // MARK: - Certificate (shown only when no certificate is detected)
-                if sharedModel.multiLCStatus != 2 && !certificateDataFound {
+                if sharedModel.multiLCStatus != 2 {
                     Section {
-                        Button("Import Flekstore certificate") {
-                            Task { await importEmbeddedCertificate() }
-                        }
-                        
                         Button("lc.settings.importCertificate".loc) {
                             Task { await importCertificate() }
                         }
@@ -429,24 +425,6 @@ struct LCSettingsView: View {
                 .background(Color(UIColor.systemGroupedBackground))
                 .listRowInsets(EdgeInsets())
 
-                if isBetaiOS {
-                    Section {
-                        HStack(spacing: 10) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                                .font(.title3)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("iOS Beta Detected")
-                                    .font(.subheadline.bold())
-                                    .foregroundStyle(.red)
-                                Text("Beta versions of iOS may cause certificate revocation. Apps and features may not work correctly. Please roll back to the stable release version.")
-                                    .font(.caption)
-                                    .foregroundStyle(.red.opacity(0.8))
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
 
                 if sharedModel.developerMode {
                     Section {
@@ -584,9 +562,6 @@ struct LCSettingsView: View {
             )
         }
         .onAppear {
-            if !certificateDataFound {
-                Task { await importEmbeddedCertificate() }
-            }
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .settings, let link = sharedModel.deepLink else { return }
                 sharedModel.deepLink = nil

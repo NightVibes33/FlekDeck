@@ -14,7 +14,7 @@ struct LCTabView: View {
     @State var crashReportShow = false
     @State var errorInfo = ""
     @State private var isiOSBeta = false
-    @AppStorage("LCBetaBannerOverride", store: LCUtils.appGroupUserDefault) private var betaBannerOverride: Int = 0
+    @AppStorage("LCBetaBannerOverride", store: LCUtils.appGroupUserDefault) private var betaBannerOverride: Int = 2
     
     @State var previousSelectedTab : LCTabIdentifier = .apps
     @State private var didRunStartup = false
@@ -311,19 +311,8 @@ struct LCTabView: View {
     }
 
     private func updateBetaOverlay() {
-        let shouldShow: Bool
-        switch betaBannerOverride {
-        case 1: shouldShow = true
-        case 2: shouldShow = false
-        default: shouldShow = isiOSBeta
-        }
-
-        if let scene = sceneDelegate.window?.windowScene {
-            if shouldShow {
-                BetaOverlayManager.shared.show(on: scene)
-            } else {
-                BetaOverlayManager.shared.hide()
-            }
+        if sceneDelegate.window?.windowScene != nil {
+            BetaOverlayManager.shared.hide()
         }
     }
 
