@@ -47,22 +47,8 @@ struct LCPath {
     /// includes the launch the share itself causes, so only folders too old to
     /// be the one being handed over right now are taken.
     public static func clearStaleShareInbox() {
-        guard let shareInbox = LCSharedUtils.shareInboxPath() else {
-            return
-        }
-        let fm = FileManager()
-        guard let staged = try? fm.contentsOfDirectory(
-            at: shareInbox, includingPropertiesForKeys: [.contentModificationDateKey]) else {
-            return
-        }
-        let cutoff = Date().addingTimeInterval(-3600)
-        for folder in staged {
-            let modified = (try? folder.resourceValues(
-                forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if modified < cutoff {
-                try? fm.removeItem(at: folder)
-            }
-        }
+        // Duy upstream hands shared IPA URLs over by security-scoped bookmark.
+        // There is no separate staged app-group inbox in this parity build.
     }
 
     /// Appended to the folder of an app that is being replaced, for as long as

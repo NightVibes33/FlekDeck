@@ -516,13 +516,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                                 try? fm.removeItem(at: fileURL)
                             }
                         }
-                        // A copy the share extension staged in the app group is
-                        // ours to remove, and exists for no other reason than to
-                        // have reached us. It sits in a folder of its own.
-                        if let shareInbox = LCSharedUtils.shareInboxPath(),
-                           fileURL.path.hasPrefix(shareInbox.path + "/") {
-                            try? fm.removeItem(at: fileURL.deletingLastPathComponent())
-                        }
                     }
                 }
 
@@ -1857,25 +1850,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             throw "lc.appList.infoPlistCannotReadError".loc
         }
 
-        // A bundle ID chosen on the app's page. Goes through LCAppInfo rather
-        // than the plist directly, so the original is recorded the way
-        // LiveContainer expects.
-        if let chosenBundleId = item.overrides?.bundleID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !chosenBundleId.isEmpty {
-            newAppInfo.overrideBundleIdentifier(chosenBundleId)
-        } else if LCUtils.appGroupUserDefault.bool(forKey: "LCCustomBundleIdEnabled") {
-            // Show bundle ID customization if enabled in settings
-            guard let chosenBundleId = await bundleIdInput.open(
-                initVal: newAppInfo.bundleIdentifier()!
-            ) else {
-                // User cancelled
-                throw CancellationError()
-            }
-            let trimmed = chosenBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty && trimmed != newAppInfo.bundleIdentifier()! {
-                newAppInfo.overrideBundleIdentifier(trimmed)
-            }
-        }
 
         var appRelativePath = "\(newAppInfo.bundleIdentifier()!.sanitizeNonACSII()).app"
         var outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)

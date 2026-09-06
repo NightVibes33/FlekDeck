@@ -250,6 +250,25 @@ extension LCAppModel {
         return "A \(side) folder named \"\(url.lastPathComponent)\" already exists, so this app's folder of that name has nowhere to go.\n\nRename one of the two, then convert again."
     }
 
+    private enum FlekMoveStep {
+        case pending
+        case alreadyDone
+        case missing
+        case blocked
+    }
+
+    private func flekPlanMove(from source: URL, to destination: URL) -> FlekMoveStep {
+        let fm = FileManager.default
+        let sourceExists = fm.fileExists(atPath: source.standardizedFileURL.path)
+        let destinationExists = fm.fileExists(atPath: destination.standardizedFileURL.path)
+        switch (sourceExists, destinationExists) {
+        case (true, false): return .pending
+        case (true, true): return .blocked
+        case (false, true): return .alreadyDone
+        case (false, false): return .missing
+        }
+    }
+
     /// Whether the bundle still has to be moved, has already been moved by an
     /// earlier attempt, or is gone entirely.
     ///
@@ -258,8 +277,8 @@ extension LCAppModel {
     /// its bundle would leave two entries sharing a single copy, where removing
     /// either one takes the app away from both. That is not a half-finished
     /// conversion of ours, so it counts as missing.
-    private func bundleMoveStep(from source: URL, to destination: URL, sharedModel: SharedModel) -> LCUtils.MoveStep {
-        let step = LCUtils.planMove(from: source, to: destination)
+    private func bundleMoveStep(from source: URL, to destination: URL, sharedModel: SharedModel) -> FlekMoveStep {
+        let step = flekPlanMove(from: source, to: destination)
         if case .alreadyDone = step, bundleIsClaimedByAnotherApp(destination, sharedModel: sharedModel) {
             return .missing
         }
@@ -287,7 +306,7 @@ extension LCAppModel {
         _ destination: URL,
         destinationIsShared: Bool
     ) throws {
-        switch LCUtils.planMove(from: source, to: destination) {
+        switch flekPlanMove(from: source, to: destination) {
         case .pending:
             moves.append((source, destination))
         case .blocked:
@@ -296,6 +315,54 @@ extension LCAppModel {
             )
         case .alreadyDone, .missing:
             break
+        }
+    }
+}
+
+
+private enum FlekUninstallRefused: LocalizedError {
+    case sharedBundle
+
+    var errorDescription: String? {
+        switch self {
+        case .sharedBundle:
+            return "This app is stored in the shared folder, so every FlekDeck on this device uses the same copy — deleting it here would remove it for all of them.\n\nTo delete it, open the app's settings and tap \"Convert to Private App\" first."
+        }
+    }
+}
+
+extension LCAppModel {
+    var isBundleMissing: Bool {
+        guard let bundlePath = appInfo.bundlePath(), !bundlePath.isEmpty else {
+            return true
+        }
+        return !FileManager.default.fileExists(atPath: bundlePath)
+    }
+
+    var isUninstallable: Bool {
+        !uiIsShared || isBundleMissing
+    }
+
+    func uninstall(removingContainers: Bool) throws {
+        guard isUninstallable else {
+            throw FlekUninstallRefused.sharedBundle
+        }
+
+        let fm = FileManager.default
+        if let bundlePath = appInfo.bundlePath(), !isBundleMissing {
+            try fm.removeItem(atPath: bundlePath)
+        }
+
+        guard removingContainers else { return }
+        for container in uiContainers {
+            let folderName = container.folderName
+            if container.storageBookMark == nil {
+                try? fm.removeItem(at: container.containerURL)
+            }
+            LCUtils.removeAppKeychain(dataUUID: folderName)
+            DispatchQueue.main.async {
+                DataManager.shared.model.appDataFolderNames.removeAll { $0 == folderName }
+            }
         }
     }
 }
