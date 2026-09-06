@@ -226,12 +226,6 @@ struct LCSettingsView: View {
         return !publishedEncryptedUdid.isEmpty && hostIdentityUdid != publishedEncryptedUdid
     }
 
-        if let dateOnly = dateString.split(separator: " ").first {
-            return String(dateOnly)
-        }
-
-        return dateString
-    }
     
     
     /// Name of the step the haptics slider currently sits on, shown beside it —
