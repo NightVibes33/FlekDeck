@@ -7,14 +7,14 @@
 #include <dirent.h>
 #include <getopt.h>
 #include <stdlib.h>
-#include <openssl/ocsp.h>
-#include <openssl/x509.h>
-#include <openssl/x509v3.h>
-#include <openssl/pem.h>
-#include <openssl/bio.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#include <openssl/asn1.h>
+#include <OpenSSL/ocsp.h>
+#include <OpenSSL/x509.h>
+#include <OpenSSL/x509v3.h>
+#include <OpenSSL/pem.h>
+#include <OpenSSL/bio.h>
+#include <OpenSSL/ssl.h>
+#include <OpenSSL/err.h>
+#include <OpenSSL/asn1.h>
 #include "timer.h"
 #include "common/log.h"
 #include "Utils.hpp"
@@ -188,19 +188,61 @@ int checkCert(NSData *key,
 @implementation ZSigner
 + (NSProgress*)signMachOPathArr:(NSArray<NSString*>*)machoPathArr bundleId:(NSString *)bundleId cert:(NSData *)key
                             pass:(NSString *)pass completionHandler:(void(^)(BOOL success, NSError *error))completionHandler {
+    return [self signMachOPathArr:machoPathArr
+                         bundleId:bundleId
+                             cert:key
+                             pass:pass
+                        provision:nil
+               completionHandler:completionHandler];
+}
+
++ (NSProgress*)signMachOPathArr:(NSArray<NSString*>*)machoPathArr bundleId:(NSString *)bundleId cert:(NSData *)key
+                            pass:(NSString *)pass provision:(NSData *)provision
+               completionHandler:(void(^)(BOOL success, NSError *error))completionHandler {
+    return [self signMachOPathArr:machoPathArr
+                         bundleId:bundleId
+                             cert:key
+                             pass:pass
+                        provision:provision
+                         infoPlist:nil
+                     codeResources:nil
+               completionHandler:completionHandler];
+}
+
++ (NSProgress*)signMachOPathArr:(NSArray<NSString*>*)machoPathArr bundleId:(NSString *)bundleId cert:(NSData *)key
+                            pass:(NSString *)pass provision:(NSData *)provision
+                       infoPlist:(NSData *)infoPlist codeResources:(NSData *)codeResources
+               completionHandler:(void(^)(BOOL success, NSError *error))completionHandler {
     NSProgress* progress = [NSProgress progressWithTotalUnitCount:(int64_t)machoPathArr.count];
     ZLog::logs.clear();
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         ZSignAsset* pSignAsset = new ZSignAsset();
         const char* strPKeyFileData = (const char*)[key bytes];
+        const void* provisionBytes = provision.length > 0 ? [provision bytes] : nullptr;
         const char* strPassword = [pass cStringUsingEncoding:NSUTF8StringEncoding];
         string strBundleId(bundleId.UTF8String);
+        string strInfoData;
+        string strInfoSHA1;
+        string strInfoSHA256;
+        string strCodeResourcesData;
+        if (infoPlist.length > 0) {
+            strInfoData.assign((const char *)infoPlist.bytes, infoPlist.length);
+            ZSHA::SHA(strInfoData, strInfoSHA1, strInfoSHA256);
+        }
+        if (codeResources.length > 0) {
+            strCodeResourcesData.assign((const char *)codeResources.bytes,
+                                        codeResources.length);
+        }
 
-        bool ret = pSignAsset->InitSimple(strPKeyFileData, (int)[key length], nil, 0, strPassword);
+        bool ret = pSignAsset->InitSimple(strPKeyFileData, (int)[key length],
+                                          provisionBytes, (int)provision.length,
+                                          strPassword);
         if (!ret) {
             delete pSignAsset;
             NSError* initError = [NSError errorWithDomain:@"Failed to Sign" code:-1 userInfo:@{
-                NSLocalizedDescriptionKey: @"Failed to initialize zSignAsset. Maybe wrong password?"
+                NSLocalizedDescriptionKey: provision.length > 0
+                    ? @"Failed to initialize ZSign with the certificate and provisioning profile."
+                    : @"Failed to initialize ZSign. The certificate password may be incorrect."
             }];
             dispatch_async(dispatch_get_main_queue(), ^{
                 completionHandler(NO, initError);
@@ -223,7 +265,9 @@ int checkCert(NSData *key,
                     ZLog::ErrorV(">>> Invalid mach-o file! %s\n", machoPath.UTF8String);
                     errorMsg = [NSString stringWithFormat:@"Invalid mach-o file! %@", machoPath];
                 } else {
-                    bool bRet = macho->Sign(pSignAsset, true, strBundleId, "", "", "");
+                    bool bRet = macho->Sign(pSignAsset, true, strBundleId,
+                                            strInfoSHA1, strInfoSHA256,
+                                            strCodeResourcesData);
                     if (!bRet) {
                         errorMsg = [NSString stringWithFormat:@"Failed to Sign %@", machoPath];
                     } else {

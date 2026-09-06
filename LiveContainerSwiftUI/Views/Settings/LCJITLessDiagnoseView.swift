@@ -7,7 +7,6 @@
 import SwiftUI
 
 struct LCEntitlementView : View {
-    @State var isLiveProcess: Bool
     @State var loaded = false
     @State var entitlementReadSuccess = false
     
@@ -24,17 +23,16 @@ struct LCEntitlementView : View {
         if loaded {
             Form {
                 Section {
-                    if !isLiveProcess {
-                        HStack {
-                            Text("lc.jitlessDiag.bundleId".loc)
-                            Spacer()
-                            Text(Bundle.main.bundleIdentifier ?? "lc.common.unknown".loc)
-                                .foregroundStyle(entitlementReadSuccess && teamId != nil ? (isBundleIdCorrect ? .green : .red): .gray)
-                                .textSelection(.enabled)
-                        }
+                    HStack {
+                        Text("lc.jitlessDiag.bundleId".loc)
+                        Spacer()
+                        Text(Bundle.main.bundleIdentifier ?? "lc.common.unknown".loc)
+                            .foregroundStyle(entitlementReadSuccess && teamId != nil ? (isBundleIdCorrect ? .green : .red): .gray)
+                            .textSelection(.enabled)
                     }
+                    
                     if entitlementReadSuccess {
-                        if !isLiveProcess && !isBundleIdCorrect && teamId != nil {
+                        if !isBundleIdCorrect && teamId != nil {
                             HStack {
                                 Text("lc.jitlessDiag.bundleIdExpected".loc)
                                 Spacer()
@@ -81,7 +79,7 @@ struct LCEntitlementView : View {
                         .font(.system(.subheadline, design: .monospaced))
                 }
             }
-            .navigationTitle(isLiveProcess ? "LiveProcess Entitlements" : "LiveContainer Entitlements")
+            .navigationTitle("lc.jielessDiag.entitlement".loc)
             .navigationBarTitleDisplayMode(.inline)
         } else {
             Text("lc.common.loading".loc)
@@ -100,19 +98,7 @@ struct LCEntitlementView : View {
             loaded = true
         }
         
-        let executablePath: String?
-        
-        if !isLiveProcess {
-            executablePath = Bundle.main.executablePath
-        } else {
-            executablePath = Bundle.main.builtInPlugInsURL?.appendingPathComponent("LiveProcess.appex/LiveProcess").path
-            if let executablePath, !FileManager.default.fileExists(atPath: executablePath) {
-                entitlementContent = "LiveProcess is not installed."
-                return
-            }
-        }
-
-        guard let entitlementXML = getExecutableEntitlementXML(executablePath) else {
+        guard let entitlementXML = getLCEntitlementXML() else {
             entitlementContent = "Failed to load entitlement."
             return
         }
@@ -226,16 +212,9 @@ struct LCJITLessDiagnoseView : View {
                         
                     }
                     NavigationLink {
-                        LCEntitlementView(isLiveProcess: false)
+                        LCEntitlementView()
                     } label: {
-                        Text("LiveContainer Entitlements".loc)
-                    }
-                    if sharedModel.multiLCStatus == 0 {
-                        NavigationLink {
-                            LCEntitlementView(isLiveProcess: true)
-                        } label: {
-                            Text("LiveProcess Entitlements".loc)
-                        }
+                        Text("lc.jielessDiag.entitlement".loc)
                     }
                 }
                     

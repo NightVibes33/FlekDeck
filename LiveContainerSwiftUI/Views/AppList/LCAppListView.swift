@@ -1808,11 +1808,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         let fm = FileManager()
 
         let installProgress = Progress.discreteProgress(totalUnitCount: 100)
-        // FlekDeck-only UI adapter: Duy uses installProgressPercentage here.
-        // This observer changes presentation only; it does not alter install/signing.
         let observedItem = item
         let queue = installQueue
-        let installObserver = installProgress.observe(\.fractionCompleted) { p, v in
+        let installObserver = installProgress.observe(\.fractionCompleted) { p, _ in
             DispatchQueue.main.async {
                 queue.updateInstallProgress(observedItem, fraction: p.fractionCompleted)
             }
@@ -1826,7 +1824,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             try fm.removeItem(at: payloadPath)
         }
 
-        // decompress
         guard await decompress(url.path, fm.temporaryDirectory.path, decompressProgress) == 0 else {
             throw "lc.appList.urlFileIsNotIpaError".loc
         }
@@ -1844,7 +1841,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
 
         let appFolderPath = payloadPath.appendingPathComponent(appBundleName)
-
         guard let newAppInfo = LCAppInfo(bundlePath: appFolderPath.path) else {
             throw "lc.appList.infoPlistCannotReadError".loc
         }
@@ -1852,7 +1848,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         var appRelativePath = "\(newAppInfo.bundleIdentifier()!.sanitizeNonACSII()).app"
         var outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)
         var appToReplace : LCAppModel? = nil
-        // Folder exist! show alert for user to choose which bundle to replace
         var sameBundleIdApp = sharedModel.apps.filter { app in
             return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
         }
@@ -1860,32 +1855,22 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             sameBundleIdApp = sharedModel.hiddenApps.filter { app in
                 return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
             }
-
-            // we found a hidden app, we need to authenticate before proceeding
             if sameBundleIdApp.count > 0 && !sharedModel.isHiddenAppUnlocked {
-                do {
-                    if !(try await LCUtils.authenticateUser()) {
-                        throw CancellationError()
-                    }
-                } catch {
-                    throw error
+                if !(try await LCUtils.authenticateUser()) {
+                    throw CancellationError()
                 }
             }
         }
 
         if fm.fileExists(atPath: outputFolder.path) || sameBundleIdApp.count > 0 {
             appRelativePath = "\(newAppInfo.bundleIdentifier()!)_\(Int(CFAbsoluteTimeGetCurrent())).app"
-
             self.installOptions = [AppReplaceOption(isReplace: false, nameOfFolderToInstall: appRelativePath)]
-
             for app in sameBundleIdApp {
                 self.installOptions.append(AppReplaceOption(isReplace: true, nameOfFolderToInstall: app.appInfo.relativeBundlePath, appToReplace: app))
             }
-
             guard let installOptionChosen = await installReplaceAlert.open() else {
                 throw CancellationError()
             }
-
             if let appToReplace = installOptionChosen.appToReplace, appToReplace.uiIsShared {
                 outputFolder = LCPath.lcGroupBundlePath.appendingPathComponent(installOptionChosen.nameOfFolderToInstall)
             } else {
@@ -1897,18 +1882,16 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 try fm.removeItem(at: outputFolder)
             }
         }
-        // Move it!
+
         try fm.moveItem(at: appFolderPath, to: outputFolder)
         let finalNewApp = LCAppInfo(bundlePath: outputFolder.path)
         finalNewApp?.relativeBundlePath = appRelativePath
-
         guard let finalNewApp else {
             errorInfo = "lc.appList.appInfoInitError".loc
             errorShow = true
             return
         }
 
-        // patch and sign it -- exact upstream LCAppInfo implementation.
         var signError : String? = nil
         var signSuccess = false
         await withUnsafeContinuation({ c in
@@ -1924,7 +1907,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }, forceSign: false)
         })
 
-        // we leave it unsigned even if signing failed
         if let signError {
             if signSuccess {
                 errorInfo = "\("lc.appList.signSuccessWithError".loc)\n\n\(signError)"
@@ -1935,7 +1917,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
 
         if let appToReplace {
-            // copy previous configration to new app
             finalNewApp.autoSaveDisabled = true
             finalNewApp.isLocked = appToReplace.appInfo.isLocked
             finalNewApp.isHidden = appToReplace.appInfo.isHidden
@@ -1957,11 +1938,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             finalNewApp.lastLaunched = appToReplace.appInfo.lastLaunched
             finalNewApp.jitLaunchScriptJs = appToReplace.appInfo.jitLaunchScriptJs
             finalNewApp.multitaskSpecified = appToReplace.appInfo.multitaskSpecified
-            finalNewApp.classicMode = appToReplace.appInfo.classicMode
             finalNewApp.autoSaveDisabled = false
             finalNewApp.save()
         } else {
-            // enable SDK version spoof by defalut
             finalNewApp.spoofSDKVersion = true
         }
         finalNewApp.installationDate = Date.now
@@ -1969,7 +1948,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         await MainActor.run {
             if let appToReplace {
                 let newAppModel = LCAppModel(appInfo: finalNewApp, delegate: self)
-
                 if appToReplace.uiIsHidden {
                     sharedModel.hiddenApps.removeAll { $0 == appToReplace }
                     sharedModel.hiddenApps.append(newAppModel)
@@ -1980,8 +1958,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             } else {
                 let newAppModel = LCAppModel(appInfo: finalNewApp, delegate: self)
                 sharedModel.apps.append(newAppModel)
-
-                // add url schemes
                 if let urlSchemes = finalNewApp.urlSchemes(), urlSchemes.count > 0 {
                     UserDefaults.lcShared().mutableArrayValue(forKey: "LCGuestURLSchemes")
                         .addObjects(from: urlSchemes as! [Any])
@@ -2297,6 +2273,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
     }
     
+    func jitLaunch(appName: String) async {
+        await jitLaunch(appName: appName, classicMode: 0)
+    }
+
+    func jitLaunch(withScript script: String, appName: String) async {
+        await jitLaunch(withScript: script, appName: appName, classicMode: 0)
+    }
+
     func jitLaunch(appName: String, classicMode: UInt) async {
         await jitLaunch(withScript: "", appName: appName, classicMode: classicMode)
     }
@@ -2307,7 +2291,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         let enableJITTask = Task {
             
-            let _ = await LCUtils.askForJIT(withScript: script, appName: appName, classicMode: classicMode) { newMsg in
+            let _ = await LCUtils.askForJIT(withScript: script, appName: appName) { newMsg in
                 Task { await MainActor.run {
                     self.jitLog += "\(newMsg)\n"
                 }}
@@ -2321,7 +2305,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             enableJITTask.cancel()
             return
         }
-        LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
+        LCSharedUtils.launchToGuestApp()
 
     }
     

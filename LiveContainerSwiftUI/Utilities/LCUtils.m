@@ -3,7 +3,6 @@
 @import UIKit;
 @import UniformTypeIdentifiers;
 @import Security;
-#import <IOKit/IOKitLib.h>
 
 #import "LCUtils.h"
 #import "../../LiveContainer/LCSharedUtils.h"
@@ -24,17 +23,20 @@
 #pragma mark Certificate & password
 
 + (NSData *)certificateData {
-    NSUserDefaults* nud = [[NSUserDefaults alloc] initWithSuiteName:[LCSharedUtils appGroupID]];
-    if(!nud) {
-        nud = NSUserDefaults.standardUserDefaults;
-    }
+    NSString *groupID = [LCSharedUtils appGroupID];
+    NSUserDefaults* nud = (!groupID.length || [groupID isEqualToString:@"Unknown"])
+        ? NSUserDefaults.standardUserDefaults
+        : [[NSUserDefaults alloc] initWithSuiteName:groupID];
     return [nud objectForKey:@"LCCertificateData"];
 }
 
 
 + (void)setCertificatePassword:(NSString *)certPassword {
     [NSUserDefaults.standardUserDefaults setObject:certPassword forKey:@"LCCertificatePassword"];
-    [[[NSUserDefaults alloc] initWithSuiteName:[LCSharedUtils appGroupID]] setObject:certPassword forKey:@"LCCertificatePassword"];
+    NSString *groupID = [LCSharedUtils appGroupID];
+    if (groupID.length && ![groupID isEqualToString:@"Unknown"]) {
+        [[[NSUserDefaults alloc] initWithSuiteName:groupID] setObject:certPassword forKey:@"LCCertificatePassword"];
+    }
 }
 
 
@@ -68,23 +70,50 @@
     
     [lcUserDefaults removeObjectForKey:@"selected"];
     [lcUserDefaults removeObjectForKey:@"selectedContainer"];
+
+    if (!bundleId.length || !dataUUID.length) {
+        NSError *error = [NSError errorWithDomain:@"LiveProcess" code:EINVAL userInfo:@{
+            NSLocalizedDescriptionKey: @"The guest launch identifiers were not delivered to LiveContainer."
+        }];
+        if (completionHandler) completionHandler(nil, error);
+        return;
+    }
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (@available(iOS 16.1, *)) {
-            if(UIApplication.sharedApplication.supportsMultipleScenes && [NSUserDefaults.lcSharedDefaults integerForKey:@"LCMultitaskMode"] == 1) {
-                [MultitaskWindowManager openAppWindowWithDisplayName:displayName dataUUID:dataUUID bundleId:bundleId pidCallback:completionHandler];
-                MultitaskDockManager *dock = [MultitaskDockManager shared];
-                [dock addRunningApp:displayName appUUID:dataUUID view:nil];
-                return;
-            }
+        // VibeContainers' Home/Dock/switcher contract requires the guest to
+        // stay inside the host window hierarchy. A saved upstream LiveContainer
+        // native-window preference (mode 1) creates a separate UIWindowScene,
+        // which bypasses every host-owned bottom gesture and preserves the old
+        // controls. Migrate that state here at the final launch decision so an
+        // existing installation cannot silently select the incompatible path.
+        NSUserDefaults *sharedDefaults = NSUserDefaults.lcSharedDefaults;
+        NSInteger savedMode = [sharedDefaults integerForKey:@"LCMultitaskMode"];
+        if (savedMode != 0) {
+            [sharedDefaults setInteger:0 forKey:@"LCMultitaskMode"];
+            [sharedDefaults synchronize];
         }
-        
-        UIViewController *rootVC = ((UIWindowScene *)UIApplication.sharedApplication.connectedScenes.anyObject).keyWindow.rootViewController;
+        NSLog(@"VibeContainers: FORCED virtual-window guest host (saved mode=%ld)", (long)savedMode);
+
+        MultitaskDockManager *dock = MultitaskDockManager.shared;
+        UIWindow *hostWindow = [dock prepareHostWindowForGuestLaunch];
+        UIViewController *rootVC = hostWindow.rootViewController;
+        if (!hostWindow || !rootVC || !hostWindow.windowScene) {
+            NSError *error = [NSError errorWithDomain:@"LiveProcess"
+                                                 code:EAGAIN
+                                             userInfo:@{
+                NSLocalizedDescriptionKey: @"VibeContainers' host window is not ready yet. Return to the Home Screen and try opening the container again."
+            }];
+            if (completionHandler) completionHandler(nil, error);
+            return;
+        }
         DecoratedAppSceneViewController *launcherView = [[DecoratedAppSceneViewController alloc] initWindowName:displayName bundleId:bundleId dataUUID:dataUUID rootVC:rootVC];
         // Wire PID callback
         launcherView.pidAvailableHandler = completionHandler;
         launcherView.view.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
         launcherView.view.center = rootVC.view.center;
+        // Keep guest pixels and controls above SwiftUI's Springboard subtree if
+        // it committed another hierarchy transaction during controller setup.
+        (void)[dock prepareHostWindowForGuestLaunch];
     });
 }
 
@@ -183,31 +212,6 @@
     return ans;
 }
 
-#pragma mark JIT
-
-+ (BOOL)isTXMScriptRequired {
-    if (@available(iOS 19.0, *)) {
-        // https://github.com/opa334/Dopamine/commit/e8438b4a64ead3997d2c70a575431cb1b4070fb9
-        io_registry_entry_t memory_map = IORegistryEntryFromPath(0, "IODeviceTree:/chosen/memory-map");
-        if (memory_map == IO_OBJECT_NULL)
-            return NO;
-        NSArray *keys = (__bridge NSArray *)IORegistryEntryCreateCFProperty(memory_map, CFSTR(kIORegistryEntryPropertyKeysKey), 0, 0);
-        IOObjectRelease(memory_map);
-        return keys && [keys containsObject:@"TXM"];
-    }
-    return NO;
-}
-
-+ (NSString *)base64EncodedUniversalJITScript {
-    static dispatch_once_t onceToken;
-    static NSString *script;
-    dispatch_once(&onceToken, ^{
-        NSData *data = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"universal" ofType:@"js"]];
-        script = [data base64EncodedStringWithOptions:0];
-    });
-    return script;
-}
-
 #pragma mark Setup
 
 + (Store) store {
@@ -241,7 +245,9 @@
 }
 
 + (NSString *)appUrlScheme {
-    return NSBundle.mainBundle.infoDictionary[@"CFBundleURLTypes"][0][@"CFBundleURLSchemes"][0];
+    NSArray *urlTypes = NSBundle.mainBundle.infoDictionary[@"CFBundleURLTypes"];
+    NSArray *schemes = [urlTypes.firstObject objectForKey:@"CFBundleURLSchemes"];
+    return schemes.firstObject ?: @"iossim";
 }
 
 + (BOOL)isAppGroupAltStoreLike {
@@ -345,7 +351,7 @@
     
     // MARK: patch main executable
     // we remove the teamId after app group id so it can be correctly signed by AltSign.
-    NSString* entitlementXML = getExecutableEntitlementXML(NSBundle.mainBundle.executablePath);
+    NSString* entitlementXML = getLCEntitlementXML();
     NSData *plistData = [entitlementXML dataUsingEncoding:NSUTF8StringEncoding];
     NSMutableDictionary *dict = [NSPropertyListSerialization propertyListWithData:plistData
                                                                           options:NSPropertyListMutableContainers
@@ -421,7 +427,6 @@
     [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"PlugIns"] error:nil];
     // remove all sidestore stuff
     if([NSUserDefaults sideStoreExist]) {
-        [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"Frameworks/SideStoreSupport.framework"] error:nil];
         [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"Frameworks/SideStore.framework"] error:nil];
         [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"Frameworks/SideStoreApp.framework"] error:nil];
         [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"Intents.intentdefinition"] error:nil];

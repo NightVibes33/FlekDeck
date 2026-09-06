@@ -65,7 +65,7 @@ extension LCAppModel {
             )
         }
 
-        try LCUtils.moveFilesAtomicallyAfterPreflight(moves)
+        try flekMoveFilesAtomicallyAfterPreflight(moves)
 
         for container in uiContainers {
             if container.storageBookMark != nil {
@@ -136,7 +136,7 @@ extension LCAppModel {
             )
         }
 
-        try LCUtils.moveFilesAtomicallyAfterPreflight(moves)
+        try flekMoveFilesAtomicallyAfterPreflight(moves)
 
         let fm = FileManager.default
         for container in uiContainers {
@@ -266,6 +266,32 @@ extension LCAppModel {
         case (true, true): return .blocked
         case (false, true): return .alreadyDone
         case (false, false): return .missing
+        }
+    }
+
+    private func flekMoveFilesAtomicallyAfterPreflight(_ moves: [(URL, URL)]) throws {
+        let fm = FileManager.default
+        for (source, destination) in moves {
+            guard fm.fileExists(atPath: source.path) else { continue }
+            if fm.fileExists(atPath: destination.path) {
+                throw ConversionRefused(message: "A destination already exists at \(destination.lastPathComponent).")
+            }
+        }
+        var completed: [(URL, URL)] = []
+        do {
+            for (source, destination) in moves {
+                guard fm.fileExists(atPath: source.path) else { continue }
+                try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.moveItem(at: source, to: destination)
+                completed.append((source, destination))
+            }
+        } catch {
+            for (source, destination) in completed.reversed() {
+                if fm.fileExists(atPath: destination.path), !fm.fileExists(atPath: source.path) {
+                    try? fm.moveItem(at: destination, to: source)
+                }
+            }
+            throw error
         }
     }
 

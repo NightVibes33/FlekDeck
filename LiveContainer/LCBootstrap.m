@@ -19,13 +19,6 @@
 #include <mach-o/ldsyms.h>
 
 static int (*appMain)(int, char**);
-
-// Mirrors AccessVerdictStore.defaultGraceWindow / .maximumGraceWindow in
-// LiveContainerSwiftUI. Kept in sync by hand: the bootstrap runs before any
-// Swift is loaded, so it cannot read the constants from there.
-static const NSTimeInterval kDefaultOfflineGraceWindow = 3 * 24 * 60 * 60;
-static const NSTimeInterval kMaximumOfflineGraceWindow = 30 * 24 * 60 * 60;
-
 NSUserDefaults *lcUserDefaults;
 NSUserDefaults *lcSharedDefaults;
 NSString *lcAppGroupPath;
@@ -40,15 +33,166 @@ bool isSharedBundle = false;
 bool isSideStore = false;
 bool sideStoreExist = false;
 
+// iOS creates a UIWindowScene for a LiveProcess even when the guest still uses
+// the pre-iOS 13 AppDelegate.window lifecycle. TweakLoader normally bridges
+// those legacy windows to the connected scene, but iOSSim deliberately runs
+// guests without TweakLoader. Without the bridge, the guest is fully running
+// while UIApplication.windows remains empty and the hosted surface stays black.
+static BOOL lcLegacyWindowSceneBridgeEnabled = NO;
+static NSMutableArray *lcLegacyWindowSceneBridgeObservers;
+
+static BOOL LCSceneMatchesLegacyWindow(UIWindowScene *windowScene, UIWindow *window) {
+    if(!windowScene || !window) {
+        return NO;
+    }
+    if(window.screen && windowScene.screen != window.screen) {
+        return NO;
+    }
+    NSString *role = windowScene.session.role;
+    return !role || [role isEqualToString:UIWindowSceneSessionRoleApplication];
+}
+
+static void LCAttachLegacyWindowToLiveProcessScene(UIWindow *window) {
+    if(!lcLegacyWindowSceneBridgeEnabled || window.windowScene) {
+        return;
+    }
+
+    UIWindowScene *foregroundInactiveScene = nil;
+    UIWindowScene *connectedScene = nil;
+    for(UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
+        if(![candidate isKindOfClass:UIWindowScene.class]) {
+            continue;
+        }
+
+        UIWindowScene *windowScene = (UIWindowScene *)candidate;
+        if(!LCSceneMatchesLegacyWindow(windowScene, window)) {
+            continue;
+        }
+        if(!connectedScene) {
+            connectedScene = windowScene;
+        }
+
+        if(candidate.activationState == UISceneActivationStateForegroundActive) {
+            window.windowScene = windowScene;
+            NSLog(@"[LCBootstrap] attached legacy guest window to active LiveProcess scene");
+            return;
+        }
+        if(candidate.activationState == UISceneActivationStateForegroundInactive && !foregroundInactiveScene) {
+            foregroundInactiveScene = windowScene;
+        }
+    }
+
+    if(foregroundInactiveScene) {
+        window.windowScene = foregroundInactiveScene;
+        NSLog(@"[LCBootstrap] attached legacy guest window to inactive LiveProcess scene");
+    } else if(connectedScene) {
+        // Legacy apps may make their window visible one UIKit transaction
+        // before the newly connected scene enters the foreground.
+        window.windowScene = connectedScene;
+        NSLog(@"[LCBootstrap] attached legacy guest window to connected LiveProcess scene");
+    }
+}
+
+static void LCAttachLegacyApplicationDelegateWindow(UIWindowScene *preferredScene) {
+    if(!lcLegacyWindowSceneBridgeEnabled) {
+        return;
+    }
+
+    id<UIApplicationDelegate> delegate = UIApplication.sharedApplication.delegate;
+    if(![delegate respondsToSelector:@selector(window)]) {
+        return;
+    }
+
+    UIWindow *window = delegate.window;
+    if(!window || window.windowScene) {
+        return;
+    }
+
+    // UISceneWillConnectNotification can arrive before connectedScenes is
+    // populated. Its UIWindowScene is nevertheless the exact scene the legacy
+    // AppDelegate window needs, so prefer it over waiting for another window
+    // visibility call that may never come.
+    if(LCSceneMatchesLegacyWindow(preferredScene, window)) {
+        window.windowScene = preferredScene;
+        NSLog(@"[LCBootstrap] attached legacy AppDelegate window to notified LiveProcess scene");
+    } else {
+        LCAttachLegacyWindowToLiveProcessScene(window);
+    }
+
+    // The original makeKeyAndVisible may have run before a scene existed, in
+    // which case UIKit could not preserve the requested key state. Complete
+    // that request now without forcing a window the guest left hidden onscreen.
+    if(window.windowScene && !window.hidden && !window.isKeyWindow) {
+        [window makeKeyWindow];
+    }
+}
+
+@implementation UIWindow(LCLegacyLiveProcessSceneBridge)
+- (void)lcLegacyLiveProcess_makeKeyAndVisible {
+    LCAttachLegacyWindowToLiveProcessScene(self);
+    [self lcLegacyLiveProcess_makeKeyAndVisible];
+}
+
+- (void)lcLegacyLiveProcess_makeKeyWindow {
+    LCAttachLegacyWindowToLiveProcessScene(self);
+    [self lcLegacyLiveProcess_makeKeyWindow];
+}
+
+- (void)lcLegacyLiveProcess_setHidden:(BOOL)hidden {
+    LCAttachLegacyWindowToLiveProcessScene(self);
+    [self lcLegacyLiveProcess_setHidden:hidden];
+}
+@end
+
+static void LCInstallLegacyWindowSceneBridgeIfNeeded(NSBundle *appBundle) {
+    NSDictionary *sceneManifest = appBundle.infoDictionary[@"UIApplicationSceneManifest"];
+    BOOL hasSceneManifest = [sceneManifest isKindOfClass:NSDictionary.class];
+    BOOL tweakLoaderDisabled = [guestAppInfo[@"dontInjectTweakLoader"] boolValue] &&
+        [guestAppInfo[@"dontLoadTweakLoader"] boolValue];
+    if(!isLiveProcess || hasSceneManifest || !tweakLoaderDisabled || lcLegacyWindowSceneBridgeEnabled) {
+        return;
+    }
+
+    lcLegacyWindowSceneBridgeEnabled = YES;
+    swizzle(UIWindow.class, @selector(makeKeyAndVisible), @selector(lcLegacyLiveProcess_makeKeyAndVisible));
+    swizzle(UIWindow.class, @selector(makeKeyWindow), @selector(lcLegacyLiveProcess_makeKeyWindow));
+    swizzle(UIWindow.class, @selector(setHidden:), @selector(lcLegacyLiveProcess_setHidden:));
+
+    lcLegacyWindowSceneBridgeObservers = [NSMutableArray new];
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    for(NSNotificationName name in @[
+        UISceneWillConnectNotification,
+        UISceneDidActivateNotification,
+        UIApplicationDidBecomeActiveNotification
+    ]) {
+        id observer = [center addObserverForName:name
+                                          object:nil
+                                           queue:NSOperationQueue.mainQueue
+                                      usingBlock:^(NSNotification *notification) {
+            UIWindowScene *notifiedScene = [notification.object isKindOfClass:UIWindowScene.class]
+                ? notification.object
+                : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                LCAttachLegacyApplicationDelegateWindow(notifiedScene);
+            });
+        }];
+        [lcLegacyWindowSceneBridgeObservers addObject:observer];
+    }
+    NSLog(@"[LCBootstrap] enabled legacy LiveProcess window scene bridge");
+}
+
 @implementation NSUserDefaults(LiveContainer)
 + (instancetype)lcUserDefaults {
     return lcUserDefaults;
 }
 + (instancetype)lcSharedDefaults {
     if(!lcUserDefaults) {
-        lcSharedDefaults = [[NSUserDefaults alloc] initWithSuiteName: [LCSharedUtils appGroupID]];
+        NSString *groupID = [LCSharedUtils appGroupID];
+        lcSharedDefaults = (!groupID.length || [groupID isEqualToString:@"Unknown"])
+            ? NSUserDefaults.standardUserDefaults
+            : [[NSUserDefaults alloc] initWithSuiteName:groupID];
     }
-    return lcSharedDefaults;
+    return lcSharedDefaults ?: NSUserDefaults.standardUserDefaults;
 }
 + (NSString *)lcAppGroupPath {
     return lcAppGroupPath;
@@ -95,6 +239,14 @@ static BOOL checkJITEnabled() {
     if([lcUserDefaults boolForKey:@"LCIgnoreJITOnLaunch"]) {
         return NO;
     }
+    // iOSSim supports the normal LiveContainer device/JIT path on every OS
+    // version when this incarnation is demonstrably JIT-enabled. Upstream's
+    // iOS 26 guard remains the fallback for non-JIT processes.
+    int flags = 0;
+    if (csops(getpid(), 0, &flags, sizeof(flags)) == 0 &&
+        (flags & CS_DEBUGGED) != 0) {
+        return YES;
+    }
     // check if jailbroken
     if (access("/var/mobile", R_OK) == 0) {
         return YES;
@@ -105,7 +257,6 @@ static BOOL checkJITEnabled() {
     }
 
     // check csflags
-    int flags;
     csops(getpid(), 0, &flags, sizeof(flags));
     return (flags & CS_DEBUGGED) != 0;
 #endif
@@ -258,50 +409,6 @@ static void *getAppEntryPoint(void *handle) {
     return (void *)header + entryoff;
 }
 
-// Access gate for guest app launches.
-//
-// The SwiftUI launcher can only refuse to draw its own UI. A guest app started
-// from the "Launch App" Shortcuts intent, or from a leftover "selected" key,
-// reaches invokeAppMain() below without LiveContainerSwiftUI ever being loaded,
-// so the check there never runs. This is the one point every launch path passes
-// through, which makes it the only place a ban can actually be enforced.
-//
-// Cache only, never network: this sits on the launch path of every guest app
-// and must not add latency or fail when offline. LiveContainerSwiftUI owns
-// refreshing the cached verdict; see AccessVerdictStore, whose keys these are.
-static BOOL isGuestLaunchAllowed(NSUserDefaults *sharedDefaults) {
-    NSNumber *checkedAt = [sharedDefaults objectForKey:@"FSAccessVerdictCheckedAt"];
-    // Nothing has ever been verified on this install. Allow, so that a launch
-    // path which legitimately cannot see the cache is not bricked by this
-    // check; the SwiftUI gate still applies the first time the launcher opens.
-    if (!checkedAt) {
-        return YES;
-    }
-
-    // A ban is sticky and has no expiry, matching the Swift side: going offline
-    // or leaving the app closed must not be a way to shed it.
-    if ([sharedDefaults boolForKey:@"FSAccessVerdictIsBanned"]) {
-        return NO;
-    }
-
-    NSTimeInterval age = NSDate.date.timeIntervalSince1970 - checkedAt.doubleValue;
-    // A clock wound backwards shows up as a negative age. Treat it as expired
-    // rather than as an arbitrarily fresh verdict.
-    if (age < 0) {
-        return NO;
-    }
-
-    NSNumber *storedWindow = [sharedDefaults objectForKey:@"FSAccessVerdictGraceWindow"];
-    NSTimeInterval window = storedWindow ? storedWindow.doubleValue : kDefaultOfflineGraceWindow;
-    if (window < 0) {
-        window = 0;
-    } else if (window > kMaximumOfflineGraceWindow) {
-        window = kMaximumOfflineGraceWindow;
-    }
-
-    return age <= window;
-}
-
 static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContainer, int argc, char *argv[]) {
     NSString *appError = nil;
     if([[lcUserDefaults objectForKey:@"LCWaitForDebugger"] boolValue]) {
@@ -310,7 +417,9 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     if (!LCSharedUtils.certificatePassword && !isSideStore) {
 #if !TARGET_OS_SIMULATOR
         if(@available(iOS 26.0 ,*))  {
-            return @"JITLess mode is required since iOS 26. Please set it up in settings. \nPlease go to FlekDeck settings -> tap \"Import Flekstore certificate\" / \"Import Certificate\"";
+            if (!checkJITEnabled()) {
+                return @"JIT is not enabled for this iOSSim process. Launch through StikJIT, SideStore, TrollStore, or another device JIT provider and try again.";
+            }
         }
 #endif
         // First of all, let's check if we have JIT
@@ -318,7 +427,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
             usleep(1000*100);
         }
         if (!checkJITEnabled()) {
-            appError = @"JIT was not enabled. If you want to use FlekDeck without JIT, setup JITLess mode in settings.";
+            appError = @"JIT was not enabled for the relaunched iOSSim process. Return through StikJIT, SideStore, TrollStore, or another device JIT provider, then launch the guest again.";
             return appError;
         }
     }
@@ -328,8 +437,15 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     
     NSURL *appGroupFolder = nil;
     
-    NSString *bundlePath = 0;
-    if(!isSideStore) {
+    NSString *bundlePath = nil;
+    const char *resolvedBundlePath = getenv("LC_LIVEPROCESS_BUNDLE_PATH");
+    if(isLiveProcess && !isSideStore && resolvedBundlePath && resolvedBundlePath[0]) {
+        // AppSceneViewController resolves VibeContainers' published bundle
+        // symlink before creating the sandbox extension. Reconstructing the
+        // alias here loses that grant on device and makes dyld fail with
+        // misleading ENOENT errors.
+        bundlePath = [NSString stringWithUTF8String:resolvedBundlePath];
+    } else if(!isSideStore) {
         bundlePath = [NSString stringWithFormat:@"%@/Applications/%@", docPath, selectedApp];
     } else if (isLiveProcess) {
         bundlePath = [[NSBundle.mainBundle.bundleURL.URLByDeletingLastPathComponent.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"Frameworks/SideStoreApp.framework"] path];
@@ -341,12 +457,14 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     guestAppInfo = [NSDictionary dictionaryWithContentsOfFile:[NSString stringWithFormat:@"%@/LCAppInfo.plist", bundlePath]];
 
     // not found locally, let's look for the app in shared folder
-    if(!guestAppInfo) {
-        NSURL *appGroupPath = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:[LCSharedUtils appGroupID]];
-        appGroupFolder = [appGroupPath URLByAppendingPathComponent:@"LiveContainer"];
-        bundlePath = [NSString stringWithFormat:@"%@/Applications/%@", appGroupFolder.path, selectedApp];
-        guestAppInfo = [NSDictionary dictionaryWithContentsOfFile:[NSString stringWithFormat:@"%@/LCAppInfo.plist", bundlePath]];
-        isSharedBundle = true;
+    if(!guestAppInfo && !(isLiveProcess && resolvedBundlePath && resolvedBundlePath[0])) {
+        NSURL *appGroupPath = [LCSharedUtils appGroupPath];
+        if (appGroupPath) {
+            appGroupFolder = [appGroupPath URLByAppendingPathComponent:@"LiveContainer"];
+            bundlePath = [NSString stringWithFormat:@"%@/Applications/%@", appGroupFolder.path, selectedApp];
+            guestAppInfo = [NSDictionary dictionaryWithContentsOfFile:[NSString stringWithFormat:@"%@/LCAppInfo.plist", bundlePath]];
+            isSharedBundle = guestAppInfo != nil;
+        }
     }
     
     if(!guestAppInfo) {
@@ -390,7 +508,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     }
     
     if(isLiveProcess && !isSideStore) {
-        lcAppUrlScheme = [lcUserDefaults stringForKey:@"hostUrlScheme"];
+        lcAppUrlScheme = [lcUserDefaults stringForKey:@"hostUrlScheme"] ?: @"iossim";
         [lcUserDefaults removeObjectForKey:@"hostUrlScheme"];
     }
     
@@ -398,7 +516,10 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
 
     // Setup tweak loader
     NSString *tweakFolder = nil;
-    if (isSharedBundle) {
+    const char *resolvedTweaksPath = getenv("LC_LIVEPROCESS_TWEAKS_PATH");
+    if (isLiveProcess && resolvedTweaksPath && resolvedTweaksPath[0]) {
+        tweakFolder = [NSString stringWithUTF8String:resolvedTweaksPath];
+    } else if (isSharedBundle) {
         tweakFolder = [appGroupFolder.path  stringByAppendingPathComponent:@"Tweaks"];
     } else {
         tweakFolder = [docPath stringByAppendingPathComponent:@"Tweaks"];
@@ -443,11 +564,13 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
 
     // Overwrite home and tmp path
     NSString *newHomePath = nil;
+    const char *resolvedDataPath = getenv("LC_LIVEPROCESS_DATA_PATH");
     NSArray<NSDictionary*>* containers = guestAppInfo[@"LCContainers"];
     NSURL* bookmarkURL = nil;
 
     // see if the container contains a bookmark. if so, resolve it and report error upon failure.
-    if(containers && [containers isKindOfClass:NSArray.class]) {
+    if(!(isLiveProcess && resolvedDataPath && resolvedDataPath[0]) &&
+       containers && [containers isKindOfClass:NSArray.class]) {
         for(NSDictionary* container in containers){
             if(![container isKindOfClass:NSDictionary.class]) {
                 continue;
@@ -459,7 +582,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
                     [lcUserDefaults setObject:@"Bookmark resolution timed out. Is the data storage offline?" forKey:@"error"];
                     NSError* err = nil;
                     BOOL isStale = false;
-                    bookmarkURL = [NSURL URLByResolvingBookmarkData:bookmarkData options:(1<<10) relativeToURL:nil bookmarkDataIsStale:&isStale error:&err];
+                    bookmarkURL = [NSURL URLByResolvingBookmarkData:bookmarkData options:0 relativeToURL:nil bookmarkDataIsStale:&isStale error:&err];
                     bool access = [bookmarkURL startAccessingSecurityScopedResource];
                     if(!bookmarkURL || !access) {
                         return [@"Bookmark resolution failed or unable to access the container. You might need to readd the data storage. %@" stringByAppendingString:err.localizedDescription];
@@ -471,7 +594,13 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         }
     }
     
-    if(isSideStore) {
+    if(isLiveProcess && !isSideStore && resolvedDataPath && resolvedDataPath[0]) {
+        // Use the exact URL which LiveProcess resolved from the transferable
+        // bookmark. In VibeContainers the legacy Data/Application URL is a
+        // symlink; keeping it as HOME causes Core Data/app-group stores to hit
+        // a path for which the extension process has no writable grant.
+        newHomePath = [NSString stringWithUTF8String:resolvedDataPath];
+    } else if(isSideStore) {
         if(isLiveProcess) {
             newHomePath = [lcUserDefaults stringForKey:@"specifiedSideStoreContainerPath"];;
             [lcUserDefaults removeObjectForKey:@"specifiedSideStoreContainerPath"];
@@ -488,6 +617,14 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     }
     
     
+    BOOL newHomeIsDirectory = NO;
+    if (!newHomePath.length ||
+        ![fm fileExistsAtPath:newHomePath isDirectory:&newHomeIsDirectory] ||
+        !newHomeIsDirectory || access(newHomePath.fileSystemRepresentation, R_OK | W_OK) != 0) {
+        return [NSString stringWithFormat:@"The guest data container is missing or not writable: %@",
+                newHomePath ?: @"(no path)"];
+    }
+
     NSString *newTmpPath = [newHomePath stringByAppendingPathComponent:@"tmp"];
     remove(newTmpPath.UTF8String);
     symlink(getenv("TMPDIR"), newTmpPath.UTF8String);
@@ -529,10 +666,23 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     // which if symlinked, the new tmp cannot be recreated (#1040, #1125) or the app may camplain about the tmp folder being a symlimk (#884)
 
     // Setup directories
-    NSArray *dirList = @[@"Library/Caches", @"Library/Cookies", @"Documents", @"SystemData"];
+    NSArray *dirList = @[
+        @"Library/Application Support",
+        @"Library/Caches",
+        @"Library/Cookies",
+        @"Library/Preferences",
+        @"Library/Saved Application State",
+        @"Documents",
+        @"SystemData"
+    ];
     for (NSString *dir in dirList) {
         NSString *dirPath = [newHomePath stringByAppendingPathComponent:dir];
-        [fm createDirectoryAtPath:dirPath withIntermediateDirectories:YES attributes:nil error:nil];
+        NSError *directoryError = nil;
+        if (![fm createDirectoryAtPath:dirPath
+            withIntermediateDirectories:YES attributes:nil error:&directoryError]) {
+            return [NSString stringWithFormat:@"The guest data directory %@ could not be prepared: %@",
+                    dir, directoryError.localizedDescription ?: @"permission denied"];
+        }
     }
     
     NSString* containerInfoPath = [newHomePath stringByAppendingPathComponent:@"LCContainerInfo.plist"];
@@ -570,15 +720,6 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         NSFMGuestHooksInit();
         initDead10ccFix();
     }
-    // No-op outside LiveProcess, and once the appex carries the key itself.
-    LCHostIdentityInit();
-    // Per-window mute, and mixable audio sessions so two guests can be heard at
-    // once. Only a LiveProcess guest is ever in a multitask window.
-    if(isLiveProcess && !isSideStore) {
-        LCAudioMuteInit(dataUUID);
-    }
-    // Background downloads inside LiveProcess get our app group forced onto
-    // their session configuration, which is what makes them complete.
     if(isLiveProcess) {
         NSURLSCGuestHooksInit();
     }
@@ -605,7 +746,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
             return @"JIT is required to run 32-bit apps.";
         }
         
-        NSString *selected32BitLayer = [lcSharedDefaults stringForKey:@"selected32BitLayer"];
+        NSString *selected32BitLayer = [lcUserDefaults stringForKey:@"selected32BitLayer"];
         if(!selected32BitLayer || [selected32BitLayer length] == 0) {
             appError = @"No 32-bit translation layer installed";
             NSLog(@"[LCBootstrap] %@", appError);
@@ -670,12 +811,8 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"].UTF8String, RTLD_LAZY|RTLD_GLOBAL);
     }
     
-    if(sideStoreExist) {
-        if (!isLiveProcess && (isSideStore || ![guestAppInfo[@"dontInjectTweakLoader"] boolValue])) {
-            dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/SideStoreSupport.framework/SideStoreSupport"].UTF8String, RTLD_LAZY);
-        } else if (isLiveProcess && isSideStore) {
-            dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"../../Frameworks/SideStoreSupport.framework/SideStoreSupport"].UTF8String, RTLD_LAZY);
-        }
+    if(!isSideStore && sideStoreExist && ![guestAppInfo[@"dontInjectTweakLoader"] boolValue]) {
+        dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/SideStore.framework/SideStore"].UTF8String, RTLD_LAZY);
     }
     
     // Fix dynamic properties of some apps
@@ -703,6 +840,8 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         *path = oldPath;
         return appError;
     }
+
+    LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);
 
     // Go!
     NSLog(@"[LCBootstrap] jumping to main %p", appMain);
@@ -734,10 +873,15 @@ static void exceptionHandler(NSException *exception) {
 int LiveContainerMain(int argc, char *argv[]) {
     lcMainBundle = [NSBundle mainBundle];
     lcUserDefaults = NSUserDefaults.standardUserDefaults;
-    
-    lcSharedDefaults = [[NSUserDefaults alloc] initWithSuiteName: [LCSharedUtils appGroupID]];
-    lcAppUrlScheme = NSBundle.mainBundle.infoDictionary[@"CFBundleURLTypes"][0][@"CFBundleURLSchemes"][0];
-    lcAppGroupPath = [[NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:[NSClassFromString(@"LCSharedUtils") appGroupID]] path];
+
+    NSString *appGroupID = [LCSharedUtils appGroupID];
+    lcSharedDefaults = (!appGroupID.length || [appGroupID isEqualToString:@"Unknown"])
+        ? lcUserDefaults
+        : [[NSUserDefaults alloc] initWithSuiteName:appGroupID];
+    NSArray *urlTypes = NSBundle.mainBundle.infoDictionary[@"CFBundleURLTypes"];
+    NSArray *urlSchemes = [urlTypes.firstObject objectForKey:@"CFBundleURLSchemes"];
+    lcAppUrlScheme = urlSchemes.firstObject ?: @"iossim";
+    lcAppGroupPath = [LCSharedUtils appGroupPath].path;
     isLiveProcess = [lcAppUrlScheme isEqualToString:@"liveprocess"];
     setenv("LC_HOME_PATH", getenv("HOME"), 0);
 
@@ -802,21 +946,7 @@ int LiveContainerMain(int argc, char *argv[]) {
         [lcUserDefaults removeObjectForKey:@"selected"];
         [lcUserDefaults removeObjectForKey:@"selectedContainer"];
     }
-
-    if((selectedApp || [lcUserDefaults boolForKey:@"LCOpenSideStore"]) && !isGuestLaunchAllowed(lcSharedDefaults)) {
-        // Drop the pending launch and fall through to LiveContainerSwiftUI,
-        // which re-checks online and explains itself with the blocked or the
-        // verification screen. Under LiveProcess there is no UI to fall through
-        // to, so the multitask window closes instead.
-        selectedApp = nil;
-        selectedContainer = nil;
-        launchUrl = nil;
-        [lcUserDefaults removeObjectForKey:@"selected"];
-        [lcUserDefaults removeObjectForKey:@"selectedContainer"];
-        [lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
-        [lcUserDefaults setBool:NO forKey:@"LCOpenSideStore"];
-    }
-
+    
     if(isLiveProcess) {
         sideStoreExist = [NSFileManager.defaultManager fileExistsAtPath:[lcMainBundle.bundlePath stringByAppendingPathComponent:@"../../Frameworks/SideStoreApp.framework"]];
     } else {
@@ -836,7 +966,7 @@ int LiveContainerMain(int argc, char *argv[]) {
     }
     NSString* runningLC = [LCSharedUtils getContainerUsingLCSchemeWithFolderName:selectedContainer];
     // if another instance is running, we just switch to that one, these should be called after uiapplication initialized
-    // however if the running lc is liveprocess and current lc is flekdeck1 we just continue
+    // however if the running lc is liveprocess and current lc is livecontainer1 we just continue
     if(selectedApp && runningLC) {
         [lcUserDefaults removeObjectForKey:@"selected"];
         [lcUserDefaults removeObjectForKey:@"selectedContainer"];
@@ -880,7 +1010,7 @@ int LiveContainerMain(int argc, char *argv[]) {
         });
 
     }
-    NSSetUncaughtExceptionHandler(&exceptionHandler);
+    
     if (selectedApp || isSideStore) {
         [lcUserDefaults removeObjectForKey:@"selected"];
         [lcUserDefaults removeObjectForKey:@"selectedContainer"];
@@ -888,6 +1018,7 @@ int LiveContainerMain(int argc, char *argv[]) {
             lcLaunchURL = launchUrl;
             [lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
         }
+        NSSetUncaughtExceptionHandler(&exceptionHandler);
         NSString *appError = invokeAppMain(selectedApp, selectedContainer, argc, argv);
         if (appError) {
             if(isLiveProcess) {
@@ -934,13 +1065,13 @@ int LiveContainerMain(int argc, char *argv[]) {
     NSCAssert(LiveContainerSwiftUIHandle, @"%s", dlerror());
     
     if(sideStoreExist) {
-        void* sideStoreHandle = dlopen("@executable_path/Frameworks/SideStoreSupport.framework/SideStoreSupport", RTLD_LAZY);
+        void* sideStoreHandle = dlopen("@executable_path/Frameworks/SideStore.framework/SideStore", RTLD_LAZY);
     }
 
     if ([lcUserDefaults boolForKey:@"LCLoadTweaksToSelf"]) {
         NSString *tweakFolder = nil;
         if (isSharedBundle) {
-            NSURL *appGroupPath = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:[LCSharedUtils appGroupID]];
+            NSURL *appGroupPath = [LCSharedUtils appGroupPath];
             tweakFolder = [appGroupPath.path stringByAppendingPathComponent:@"LiveContainer/Tweaks"];
         } else {
             NSString *docPath = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].lastObject.path;

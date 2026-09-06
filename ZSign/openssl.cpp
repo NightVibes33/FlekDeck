@@ -1,12 +1,12 @@
 #include "common.h"
 #include "base64.h"
 #include "openssl.h"
-#include <openssl/pem.h>
-#include <openssl/cms.h>
-#include <openssl/err.h>
-#include <openssl/provider.h>
-#include <openssl/pkcs12.h>
-#include <openssl/conf.h>
+#include <OpenSSL/pem.h>
+#include <OpenSSL/cms.h>
+#include <OpenSSL/err.h>
+#include <OpenSSL/provider.h>
+#include <OpenSSL/pkcs12.h>
+#include <OpenSSL/conf.h>
 
 const char* ZSignAsset::s_szAppleDevCACert = ""
 "-----BEGIN CERTIFICATE-----\n"
@@ -789,45 +789,34 @@ bool ZSignAsset::InitSimple(const void* strSignerPKeyData, int strSignerPKeyData
     BIO *bioPKey = BIO_new_mem_buf(strSignerPKeyData, strSignerPKeyDataSize);
     if (NULL != bioPKey)
     {
-        evpPKey = PEM_read_bio_PrivateKey(bioPKey, NULL, NULL, (void *)"");
+        // The input is normally a PKCS#12 identity. Probe each supported
+        // encoding once with the supplied password; the old two-pass flow
+        // deliberately tried an empty password first and printed a frightening
+        // OpenSSL error stack even when the real password succeeded moments
+        // later.
+        ERR_clear_error();
+        evpPKey = PEM_read_bio_PrivateKey(
+            bioPKey, NULL, NULL, (void *)strPassword.c_str());
         if (NULL == evpPKey)
         {
             BIO_reset(bioPKey);
+            ERR_clear_error();
             evpPKey = d2i_PrivateKey_bio(bioPKey, NULL);
             if (NULL == evpPKey)
             {
                 BIO_reset(bioPKey);
+                ERR_clear_error();
                 OSSL_PROVIDER_load(NULL, "legacy");
                 PKCS12 *p12 = d2i_PKCS12_bio(bioPKey, NULL);
                 if (NULL != p12)
                 {
-                    if (0 == PKCS12_parse(p12, "", &evpPKey, &x509Cert, NULL))
+                    if (0 == PKCS12_parse(p12, strPassword.c_str(), &evpPKey, &x509Cert, NULL))
                     {
                         CMSError();
+                    } else {
+                        ERR_clear_error();
                     }
                     PKCS12_free(p12);
-                }
-            }
-        }
-        if (evpPKey == NULL) {
-            evpPKey = PEM_read_bio_PrivateKey(bioPKey, NULL, NULL, (void *)strPassword.c_str());
-            if (NULL == evpPKey)
-            {
-                BIO_reset(bioPKey);
-                evpPKey = d2i_PrivateKey_bio(bioPKey, NULL);
-                if (NULL == evpPKey)
-                {
-                    BIO_reset(bioPKey);
-                    OSSL_PROVIDER_load(NULL, "legacy");
-                    PKCS12 *p12 = d2i_PKCS12_bio(bioPKey, NULL);
-                    if (NULL != p12)
-                    {
-                        if (0 == PKCS12_parse(p12, strPassword.c_str(), &evpPKey, &x509Cert, NULL))
-                        {
-                            CMSError();
-                        }
-                        PKCS12_free(p12);
-                    }
                 }
             }
         }

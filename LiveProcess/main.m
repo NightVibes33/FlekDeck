@@ -10,13 +10,14 @@
 #import <mach-o/dyld.h>
 #import "../LiveContainer/utils.h"
 #import "../LiveContainer/Tweaks/Tweaks.h"
-#import "../SideStoreSupport/XPCServer.h"
+#import "../SideStore/XPCServer.h"
 
 @interface LiveProcessHandler : NSObject<NSExtensionRequestHandling>
 @end
 @implementation LiveProcessHandler
 static NSExtensionContext *extensionContext;
 static NSDictionary *retrievedAppInfo;
+static NSMutableArray<NSURL *> *activeResourceURLs;
 + (NSExtensionContext *)extensionContext {
     return extensionContext;
 }
@@ -35,6 +36,107 @@ static NSDictionary *retrievedAppInfo;
 
 extern int LiveContainerMain(int argc, char *argv[]);
 static char **_envp, **_apple = NULL;
+
+static NSError *LiveProcessLaunchError(NSInteger code, NSString *description) {
+    return [NSError errorWithDomain:@"LiveProcess"
+                               code:code
+                           userInfo:@{NSLocalizedDescriptionKey:
+        description.length ? description : @"LiveProcess could not access the guest files."}];
+}
+
+static BOOL ConfigureGuestResources(NSDictionary *appInfo, NSError **outError) {
+    NSArray *resources = appInfo[@"resources"];
+    if (![resources isKindOfClass:NSArray.class] || resources.count == 0) {
+        return NO;
+    }
+
+    activeResourceURLs = [NSMutableArray arrayWithCapacity:resources.count];
+    NSMutableSet<NSString *> *configuredRoles = [NSMutableSet set];
+    NSDictionary<NSString *, NSString *> *environmentKeys = @{
+        @"bundle": @"LC_LIVEPROCESS_BUNDLE_PATH",
+        @"container": @"LC_LIVEPROCESS_DATA_PATH",
+        @"tweaks": @"LC_LIVEPROCESS_TWEAKS_PATH",
+        @"appGroups": @"LC_LIVEPROCESS_APP_GROUPS_PATH",
+        @"containerLocks": @"LC_LIVEPROCESS_LOCKS_PATH",
+        @"sideStoreContainer": @"LC_LIVEPROCESS_SIDESTORE_PATH",
+    };
+
+    for (id candidate in resources) {
+        if (![candidate isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *resource = candidate;
+        NSString *role = resource[@"role"];
+        NSData *bookmark = resource[@"bookmark"];
+        if (![role isKindOfClass:NSString.class] ||
+            ![bookmark isKindOfClass:NSData.class] || !bookmark.length) {
+            if (outError) {
+                *outError = LiveProcessLaunchError(EINVAL,
+                    @"The host supplied an invalid guest resource bookmark.");
+            }
+            return NO;
+        }
+
+        BOOL isStale = NO;
+        NSError *resolutionError = nil;
+        NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark
+                                               options:0
+                                         relativeToURL:nil
+                                   bookmarkDataIsStale:&isStale
+                                                 error:&resolutionError];
+        if (!url.isFileURL || !url.path.length) {
+            if (outError) {
+                NSString *detail = resolutionError.localizedDescription ?: @"the bookmark did not resolve";
+                *outError = LiveProcessLaunchError(resolutionError.code ?: EACCES,
+                    [NSString stringWithFormat:@"The %@ resource is unavailable: %@", role, detail]);
+            }
+            return NO;
+        }
+
+        // Resolution installs an ephemeral extension on iOS. Explicitly hold
+        // its security scope too, and retain every URL for the full guest
+        // lifetime so Foundation cannot release the access grant early.
+        BOOL scoped = [url startAccessingSecurityScopedResource];
+        BOOL exists = [NSFileManager.defaultManager fileExistsAtPath:url.path];
+        BOOL readOnly = [resource[@"readOnly"] boolValue];
+        BOOL accessible = exists && access(url.fileSystemRepresentation, R_OK) == 0;
+        if (!readOnly) accessible = accessible && access(url.fileSystemRepresentation, W_OK) == 0;
+        if (!accessible) {
+            if (scoped) [url stopAccessingSecurityScopedResource];
+            if (outError) {
+                *outError = LiveProcessLaunchError(EACCES,
+                    [NSString stringWithFormat:@"LiveProcess cannot %@ the %@ resource at %@.",
+                     readOnly ? @"read" : @"read or write", role, url.path]);
+            }
+            return NO;
+        }
+        if (isStale) {
+            NSLog(@"LiveProcess: %@ resource bookmark is stale but remains accessible", role);
+        }
+        [activeResourceURLs addObject:url];
+        [configuredRoles addObject:role];
+
+        NSString *environmentKey = environmentKeys[role];
+        if (environmentKey.length) {
+            setenv(environmentKey.UTF8String, url.fileSystemRepresentation, 1);
+        }
+    }
+
+    BOOL isSideStore = [appInfo[@"selected"] isEqualToString:@"builtinSideStore"];
+    BOOL missingRequiredRole = isSideStore
+        ? ![configuredRoles containsObject:@"sideStoreContainer"]
+        : (![configuredRoles containsObject:@"bundle"] ||
+           ![configuredRoles containsObject:@"container"] ||
+           ![configuredRoles containsObject:@"tweaks"] ||
+           ![configuredRoles containsObject:@"appGroups"]);
+    if (missingRequiredRole) {
+        if (outError) {
+            *outError = LiveProcessLaunchError(EINVAL,
+                @"The host did not provide all required guest resources.");
+        }
+        return NO;
+    }
+    return YES;
+}
+
 int LiveProcessMain(int argc, char *argv[]) {
     // Let NSExtensionContext initialize, once it's done it will call CFRunLoopStop
     CFRunLoopRun();
@@ -54,50 +156,85 @@ int LiveProcessMain(int argc, char *argv[]) {
         return payloadEntry(argc, argv, _envp, _apple);
     }
     
-    NSLog(@"Retrieved app info: %@", appInfo);
+    NSLog(@"LiveProcess: received launch for %@ (%@)",
+          appInfo[@"selected"], appInfo[@"selectedContainer"]);
     // Set LiveContainer's home path
     setenv("LP_HOME_PATH", getenv("HOME"), 1);
     const char *overrideHomePath = [appInfo[@"lcHomePath"] fileSystemRepresentation];
     if(overrideHomePath) setenv("LC_HOME_PATH", overrideHomePath, 1);
     // Pass selected app info to user defaults
     NSUserDefaults *lcUserDefaults = NSUserDefaults.standardUserDefaults;
-    [lcUserDefaults setObject:appInfo[@"hostUrlScheme"] forKey:@"hostUrlScheme"];
-    [lcUserDefaults setObject:appInfo[@"launchAppUrlScheme"] forKey:@"launchAppUrlScheme"];
-    [lcUserDefaults setObject:appInfo[@"selected"] forKey:@"selected"];
-    [lcUserDefaults setObject:appInfo[@"selectedContainer"] forKey:@"selectedContainer"];
+    NSDictionary<NSString *, NSString *> *launchValues = @{
+        @"hostUrlScheme": appInfo[@"hostUrlScheme"] ?: @"iossim",
+        @"selected": appInfo[@"selected"] ?: @"",
+        @"selectedContainer": appInfo[@"selectedContainer"] ?: @""
+    };
+    [launchValues enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *value, BOOL *stop) {
+        if (value.length) [lcUserDefaults setObject:value forKey:key];
+        else [lcUserDefaults removeObjectForKey:key];
+    }];
+    NSString *launchURLScheme = appInfo[@"launchAppUrlScheme"];
+    if (launchURLScheme.length) [lcUserDefaults setObject:launchURLScheme forKey:@"launchAppUrlScheme"];
+    else [lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
+    if(appInfo[@"certificatePassword"]) {
+        [lcUserDefaults setObject:appInfo[@"certificatePassword"] forKey:@"LCCertificatePassword"];
+    } else {
+        [lcUserDefaults removeObjectForKey:@"LCCertificatePassword"];
+    }
     
-    bool access = false;
-    NSArray* bookmarks = appInfo[@"bookmarks"];
-    NSMutableArray<NSURL *>* bookmarkedUrls = [NSMutableArray array];
-    for(int i = 0; i < bookmarks.count; i++) {
-        bool isStale = false;
-        NSError* error = nil;
-        NSURL *url = [NSURL URLByResolvingBookmarkData:bookmarks[i] options:(1<<10) relativeToURL:nil bookmarkDataIsStale:&isStale error:&error];
-        if (url) {
-            [bookmarkedUrls addObject:url];
-            access = [url startAccessingSecurityScopedResource];
-        } else {
-            NSLog(@"[LiveProcess] Failed to resolve bookmark %d: %@", i, error);
+    NSError *resourceError = nil;
+    BOOL hasStructuredResources = ConfigureGuestResources(appInfo, &resourceError);
+    if (resourceError) {
+        [LiveProcessHandler.extensionContext cancelRequestWithError:resourceError];
+        return EACCES;
+    }
+
+    // Compatibility for SideStore/older hosts which still send an unlabelled
+    // bookmark array. New VibeContainers launches always use role-labelled
+    // resources so bootstrap receives the bookmark-resolved canonical paths.
+    BOOL legacyAccess = NO;
+    NSMutableArray<NSURL *> *legacyURLs = [NSMutableArray array];
+    if (!hasStructuredResources) {
+        NSArray *bookmarks = appInfo[@"bookmarks"];
+        for (NSData *bookmark in bookmarks) {
+            if (![bookmark isKindOfClass:NSData.class]) continue;
+            BOOL isStale = NO;
+            NSError *error = nil;
+            NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark options:0
+                                             relativeToURL:nil
+                                       bookmarkDataIsStale:&isStale error:&error];
+            if (!url) {
+                NSLog(@"LiveProcess: failed to resolve legacy bookmark: %@", error.localizedDescription);
+                continue;
+            }
+            [legacyURLs addObject:url];
+            legacyAccess |= [url startAccessingSecurityScopedResource];
         }
+        activeResourceURLs = legacyURLs;
     }
     
     if ([appInfo[@"selected"] isEqualToString:@"builtinSideStore"]) {
-        if(access && bookmarkedUrls.count > 0) {
-            [lcUserDefaults setObject:bookmarkedUrls.firstObject.path forKey:@"specifiedSideStoreContainerPath"];
+        const char *resolvedSideStorePath = getenv("LC_LIVEPROCESS_SIDESTORE_PATH");
+        if (resolvedSideStorePath && resolvedSideStorePath[0]) {
+            [lcUserDefaults setObject:[NSString stringWithUTF8String:resolvedSideStorePath]
+                               forKey:@"specifiedSideStoreContainerPath"];
+        } else if(legacyAccess && legacyURLs.count > 0) {
+            [lcUserDefaults setObject:legacyURLs.firstObject.path forKey:@"specifiedSideStoreContainerPath"];
         }
         NSXPCListenerEndpoint* endpoint = appInfo[@"endpoint"];
+        if (endpoint) {
+            NSXPCConnection* connection = [[NSXPCConnection alloc] initWithListenerEndpoint:endpoint];
+            connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(RefreshServer)];
+            connection.interruptionHandler = ^{
+                NSLog(@"LiveProcess: SideStore refresh connection interrupted");
+            };
 
-        NSXPCConnection* connection = [[NSXPCConnection alloc] initWithListenerEndpoint:endpoint];
-        connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(RefreshServer)];
-        connection.interruptionHandler = ^{
-            NSLog(@"interrupted!!!");
-        };
-        
-        [connection activate];
-        
-        NSObject<RefreshServer>* proxy = [connection remoteObjectProxy];
-        LiveProcessSideStoreHandler.shared.server = proxy;
-        LiveProcessSideStoreHandler.shared.connection = connection;
+            [connection activate];
+
+            NSObject<RefreshServer>* proxy = [connection remoteObjectProxy];
+            LiveProcessSideStoreHandler.shared.server = proxy;
+            LiveProcessSideStoreHandler.shared.connection = connection;
+        }
         
     }
 

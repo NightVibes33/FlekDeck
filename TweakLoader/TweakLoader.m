@@ -2,7 +2,7 @@
 #import <UIKit/UIKit.h>
 #include <dlfcn.h>
 #include <objc/runtime.h>
-#import "../LiveContainer/utils.h"
+#include "utils.h"
 
 static NSString *loadTweakAtURL(NSURL *url) {
     NSString *tweakPath = url.path;

@@ -1,7 +1,7 @@
 @import UIKit;
 #import "LCSharedUtils.h"
 #import "UIKitPrivate.h"
-#import "../LiveContainer/utils.h"
+#import "utils.h"
 #import <LocalAuthentication/LocalAuthentication.h>
 #import "Localization.h"
 
@@ -31,26 +31,12 @@ static void UIKitGuestHooksInit() {
             default:
                 break;
         }
-        if(LCOrientationLock != UIInterfaceOrientationUnknown) {
+        if(!NSUserDefaults.isLiveProcess && LCOrientationLock != UIInterfaceOrientationUnknown) {
 //            swizzle(UIApplication.class, @selector(_handleDelegateCallbacksWithOptions:isSuspended:restoreState:), @selector(hook__handleDelegateCallbacksWithOptions:isSuspended:restoreState:));
-            // What the lock actually is: the guest's own view controllers refusing
-            // to turn. Installed for multitask guests too, where it is the only
-            // thing stopping a guest rotating its content on the raw device
-            // orientation inside a window the host is deliberately holding still —
-            // see `LCGuestSelfRotationSteps` in DecoratedAppSceneViewController.
+            swizzle(FBSSceneParameters.class, @selector(initWithXPCDictionary:), @selector(hook_initWithXPCDictionary:));
             swizzle(UIViewController.class, @selector(__supportedInterfaceOrientations), @selector(hook___supportedInterfaceOrientations));
             swizzle(UIViewController.class, @selector(shouldAutorotateToInterfaceOrientation:), @selector(hook_shouldAutorotateToInterfaceOrientation:));
-
-            if(!NSUserDefaults.isLiveProcess) {
-                // Both of these write the scene's own orientation, and in multitask
-                // the host owns that: it pushes a settings update on every geometry
-                // change, so a guest pinning its scene here would be overwritten a
-                // frame later and would fight the host's frame arithmetic in
-                // between. Outside multitask the guest owns its scene and they are
-                // what make the lock stick.
-                swizzle(FBSSceneParameters.class, @selector(initWithXPCDictionary:), @selector(hook_initWithXPCDictionary:));
-                swizzle(UIWindow.class, @selector(setAutorotates:forceUpdateInterfaceOrientation:), @selector(hook_setAutorotates:forceUpdateInterfaceOrientation:));
-            }
+            swizzle(UIWindow.class, @selector(setAutorotates:forceUpdateInterfaceOrientation:), @selector(hook_setAutorotates:forceUpdateInterfaceOrientation:));
         }
 
     }
@@ -223,7 +209,7 @@ void LCOpenWebPage(NSString* webPageUrlString, NSString* originalUrl) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"LiveContainer" message:message preferredStyle:UIAlertControllerStyleAlert];
     UIAlertAction* okAction = [UIAlertAction actionWithTitle:@"lc.common.ok".loc style:UIAlertActionStyleDefault handler:^(UIAlertAction * action) {
         [NSClassFromString(@"LCSharedUtils") setWebPageUrlForNextLaunch:webPageUrlString];
-        [NSClassFromString(@"LCSharedUtils") launchToGuestAppWithClassicMode:0];
+        [NSClassFromString(@"LCSharedUtils") launchToGuestApp];
     }];
     [alert addAction:okAction];
     UIAlertAction* openNowAction = [UIAlertAction actionWithTitle:@"lc.guestTweak.openInCurrentApp".loc style:UIAlertActionStyleDefault handler:^(UIAlertAction * action) {
@@ -259,7 +245,7 @@ void LCOpenSideStoreURL(NSURL* sidestoreUrl) {
     if ([NSUserDefaults.lcUserDefaults boolForKey:@"LCSwitchAppWithoutAsking"]) {
         [NSUserDefaults.lcUserDefaults setObject:sidestoreUrl.absoluteString forKey:@"launchAppUrlScheme"];
         [NSUserDefaults.lcUserDefaults setObject:@"builtinSideStore" forKey:@"selected"];
-        [NSClassFromString(@"LCSharedUtils") launchToGuestAppWithClassicMode:0];
+        [NSClassFromString(@"LCSharedUtils") launchToGuestApp];
     }
     NSString *message = [@"lc.guestTweak.appSwitchTip %@" localizeWithFormat:@"SideStore"];
     UIWindow *window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
@@ -267,7 +253,7 @@ void LCOpenSideStoreURL(NSURL* sidestoreUrl) {
     UIAlertAction* okAction = [UIAlertAction actionWithTitle:@"lc.common.ok".loc style:UIAlertActionStyleDefault handler:^(UIAlertAction * action) {
         [NSUserDefaults.lcUserDefaults setObject:sidestoreUrl.absoluteString forKey:@"launchAppUrlScheme"];
         [NSUserDefaults.lcUserDefaults setObject:@"builtinSideStore" forKey:@"selected"];
-        [NSClassFromString(@"LCSharedUtils") launchToGuestAppWithClassicMode:0];
+        [NSClassFromString(@"LCSharedUtils") launchToGuestApp];
     }];
     [alert addAction:okAction];
     
@@ -615,9 +601,8 @@ static LCControlAppURLHandling LCHandleControlAppURL(NSURL *url, NSString** modi
     dispatch_once(&onceToken, ^{
 //        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            LSApplicationWorkspace* workspace = [objc_lookUpClass("LSApplicationWorkspace") defaultWorkspace];
-            [workspace openApplicationWithBundleID:@"com.apple.springboard"];
-            [workspace openApplicationWithBundleID:NSUserDefaults.lcMainBundle.bundleIdentifier];
+            [[LSApplicationWorkspace defaultWorkspace] openApplicationWithBundleID:@"com.apple.springboard"];
+            [[LSApplicationWorkspace defaultWorkspace] openApplicationWithBundleID:NSUserDefaults.lcMainBundle.bundleIdentifier];
         });
 
     });

@@ -1,6 +1,6 @@
 #import <Foundation/Foundation.h>
-#import "LCMachOUtils.h"
-#import "utils.h"
+#import "../../LiveContainer/LCMachOUtils.h"
+#import "../../LiveContainer/utils.h"
 @import UIKit;
 
 typedef NS_ENUM(NSInteger, Store){
@@ -12,7 +12,6 @@ typedef NS_ENUM(NSInteger, Store){
 
 void refreshFile(NSString* execPath);
 int dyld_get_program_sdk_version(void);
-uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 
 @interface PKZipArchiver : NSObject
 
@@ -36,9 +35,6 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 + (NSProgress *)signFilesWithZSignWithURLs:(NSArray<NSURL*>*)urls completionHandler:(void (^)(BOOL success, NSError *error))completionHandler;
 + (NSString*)getCertTeamIdWithKeyData:(NSData*)keyData password:(NSString*)password;
 + (int)validateCertificateWithCompletionHandler:(void(^)(int status, NSDate *expirationDate, NSString *organizationalUnitName, NSString *error))completionHandler;
-
-+ (BOOL)isTXMScriptRequired;
-+ (NSString *)base64EncodedUniversalJITScript;
 
 + (BOOL)isAppGroupAltStoreLike;
 + (Store)store;
@@ -72,4 +68,3 @@ typedef NS_ENUM(NSInteger, GeneratedIconStyle){
 @end
 BOOL saveCGImage(CGImageRef image, NSURL *url);
 CGImageRef loadCGImageFromURL(NSURL *url);
-NSNumber *LCGetDefaultClassicMode(NSURL *appURL);

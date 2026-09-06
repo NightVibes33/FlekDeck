@@ -8,22 +8,28 @@ extern NSUserDefaults *lcUserDefaults;
 extern NSString *lcAppUrlScheme;
 extern NSBundle *lcMainBundle;
 
-NSString* FBSOpenApplicationOptionKeyActivateAsClassic = @"__ActivateAsClassic";
-NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
-
 @implementation LCSharedUtils
 
 + (NSString*) teamIdentifier {
     static NSString* ans = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+#if TARGET_OS_SIMULATOR
+        // Simulator apps may be built without a signing team. The value is
+        // only used to form candidate app-group names; iOSSim keeps guests in
+        // its private Documents directory and does not require those groups.
+        ans = @"SIMULATOR";
+        return;
+#endif
 #if !TARGET_OS_SIMULATOR
         void* taskSelf = SecTaskCreateFromSelf(NULL);
         CFErrorRef error = NULL;
         CFTypeRef cfans = SecTaskCopyValueForEntitlement(taskSelf, CFSTR("com.apple.developer.team-identifier"), &error);
-        if(CFGetTypeID(cfans) == CFStringGetTypeID()) {
+        if(cfans && CFGetTypeID(cfans) == CFStringGetTypeID()) {
             ans = (__bridge NSString*)cfans;
         }
+        if (cfans) CFRelease(cfans);
+        if (error) CFRelease(error);
         CFRelease(taskSelf);
 #endif
         if(!ans) {
@@ -57,10 +63,45 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
     static dispatch_once_t once;
     static NSString *appGroupID = @"Unknown";
     dispatch_once(&once, ^{
-        NSArray* possibleAppGroups = @[
-            [@"group.com.SideStore.SideStore." stringByAppendingString:[self teamIdentifier]],
-            [@"group.com.rileytestut.AltStore." stringByAppendingString:[self teamIdentifier]]
-        ];
+        // Do not call containerURLForSecurityApplicationGroupIdentifier: when
+        // this host has no app-group entitlement. Besides noisy sandbox logs,
+        // those guaranteed failures used to leave the embedded framework with
+        // a fake `Unknown` suite instead of VibeContainers' standard defaults.
+        CFErrorRef entitlementError = NULL;
+        void *task = SecTaskCreateFromSelf(NULL);
+        CFTypeRef entitlement = SecTaskCopyValueForEntitlement(
+            task, CFSTR("com.apple.security.application-groups"), &entitlementError);
+        if (task) CFRelease(task);
+        if (entitlementError) CFRelease(entitlementError);
+        if (!entitlement || CFGetTypeID(entitlement) != CFArrayGetTypeID()) {
+            if (entitlement) {
+                CFRelease(entitlement);
+            }
+            return;
+        }
+        NSArray<NSString *> *entitledGroups = [(__bridge NSArray *)entitlement copy];
+        CFRelease(entitlement);
+        if (entitledGroups.count == 0) return;
+
+        NSString *teamIdentifier = [self teamIdentifier];
+        NSMutableArray<NSString *> *possibleAppGroups = [NSMutableArray array];
+        if (teamIdentifier.length) {
+            NSArray<NSString *> *preferredGroups = @[
+                [@"group.com.SideStore.SideStore." stringByAppendingString:teamIdentifier],
+                [@"group.com.rileytestut.AltStore." stringByAppendingString:teamIdentifier]
+            ];
+            for (NSString *group in preferredGroups) {
+                if ([entitledGroups containsObject:group]) {
+                    [possibleAppGroups addObject:group];
+                }
+            }
+        }
+        for (NSString *group in entitledGroups) {
+            if ([group isKindOfClass:NSString.class] &&
+                ![possibleAppGroups containsObject:group]) {
+                [possibleAppGroups addObject:group];
+            }
+        }
         
         // we prefer app groups with "Apps" in it, which indicate this app group is actually used by the store.
         for (NSString *group in possibleAppGroups) {
@@ -86,25 +127,9 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
             return;
         }
         
-        // if no possibleAppGroup is found, we detect app group from entitlement file
-        // Cache app group after importing cert so we don't have to analyze executable every launch
-        NSString *cached = [lcUserDefaults objectForKey:@"LCAppGroupID"];
-        if (cached && [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:cached]) {
-            appGroupID = cached;
-            return;
-        }
-        CFErrorRef error = NULL;
-        void* taskSelf = SecTaskCreateFromSelf(NULL);
-        CFTypeRef value = SecTaskCopyValueForEntitlement(taskSelf, CFSTR("com.apple.security.application-groups"), &error);
-        CFRelease(taskSelf);
-        
-        if(!value) {
-            return;
-        }
-        NSArray* appGroups = (__bridge NSArray *)value;
-        if(appGroups.count > 0) {
-            appGroupID = [appGroups firstObject];
-        }
+        // Never probe a cached or guessed identifier which is not in the
+        // running binary's entitlement. containerd logs every such probe and
+        // it can never succeed in VibeContainers' private-container mode.
     });
     return appGroupID;
 }
@@ -113,60 +138,66 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
     static NSURL *appGroupPath = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        appGroupPath = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:[LCSharedUtils appGroupID]];
+        NSString *groupID = [LCSharedUtils appGroupID];
+        if (groupID.length && ![groupID isEqualToString:@"Unknown"]) {
+            appGroupPath = [NSFileManager.defaultManager
+                containerURLForSecurityApplicationGroupIdentifier:groupID];
+        }
     });
     return appGroupPath;
 }
 
 + (NSString *)certificatePassword {
+    // iOSSim owns its signing identity in the host's private defaults. Prefer
+    // that value before asking LiveContainer's optional app-group domain so the
+    // bootstrap can select its signed/JIT-less path even when iOSSim was built
+    // without an AltStore- or SideStore-style app-group entitlement.
+    NSString *hostPassword = [NSUserDefaults.standardUserDefaults objectForKey:@"LCCertificatePassword"];
+    if (hostPassword) return hostPassword;
     NSUserDefaults* nud = NSUserDefaults.lcSharedDefaults ?: NSUserDefaults.standardUserDefaults;
     return [nud objectForKey:@"LCCertificatePassword"];
 }
 
-+ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode {
-    void (^completionHandler)(BOOL) = ^(BOOL success) {
-        // syscall(SYS_ptrace, PT_DENY_ATTACH, 0, 0, 0);
-        __asm__ __volatile__ (
-                              "mov x0, #31\n"
-                              "mov x16, #26\n"
-                              "svc #0x80"
-                              );
-        raise(SIGKILL);
-    };
++ (BOOL)launchToGuestApp {
+    NSString *urlScheme = nil;
+    NSString *tsPath = [NSString stringWithFormat:@"%@/../_TrollStore", NSBundle.mainBundle.bundlePath];
+    UIApplication *application = [NSClassFromString(@"UIApplication") sharedApplication];
     
+    int tries = 1;
     if (!self.certificatePassword) {
-        NSString *urlScheme = nil;
-        NSString *tsPath = [NSString stringWithFormat:@"%@/../_TrollStore", NSBundle.mainBundle.bundlePath];
         if (!access(tsPath.UTF8String, F_OK)) {
             urlScheme = @"apple-magnifier://enable-jit?bundle-id=%@";
-        }
-        
-        if(urlScheme) {
-            NSURL *launchURL = [NSURL URLWithString:[NSString stringWithFormat:urlScheme, NSBundle.mainBundle.bundleIdentifier]];
-            UIApplication *application = [NSClassFromString(@"UIApplication") sharedApplication];
-            [application openURL:launchURL options:@{} completionHandler:completionHandler];
-            return YES;
+        } else if ([application canOpenURL:[NSURL URLWithString:@"stikjit://"]]) {
+            urlScheme = @"stikjit://enable-jit?bundle-id=%@";
+        } else if ([application canOpenURL:[NSURL URLWithString:@"sidestore://"]]) {
+            urlScheme = @"sidestore://sidejit-enable?bid=%@";
         }
     }
+    if (!urlScheme) {
+        tries = 2;
+        urlScheme = [NSString stringWithFormat:@"%@://livecontainer-relaunch", lcAppUrlScheme];
+    }
+    NSURL *launchURL = [NSURL URLWithString:[NSString stringWithFormat:urlScheme, NSBundle.mainBundle.bundleIdentifier]];
 
-    int tries = 2;
-    _LSOpenConfiguration *configuration = [[PrivClass(_LSOpenConfiguration) alloc] init];
-    if(classicMode) {
-        NSMutableDictionary* dict = [NSMutableDictionary new];
-        dict[FBSOpenApplicationOptionKeyActivateAsClassic] = @(classicMode);
-        configuration.frontBoardOptions = dict;
+    if ([application canOpenURL:launchURL]) {
+        //[UIApplication.sharedApplication suspend];
+        for (int i = 0; i < tries; i++) {
+            [application openURL:launchURL options:@{} completionHandler:^(BOOL b) {
+                // syscall(SYS_ptrace, PT_DENY_ATTACH, 0, 0, 0);
+                __asm__ __volatile__ (
+                    "mov x0, #31\n"
+                    "mov x16, #26\n"
+                    "svc #0x80\n"
+                );
+                raise(SIGKILL);
+            }];
+        }
+        return YES;
+    } else {
+        // none of the ways work somehow (e.g. LC itself was hidden), we just exit and wait for user to manually launch it
+        exit(0);
     }
-    LSApplicationWorkspace* workspace = [PrivClass(LSApplicationWorkspace) defaultWorkspace];
-    
-    for (int i = 0; i < tries; i++) {
-        [workspace openApplicationWithBundleIdentifier:NSUserDefaults.lcMainBundle.bundleIdentifier
-                                         configuration:configuration
-                                     completionHandler:^(BOOL success, NSError* error) {
-            NSLog(@"success=%d error=%@", success, error);
-            completionHandler(success);
-        }];
-    }
-    return YES;
+    return NO;
 }
 
 + (BOOL)launchToGuestAppWithURL:(NSURL *)url {
@@ -194,14 +225,7 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
         // Attempt to restart LiveContainer with the selected guest app
         [lcUserDefaults setObject:launchBundleId forKey:@"selected"];
         [lcUserDefaults setObject:containerFolderName forKey:@"selectedContainer"];
-        bool isSharedApp = false;
-        NSBundle *appBundle = [self findBundleWithBundleId:launchBundleId isSharedAppOut:&isSharedApp];
-        NSDictionary *appInfo = [NSDictionary dictionaryWithContentsOfFile:
-            [appBundle.bundlePath stringByAppendingPathComponent:@"LCAppInfo.plist"]];
-        NSUInteger classicMode = [appInfo[@"classicMode"] boolValue]
-            ? [appInfo[@"LCClassicModeCache"][@"defaultClassicMode"] unsignedIntegerValue]
-            : 0;
-        return [self launchToGuestAppWithClassicMode:classicMode];
+        return [self launchToGuestApp];
     }
     
     return NO;
@@ -216,7 +240,27 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
     static NSURL *infoPath;
     
     dispatch_once(&once, ^{
-        infoPath = [[LCSharedUtils appGroupPath] URLByAppendingPathComponent:@"LiveContainer/containerLock.plist"];
+        const char *liveProcessLockRoot = getenv("LC_LIVEPROCESS_LOCKS_PATH");
+        if (liveProcessLockRoot && liveProcessLockRoot[0]) {
+            NSString *folder = [NSString stringWithUTF8String:liveProcessLockRoot];
+            infoPath = [NSURL fileURLWithPath:
+                [folder stringByAppendingPathComponent:@"containerLock.plist"]];
+            return;
+        }
+        NSURL *groupPath = [LCSharedUtils appGroupPath];
+        if (groupPath) {
+            infoPath = [groupPath URLByAppendingPathComponent:@"LiveContainer/containerLock.plist"];
+            return;
+        }
+        const char *hostHome = getenv("LC_HOME_PATH");
+        NSString *home = hostHome ? [NSString stringWithUTF8String:hostHome] : NSHomeDirectory();
+        NSString *folder = [[home stringByAppendingPathComponent:@"Documents"]
+            stringByAppendingPathComponent:@"LiveContainer"];
+        [NSFileManager.defaultManager createDirectoryAtPath:folder
+                                withIntermediateDirectories:YES
+                                                 attributes:nil
+                                                      error:nil];
+        infoPath = [NSURL fileURLWithPath:[folder stringByAppendingPathComponent:@"containerLock.plist"]];
     });
     return infoPath;
 }
@@ -266,6 +310,8 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
 
 // lc can be something like livecontainer or livecontainer2.liveprocess, such that one LC can jump to another LC hosting the multitask app when user presses run while it's running
 + (void)setContainerUsingByLC:(NSString*)lc folderName:(NSString*)folderName auditToken:(uint64_t)val57 {
+    if (!folderName.length) return;
+    if (!lc.length) lc = @"iossim";
     NSURL* infoPath = [self containerLockPath];
     
     NSMutableDictionary *info = [NSMutableDictionary dictionaryWithContentsOfFile:infoPath.path];
@@ -338,7 +384,9 @@ NSString* FBSOpenApplicationOptionKeyPayloadURL = @"__PayloadURL";
 }
 
 + (NSBundle*)findBundleWithBundleId:(NSString*)bundleId isSharedAppOut:(bool*)isSharedAppOut {
-    NSString *docPath = [NSString stringWithFormat:@"%s/Documents", getenv("LC_HOME_PATH")];
+    const char *hostHome = getenv("LC_HOME_PATH");
+    NSString *home = hostHome ? [NSString stringWithUTF8String:hostHome] : NSHomeDirectory();
+    NSString *docPath = [home stringByAppendingPathComponent:@"Documents"];
     
     NSURL *appGroupFolder = nil;
     
