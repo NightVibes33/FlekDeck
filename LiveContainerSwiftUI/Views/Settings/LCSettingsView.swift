@@ -1002,29 +1002,21 @@ struct LCSettingsView: View {
             errorShow = true
             return
         }
-        
-        guard let certificateTeamId = LCUtils.getCertTeamId(withKeyData: certificateData, password: certificatePassword) else {
+
+        guard let _ = LCUtils.getCertTeamId(withKeyData: certificateData, password: certificatePassword) else {
             errorInfo = "lc.settings.invalidCertError".loc
             errorShow = true
             return
         }
 
-        // Use the same persistence callback as the SideStore certificate path.
-        onSideStoreCertificateCallback(certificateData: certificateData, password: certificatePassword)
+        LCUtils.appGroupUserDefault.set(certificateData, forKey: "LCCertificateData")
+        LCUtils.appGroupUserDefault.set(certificatePassword, forKey: "LCCertificatePassword")
+        LCUtils.appGroupUserDefault.set(NSDate.now, forKey: "LCCertificateUpdateDate")
+        certificateDataFound = true
+
         UserDefaults.standard.set(LCSharedUtils.appGroupID(), forKey: "LCAppGroupID")
-
-        // Verify that the identity is immediately readable from shared storage.
-        certificateDataFound = LCSharedUtils.certificatePassword() != nil
-        guard certificateDataFound else {
-            errorInfo = "Certificate validated but could not be read back from FlekDeck storage."
-            errorShow = true
-            return
-        }
-
-        successInfo = "Certificate imported successfully. Team ID: \(certificateTeamId)"
-        successShow = true
     }
-    
+
     func importEmbeddedCertificate() async {
         let possibleExtensions = ["p12"]
         var foundURL: URL? = nil
@@ -1137,10 +1129,9 @@ struct LCSettingsView: View {
         LCUtils.appGroupUserDefault.set(certificateData, forKey: "LCCertificateData")
         LCUtils.appGroupUserDefault.set(password, forKey: "LCCertificatePassword")
         LCUtils.appGroupUserDefault.set(NSDate.now, forKey: "LCCertificateUpdateDate")
-        UserDefaults.standard.set(LCSharedUtils.appGroupID(), forKey: "LCAppGroupID")
-        certificateDataFound = LCSharedUtils.certificatePassword() != nil
+        certificateDataFound = true
     }
-    
+
     func removeCertificate() async {
         guard let doRemove = await certificateRemoveAlert.open(), doRemove else {
             return
