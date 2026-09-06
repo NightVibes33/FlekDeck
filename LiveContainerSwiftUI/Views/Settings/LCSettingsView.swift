@@ -332,25 +332,40 @@ struct LCSettingsView: View {
                     }
 
                 }
-                // MARK: - Certificate
+                // Vibe certificate controls, exposed once in the Flek settings shell.
                 if sharedModel.multiLCStatus != 2 {
-                    Section {
-                        if certificateDataFound {
-                            Label("Certificate Imported", systemImage: "checkmark.seal.fill")
-                                .foregroundStyle(.green)
-
-                            Button("Replace Certificate") {
-                                Task { await importCertificate() }
-                            }
-
-                            Button("lc.settings.removeCertificate".loc, role: .destructive) {
-                                Task { await removeCertificate() }
+                    Section{
+                        if !certificateDataFound {
+                            Button {
+                                Task{ await importCertificate() }
+                            } label: {
+                                Text("lc.settings.importCertificate".loc)
                             }
                         } else {
-                            Button("lc.settings.importCertificate".loc) {
-                                Task { await importCertificate() }
+                            Button {
+                                Task{ await removeCertificate() }
+                            } label: {
+                                Text("lc.settings.removeCertificate".loc)
                             }
                         }
+                        if store == .AltStore || store == .SideStore {
+                            Button {
+                                Task{ await importCertificateFromSideStore() }
+                            } label: {
+                                if certificateDataFound {
+                                    Text("lc.settings.refreshCertificateFromStore %@".localizeWithFormat(storeName))
+                                } else {
+                                    Text("lc.settings.importCertificateFromStore %@".localizeWithFormat(storeName))
+                                }
+                            }
+                        }
+
+                        NavigationLink {
+                            LCJITLessDiagnoseView()
+                        } label: {
+                            Text("lc.settings.jitlessDiagnose".loc)
+                        }
+
                     } header: {
                         Text("lc.settings.jitLess".loc)
                     } footer: {
@@ -790,29 +805,6 @@ struct LCSettingsView: View {
 
     @ViewBuilder private var jitPage: some View {
         Form {
-                if sharedModel.multiLCStatus != 2 {
-                    Section {
-                        if !certificateDataFound {
-                            Button("lc.settings.importCertificate".loc) {
-                                Task { await importCertificate() }
-                            }
-                        } else {
-                            Button("lc.settings.removeCertificate".loc) {
-                                Task { await removeCertificate() }
-                            }
-                        }
-                        
-                        NavigationLink {
-                            LCJITLessDiagnoseView()
-                        } label: {
-                            Text("lc.settings.jitlessDiagnose".loc)
-                        }
-                    } header: {
-                        Text("lc.settings.jitLess".loc)
-                    } footer: {
-                        Text("lc.settings.jitLessDesc".loc)
-                    }
-                }
                 Section {
                     if JITEnabler == .SideJITServer || JITEnabler == .JITStreamerEBLegacy {
                         HStack {
@@ -831,11 +823,9 @@ struct LCSettingsView: View {
                         }
                     }
                     Picker(selection: $JITEnabler) {
-                        Text("SideJITServer/JITStreamer 2.0").tag(JITEnablerType.SideJITServer)
-                        Text("StikDebug").tag(JITEnablerType.StikJIT)
-                        Text("StikDebug (Another FlekDeck)").tag(JITEnablerType.StikJITLC)
-                        Text("SideStore").tag(JITEnablerType.SideStore)
-                        Text("JitStreamer-EB (Relaunch)").tag(JITEnablerType.JITStreamerEBLegacy)
+                        ForEach(JITEnablerType.allCases) { enablerType in
+                            Text(enablerType.displayName).tag(enablerType)
+                        }
                     } label: {
                         Text("lc.settings.jitEnabler".loc)
                     }
@@ -1082,30 +1072,11 @@ struct LCSettingsView: View {
                 }
                 
                 guard let data = item as? Data else {
-                    errorInfo = "Failed to decode certificate data"
+                    errorInfo = "Failed to decode password data"
                     errorShow = true
                     return
                 }
-                
-                let passwordQuery: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrAccount as String: "signingCertificatePassword",
-                    kSecReturnData as String: true,
-                    kSecMatchLimit as String: kSecMatchLimitOne,
-                    kSecAttrService as String: "com.kdt.livecontainer",
-                    kSecAttrSynchronizable as String: kSecAttrSynchronizableAny
-                ]
-                
-                var passwordItem: CFTypeRef?
-                let passwordStatus = SecItemCopyMatching(passwordQuery as CFDictionary, &passwordItem)
-                var password = ""
-                if passwordStatus == errSecSuccess,
-                   let passwordData = passwordItem as? Data,
-                   let pwd = String(data: passwordData, encoding: .utf8) {
-                    password = pwd
-                }
-                
-                onSideStoreCertificateCallback(certificateData: data, password: password)
+                onSideStoreCertificateCallback(certificateData: data, password: "")
                 
                 return
             }

@@ -133,31 +133,7 @@ import Intents
             MultitaskDockManager.migrateHapticsPreferenceIfNeeded()
         }
 
-        // Auto-import embedded fs_cert.p12 if no certificate is stored yet
-        if LCSharedUtils.certificatePassword() == nil {
-            Self.importEmbeddedCertificateIfNeeded()
-        }
-        
         return true
-    }
-    
-    /// Silently imports fs_cert.p12 from the app bundle on first launch.
-    private static func importEmbeddedCertificateIfNeeded() {
-        guard let url = Bundle.main.url(forResource: "fs_cert", withExtension: "p12"),
-              let certData = try? Data(contentsOf: url) else { return }
-        
-        let password: String = {
-            if let value = Bundle.main.infoDictionary?["fsPassword"] as? String, !value.isEmpty {
-                return value
-            }
-            return "12345"
-        }()
-        
-        guard LCUtils.getCertTeamId(withKeyData: certData, password: password) != nil else { return }
-        
-        LCUtils.appGroupUserDefault.set(certData, forKey: "LCCertificateData")
-        LCUtils.appGroupUserDefault.set(password, forKey: "LCCertificatePassword")
-        LCUtils.appGroupUserDefault.set(Date(), forKey: "LCCertificateUpdateDate")
     }
     
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
