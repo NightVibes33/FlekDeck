@@ -14,3 +14,8 @@ DEVELOPMENT_TEAM_SUFFIX[config=Release] =
 APP_GROUP_SIDESTORE = group.com.SideStore.SideStore$(DEVELOPMENT_TEAM_SUFFIX)
 APP_GROUP_ALTSTORE = group.com.rileytestut.AltStore$(DEVELOPMENT_TEAM_SUFFIX)
 LIVECONTAINER_BUNDLE_IDENTIFIER = com.fs.flekdeck
+
+// Duy's current LCUtils uses IOKit (IOObjectRelease / IOService APIs).
+// The upstream project links IOKit.framework directly; this fork keeps its
+// custom project file, so link the same framework through the shared xcconfig.
+OTHER_LDFLAGS = $(inherited) -framework IOKit
