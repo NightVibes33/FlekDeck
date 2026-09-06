@@ -116,20 +116,14 @@ struct FlekAppDetailSheet: View {
     let app: FSAppModel
     /// Only FlekSt0re apps have a detail page to fetch — see the file header.
     let isFlekstore: Bool
-    /// True when this source is behind the subscription. The paywall is
-    /// presented from here rather than from the installer: that view is already
-    /// presenting *this* sheet and can't put up a second one on top of it.
-    let requiresPremium: Bool
     let accent: Color
     /// Queues the install, with any pre-install changes chosen via the gear.
-    /// The premium gate is applied before this is called.
     var onInstall: (FlekInstallOverrides?) -> Void
 
     @StateObject private var model = FlekAppDetailModel()
     @ObservedObject private var installQueue = LCInstallQueue.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var showPremium = false
     @State private var showAdvanced = false
     /// Icon / name / bundle ID chosen via the gear, handed to the queue on install.
     ///
@@ -289,9 +283,6 @@ struct FlekAppDetailSheet: View {
             showDone = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { showDone = false }
         }
-        .sheet(isPresented: $showPremium) {
-            PremiumRequiredView()
-        }
     }
 
     // MARK: Dismiss strip
@@ -377,9 +368,7 @@ struct FlekAppDetailSheet: View {
 
     private var installButton: some View {
         Button {
-            if requiresPremium {
-                showPremium = true
-            } else if installItem != nil {
+            if installItem != nil {
                 installQueue.cancel(url: app.install_url)
             } else {
                 onInstall(overrides.isEmpty ? nil : overrides)

@@ -311,7 +311,6 @@ class MultiRepoSearchModel: ObservableObject {
         repos = FlekInstallerView.loadRepos()
         cachedApps = RepoCatalogCache.shared.loadAllCached(repos: repos)
         flekstoreVM.repository = .flekstore
-        Task { await flekstoreVM.refreshSubscriptionStatus() }
     }
 
     func search(_ query: String) {

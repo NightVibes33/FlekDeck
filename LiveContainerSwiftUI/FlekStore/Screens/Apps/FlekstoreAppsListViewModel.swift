@@ -29,15 +29,6 @@ class FlekstoreAppsListViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
     @AppStorage("isAdult") private var isAdult: Bool = false
 
-    // Compatibility properties retained because existing views bind to them.
-    // Standalone FlekDeck has no paid tier, remote subscription state, or ban UI.
-    @Published var hasSubscription: Bool = true
-    @Published var subscriptionEndDate: String? = nil
-    @Published var isBanned: Bool = false
-    @Published var banReason: String = ""
-    @Published var banMessage: String = ""
-    @Published var deviceDateErrorMessage: String? = nil
-
     enum RepositorySource: Equatable {
         case flekstore
         case custom(url: String)
@@ -270,17 +261,6 @@ class FlekstoreAppsListViewModel: ObservableObject {
         } catch {
             // Keep the cached list on failure.
         }
-    }
-
-    // Existing views still call this when they appear. It is intentionally local
-    // and idempotent: there is no FlekSt0re device/subscription request anymore.
-    func refreshSubscriptionStatus() async {
-        hasSubscription = true
-        subscriptionEndDate = nil
-        isBanned = false
-        banReason = ""
-        banMessage = ""
-        deviceDateErrorMessage = nil
     }
 
     private func decodeCustomRepo(_ data: Data) throws -> [FSAppModel] {

@@ -39,7 +39,6 @@ struct FlekInstallerView: View {
     @State private var repos: [AppRepository] = []
     @State private var selectedRepoID: UUID?
     @State private var showSources = false
-    @State private var showPremium = false
     /// The app whose page is open, if any.
     @State private var detailTarget: DetailTarget?
     @State private var searchActive = false
@@ -222,7 +221,6 @@ struct FlekInstallerView: View {
             if Self.pendingDetailRequest != nil {
                 Task { await openPendingDetail(afterPresentation: true) }
             }
-            await viewModel.refreshSubscriptionStatus()
             await viewModel.resetAndFetchApps()
             Task { await MultiRepoSearchModel.prefetchAllRepos() }
         }
@@ -251,14 +249,10 @@ struct FlekInstallerView: View {
                 Task { await switchTo(repo) }
             }
         }
-        .sheet(isPresented: $showPremium) {
-            PremiumRequiredView()
-        }
         .sheet(item: $detailTarget) { target in
             FlekAppDetailSheet(
                 app: target.app,
                 isFlekstore: target.isFlekstore,
-                requiresPremium: requiresPremium(fromFlekstore: target.isFlekstore),
                 accent: Self.flekBlue,
                 onInstall: { overrides in
                     enqueueInstall(target.app, fromFlekstore: target.isFlekstore, overrides: overrides)
@@ -310,10 +304,9 @@ struct FlekInstallerView: View {
 
     /// Which of the mutually exclusive full-screen states is showing. Mirrors the
     /// branches of `content` exactly, and is what the crossfade is keyed on.
-    private enum ContentState: Equatable { case blocked, search, loading, error, list }
+    private enum ContentState: Equatable { case search, loading, error, list }
 
     private var contentState: ContentState {
-        if viewModel.isBanned { return .blocked }
         if searchActive { return .search }
         if viewModel.apps.isEmpty && viewModel.isLoading { return .loading }
         if viewModel.errorMessage != nil && viewModel.apps.isEmpty { return .error }
@@ -506,10 +499,7 @@ struct FlekInstallerView: View {
 
     @ViewBuilder
     private var content: some View {
-        if viewModel.isBanned {
-            AccessBlockedView(reason: viewModel.banReason, message: viewModel.banMessage)
-                .frame(maxHeight: .infinity)
-        } else if searchActive {
+        if searchActive {
             searchContent
         } else if viewModel.apps.isEmpty && viewModel.isLoading {
             skeletonList
@@ -957,24 +947,11 @@ struct FlekInstallerView: View {
     }
 
     private func install(_ app: FSAppModel) {
-        guard !requiresPremium(fromFlekstore: viewModel.repository == .flekstore) else {
-            showPremium = true
-            return
-        }
         enqueueInstall(app, fromFlekstore: viewModel.repository == .flekstore)
     }
 
     private func installSearchResult(_ app: FSAppModel, fromFlekstore: Bool) {
-        guard !requiresPremium(fromFlekstore: fromFlekstore) else {
-            showPremium = true
-            return
-        }
         enqueueInstall(app, fromFlekstore: fromFlekstore)
-    }
-
-    /// Sources other than FlekSt0re are behind the subscription.
-    private func requiresPremium(fromFlekstore: Bool) -> Bool {
-        !fromFlekstore && !viewModel.hasSubscription
     }
 
     /// Queues the download + install and counts the FlekSt0re download.
