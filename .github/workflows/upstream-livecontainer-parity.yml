@@ -101,7 +101,20 @@ jobs:
           else
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add LiveContainer LiveContainerSwiftUI/Utilities LiveContainerSwiftUI/Models LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift ZSign TestJITLess entitlements.xml litehook ShareExtension/ShareExtensionViewModel.swift
+            git add \
+              LiveContainer \
+              LiveContainerSwiftUI/Utilities/LCUtils.h \
+              LiveContainerSwiftUI/Utilities/LCUtils.m \
+              LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
+              LiveContainerSwiftUI/Utilities/Shared.swift \
+              LiveContainerSwiftUI/Models/LCAppInfo.h \
+              LiveContainerSwiftUI/Models/LCAppInfo.m \
+              LiveContainerSwiftUI/Models/LCAppModel.swift \
+              LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift \
+              LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift \
+              LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
+              ShareExtension/ShareExtensionViewModel.swift \
+              ZSign TestJITLess entitlements.xml litehook
             git commit -m "Keep FlekDeck shell compatible with Duy LiveContainer core"
             git push origin HEAD:sync-upstream-livecontainer-jitless
           fi
@@ -111,12 +124,15 @@ jobs:
         with:
           xcode-version: '26.6'
 
-      - name: Parse upstream Swift core and shell
+      - name: Parse upstream Swift core and Flek shell
         run: |
           set -euo pipefail
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/Shared.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse ShareExtension/ShareExtensionViewModel.swift
 
       - name: Build unsigned real-device archive
