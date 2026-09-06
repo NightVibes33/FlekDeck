@@ -94,7 +94,7 @@ jobs:
           done
           test "$(git rev-parse HEAD:SideStoreSupport)" = "$(git rev-parse "$U:SideStoreSupport")" || { echo 'SideStoreSupport drift'; exit 1; }
           test "$(git rev-parse HEAD:OpenSSL)" = "$(git rev-parse "$U:OpenSSL")" || { echo 'OpenSSL drift'; exit 1; }
-          test "$(git rev-parse :ZSign)" = "$(git rev-parse "$U:ZSign")" || { echo 'ZSign drift'; exit 1; }
+          git diff --quiet "$U" -- ZSign || { echo 'ZSign drift'; exit 1; }
           test "$(git rev-parse :litehook)" = "$(git rev-parse "$U:litehook")" || { echo 'litehook drift'; exit 1; }
           echo "UPSTREAM EXACT: SideStoreSupport"
           echo "UPSTREAM EXACT: OpenSSL"
