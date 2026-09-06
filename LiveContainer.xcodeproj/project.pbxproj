@@ -196,7 +196,6 @@
 				FlekStore/Helpers/RepoCatalogCache.swift,
 				"FlekStore/Helpers/String+ext.swift",
 				FlekStore/Models/AppRepository.swift,
-				FlekStore/Models/DeviceStatusResponse.swift,
 				FlekStore/Models/FlekstoreSharedModel.swift,
 				FlekStore/Models/FSAppModel.swift,
 				FlekStore/Models/FSCategory.swift,
