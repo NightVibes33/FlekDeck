@@ -45,10 +45,10 @@ p.write_text(s)
 # Apply the separate UI-only adapter after the Vibe core has been copied.
 exec(Path("Tools/patch_vibecontainers_applist_compat.py").read_text(), {})
 
-# FlekDeck's newer OfflineClassicModeProbe is shell-only, but it previously got
-# dyld_get_sdk_version() through the newer LCUtils.h. Vibe 3.8.0's exact header
-# intentionally lacks that declaration. Declare the exported dyld helper only in
-# this Flek-only probe so the copied Vibe header remains byte-identical.
+# FlekDeck's newer OfflineClassicModeProbe is shell-only. VibeContainers 3.8.0
+# predates both the dyld SDK declaration in LCUtils.h and the newer
+# bypass_os_variant_has_internal_content helper. Keep these compatibility details
+# local to the Flek probe so Vibe's exact LCUtils/Dyld core stays untouched.
 p = Path("LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m")
 s = p.read_text()
 probe_anchor = '#import "LCUtils.h"\n'
@@ -57,6 +57,15 @@ if "uint32_t dyld_get_sdk_version(const struct mach_header *mh);" not in s:
     if probe_anchor not in s:
         raise SystemExit("Could not find OfflineClassicModeProbe LCUtils import")
     s = s.replace(probe_anchor, probe_decl, 1)
+
+old_bypass_decl = 'void bypass_os_variant_has_internal_content(void (^block)(void));\n'
+local_bypass = '''static void LCFlekClassicProbeBypass(void (^block)(void)) {
+    if (block) block();
+}
+'''
+if old_bypass_decl in s:
+    s = s.replace(old_bypass_decl, local_bypass, 1)
+s = s.replace('bypass_os_variant_has_internal_content(^{', 'LCFlekClassicProbeBypass(^{')
 p.write_text(s)
 
 # VibeContainers' exact LCUtils.m asks MultitaskDockManager for the host window
