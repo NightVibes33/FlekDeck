@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: upstream-livecontainer-parity-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   parity-build:
     runs-on: macos-latest
@@ -93,6 +97,9 @@ jobs:
       - name: Adapt FlekDeck shell to upstream core
         run: python3 Tools/patch_upstream_shell_compat.py
 
+      - name: Sync upstream IOKit project linkage
+        run: python3 Tools/patch_upstream_project_linkage.py
+
       - name: Persist upstream core and shell compatibility
         run: |
           set -euo pipefail
@@ -103,6 +110,7 @@ jobs:
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add \
               LiveContainer \
+              LiveContainer.xcodeproj/project.pbxproj \
               LiveContainerSwiftUI/Utilities/LCUtils.h \
               LiveContainerSwiftUI/Utilities/LCUtils.m \
               LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
@@ -112,8 +120,8 @@ jobs:
               LiveContainerSwiftUI/Models/LCAppModel.swift \
               LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift \
               LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift \
-              LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
               LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
+              LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
               ShareExtension/ShareExtensionViewModel.swift \
               ZSign TestJITLess entitlements.xml litehook
             git commit -m "Keep FlekDeck shell compatible with Duy LiveContainer core"
@@ -131,10 +139,10 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
-          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/Shared.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           xcrun swiftc -frontend -parse ShareExtension/ShareExtensionViewModel.swift
 
       - name: Build unsigned real-device archive
