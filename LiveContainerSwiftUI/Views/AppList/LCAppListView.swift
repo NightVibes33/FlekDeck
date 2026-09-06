@@ -1806,8 +1806,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
     func installIpaFile(_ url:URL, item: InstallItem) async throws {
         let fm = FileManager()
-        
+
         let installProgress = Progress.discreteProgress(totalUnitCount: 100)
+        // FlekDeck-only UI adapter: Duy uses installProgressPercentage here.
+        // This observer changes presentation only; it does not alter install/signing.
         let observedItem = item
         let queue = installQueue
         let installObserver = installProgress.observe(\.fractionCompleted) { p, v in
@@ -1815,47 +1817,41 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 queue.updateInstallProgress(observedItem, fraction: p.fractionCompleted)
             }
         }
-        // Keep observer alive for the duration of this method
         _ = installObserver
+
         let decompressProgress = Progress.discreteProgress(totalUnitCount: 100)
         installProgress.addChild(decompressProgress, withPendingUnitCount: 80)
-        // Decompress into a clean, dedicated folder (auto-removed when this method
-        // exits) so the extracted tree is isolated from other temp files.
-        let extractDir = fm.temporaryDirectory.appendingPathComponent("lc_extract_\(UUID().uuidString)")
-        if fm.fileExists(atPath: extractDir.path) {
-            try fm.removeItem(at: extractDir)
+        let payloadPath = fm.temporaryDirectory.appendingPathComponent("Payload")
+        if fm.fileExists(atPath: payloadPath.path) {
+            try fm.removeItem(at: payloadPath)
         }
-        try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: extractDir) }
 
         // decompress
-        guard await decompress(url.path, extractDir.path, decompressProgress) == 0 else {
+        guard await decompress(url.path, fm.temporaryDirectory.path, decompressProgress) == 0 else {
             throw "lc.appList.urlFileIsNotIpaError".loc
         }
 
-        // Locate the .app bundle anywhere in the extracted tree. A valid IPA uses a
-        // top-level `Payload/App.app`, but archives in the wild often differ — a
-        // wrapper folder with different casing or name, an extra level of nesting,
-        // or no wrapper at all — so search for the .app rather than assume `Payload/`.
-        guard let appFolderPath = Self.findAppBundle(in: extractDir, fm: fm) else {
+        let payloadContents = try fm.contentsOfDirectory(atPath: payloadPath.path)
+        var appBundleName : String? = nil
+        for fileName in payloadContents {
+            if fileName.hasSuffix(".app") {
+                appBundleName = fileName
+                break
+            }
+        }
+        guard let appBundleName = appBundleName else {
             throw "lc.appList.bundleNotFondError".loc
         }
-        
-        // Name and icon chosen on the app's page, applied before LCAppInfo reads
-        // the bundle — it parses Info.plist once at init, so a later edit to the
-        // display name would go unnoticed.
-        item.overrides?.applyNameAndIcon(toBundleAt: appFolderPath)
+
+        let appFolderPath = payloadPath.appendingPathComponent(appBundleName)
 
         guard let newAppInfo = LCAppInfo(bundlePath: appFolderPath.path) else {
             throw "lc.appList.infoPlistCannotReadError".loc
         }
 
-
         var appRelativePath = "\(newAppInfo.bundleIdentifier()!.sanitizeNonACSII()).app"
         var outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)
         var appToReplace : LCAppModel? = nil
-        // Where the bundle being replaced is parked while its replacement moves in.
-        var replacedBundleBackup : URL? = nil
         // Folder exist! show alert for user to choose which bundle to replace
         var sameBundleIdApp = sharedModel.apps.filter { app in
             return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
@@ -1864,7 +1860,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             sameBundleIdApp = sharedModel.hiddenApps.filter { app in
                 return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
             }
-            
+
             // we found a hidden app, we need to authenticate before proceeding
             if sameBundleIdApp.count > 0 && !sharedModel.isHiddenAppUnlocked {
                 do {
@@ -1875,28 +1871,21 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     throw error
                 }
             }
-            
         }
-        
+
         if fm.fileExists(atPath: outputFolder.path) || sameBundleIdApp.count > 0 {
-            // Sanitised like the first-install name above: this becomes the app's
-            // relativeBundlePath, which is interpolated straight into
-            // flekdeck://livecontainer-launch?bundle-name=… URLs, so a
-            // non-ASCII bundle id here would produce a launch URL that no longer
-            // parses — breaking Add to Home Screen and the relaunch handoff.
-            appRelativePath = "\(newAppInfo.bundleIdentifier()!.sanitizeNonACSII())_\(Int(CFAbsoluteTimeGetCurrent())).app"
-            
+            appRelativePath = "\(newAppInfo.bundleIdentifier()!)_\(Int(CFAbsoluteTimeGetCurrent())).app"
+
             self.installOptions = [AppReplaceOption(isReplace: false, nameOfFolderToInstall: appRelativePath)]
-            
+
             for app in sameBundleIdApp {
                 self.installOptions.append(AppReplaceOption(isReplace: true, nameOfFolderToInstall: app.appInfo.relativeBundlePath, appToReplace: app))
             }
-            
+
             guard let installOptionChosen = await installReplaceAlert.open() else {
-                // user cancelled
                 throw CancellationError()
             }
-            
+
             if let appToReplace = installOptionChosen.appToReplace, appToReplace.uiIsShared {
                 outputFolder = LCPath.lcGroupBundlePath.appendingPathComponent(installOptionChosen.nameOfFolderToInstall)
             } else {
@@ -1904,47 +1893,22 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
             appRelativePath = installOptionChosen.nameOfFolderToInstall
             appToReplace = installOptionChosen.appToReplace
-            // Nothing to move aside when the entry being replaced has already lost
-            // its folder — reinstalling over such a leftover is how the user gets
-            // rid of it, so it must not fail the way removing a missing folder did.
-            if installOptionChosen.isReplace, fm.fileExists(atPath: outputFolder.path) {
-                // Move the app being replaced aside rather than deleting it, and
-                // only drop it once its replacement is in place. Deleting first
-                // leaves nothing behind if the move then fails or the process is
-                // killed in between: the list keeps an entry pointing at a folder
-                // that no longer exists, which can be neither launched, converted
-                // between private and shared, nor — for a shared app — removed.
-                // LCPath.replacingSuffix names the copy so that an interrupted
-                // install is put back on the next launch.
-                replacedBundleBackup = outputFolder
-                    .deletingLastPathComponent()
-                    .appendingPathComponent(outputFolder.lastPathComponent + LCPath.replacingSuffix)
-                try? fm.removeItem(at: replacedBundleBackup!)
-                try fm.moveItem(at: outputFolder, to: replacedBundleBackup!)
+            if installOptionChosen.isReplace {
+                try fm.removeItem(at: outputFolder)
             }
         }
         // Move it!
-        do {
-            try fm.moveItem(at: appFolderPath, to: outputFolder)
-        } catch {
-            if let replacedBundleBackup {
-                try? fm.moveItem(at: replacedBundleBackup, to: outputFolder)
-            }
-            throw error
-        }
-        if let replacedBundleBackup {
-            try? fm.removeItem(at: replacedBundleBackup)
-        }
+        try fm.moveItem(at: appFolderPath, to: outputFolder)
         let finalNewApp = LCAppInfo(bundlePath: outputFolder.path)
         finalNewApp?.relativeBundlePath = appRelativePath
-        
+
         guard let finalNewApp else {
             errorInfo = "lc.appList.appInfoInitError".loc
             errorShow = true
             return
         }
-        
-        // patch and sign it
+
+        // patch and sign it -- exact upstream LCAppInfo implementation.
         var signError : String? = nil
         var signSuccess = false
         await withUnsafeContinuation({ c in
@@ -1959,7 +1923,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 installProgress.addChild(signProgress!, withPendingUnitCount: 20)
             }, forceSign: false)
         })
-        
+
         // we leave it unsigned even if signing failed
         if let signError {
             if signSuccess {
@@ -1969,7 +1933,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
             errorShow = true
         }
-        
+
         if let appToReplace {
             // copy previous configration to new app
             finalNewApp.autoSaveDisabled = true
@@ -2000,43 +1964,12 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             // enable SDK version spoof by defalut
             finalNewApp.spoofSDKVersion = true
         }
-        // WhatsApp never delivers a local notification unless the fix under the
-        // app's Fixes section is on, so turn it on here instead of leaving the
-        // user to discover the toggle. Matching the bundle id loosely covers the
-        // whole family (net.whatsapp.WhatsApp, .WhatsAppSMB, re-signed clones).
-        // Deliberately applied on reinstall too — an app updated from an older
-        // install should end up with the fix on as well.
-        if finalNewApp.bundleIdentifier()?.localizedCaseInsensitiveContains("whatsapp") ?? false {
-            finalNewApp.fixLocalNotification = true
-        }
         finalNewApp.installationDate = Date.now
-        // Detect (once) whether this is a game and cache it, so the launch-time
-        // check is a cheap flag read instead of a per-tap bundle scan. Runs off
-        // the main thread here, after the bundle is in place and signed.
-        if let installedBundlePath = finalNewApp.bundlePath() {
-            finalNewApp.info()?["LCIsGame"] = GameDetector.isGame(bundlePath: installedBundlePath)
-            finalNewApp.info()?["LCIsGameV"] = GameDetector.detectorVersion
-            let landscapeOnly = AppOrientation.isLandscapeOnly(bundlePath: installedBundlePath)
-            finalNewApp.info()?["LCLandscapeOnly"] = landscapeOnly
-            // An app that declares only landscape gets its orientation toggle set to
-            // match, so it opens the right way round by itself instead of coming up
-            // portrait with a message asking the user to turn the device.
-            //
-            // Only while the toggle is still at its default: an update copies the
-            // previous install's `orientationLock`, and a choice the user made once
-            // has to survive the app being updated. Written into the same dictionary
-            // as the flags above — `orientationLock` reads this key — so the save
-            // below persists all of it in one write.
-            if landscapeOnly, finalNewApp.orientationLock == .Disabled {
-                finalNewApp.info()?["LCOrientationLock"] = LCOrientationLock.Landscape.rawValue
-            }
-            finalNewApp.save()
-        }
 
         await MainActor.run {
             if let appToReplace {
                 let newAppModel = LCAppModel(appInfo: finalNewApp, delegate: self)
-                
+
                 if appToReplace.uiIsHidden {
                     sharedModel.hiddenApps.removeAll { $0 == appToReplace }
                     sharedModel.hiddenApps.append(newAppModel)
@@ -2044,25 +1977,19 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     sharedModel.apps.removeAll { $0 == appToReplace }
                     sharedModel.apps.append(newAppModel)
                 }
-                
             } else {
                 let newAppModel = LCAppModel(appInfo: finalNewApp, delegate: self)
                 sharedModel.apps.append(newAppModel)
-                
+
                 // add url schemes
                 if let urlSchemes = finalNewApp.urlSchemes(), urlSchemes.count > 0 {
                     UserDefaults.lcShared().mutableArrayValue(forKey: "LCGuestURLSchemes")
                         .addObjects(from: urlSchemes as! [Any])
                 }
             }
-            
-            // Don't rebuild here — the install item is still in
-            // .installing phase so its slot won't be freed for the new
-            // app.  The rebuild is triggered after markCompleted() sets
-            // .completed, via .onChange(of: completedURLs.count).
         }
     }
-    
+
     func startInstallFromUrl() async {
         guard let installUrlStr = await installUrlInput.open(), installUrlStr.count > 0 else {
             return
