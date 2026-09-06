@@ -189,6 +189,12 @@ manual_import = '''    func importCertificate() async {
         guard let certificateURL = await certificateImportFileAlert.open() else {
             return
         }
+        await importFlekCertificateFile(certificateURL)
+    }
+
+    private func importFlekCertificateFile(_ certificateURL: URL) async {
+        let accessed = certificateURL.startAccessingSecurityScopedResource()
+        defer { if accessed { certificateURL.stopAccessingSecurityScopedResource() } }
         guard let certificatePassword = await certificateImportPasswordAlert.open() else {
             return
         }
@@ -201,31 +207,78 @@ manual_import = '''    func importCertificate() async {
             return
         }
 
-        guard let _ = LCUtils.getCertTeamId(withKeyData: certificateData, password: certificatePassword) else {
+        await MainActor.run {
+            persistFlekCertificate(certificateData, password: certificatePassword)
+        }
+    }
+
+    // Match the exact Vibe Objective-C reader, including its Unknown fallback.
+    // The Swift appGroupUserDefault property otherwise creates an "Unknown" suite.
+    private var flekCertificateDefaults: UserDefaults {
+        let group = LCSharedUtils.appGroupID() ?? ""
+        if group.isEmpty || group == "Unknown" { return .standard }
+        return UserDefaults(suiteName: group) ?? .standard
+    }
+
+    @MainActor
+    private func persistFlekCertificate(_ data: Data, password: String) {
+        guard LCUtils.getCertTeamId(withKeyData: data, password: password) != nil else {
             errorInfo = "lc.settings.invalidCertError".loc
             errorShow = true
             return
         }
+        let defaults = flekCertificateDefaults
+        defaults.set(data, forKey: "LCCertificateData")
+        defaults.set(password, forKey: "LCCertificatePassword")
+        defaults.set(Date(), forKey: "LCCertificateUpdateDate")
+        // Vibe's bootstrap prefers the host password over its shared domain.
+        UserDefaults.standard.set(password, forKey: "LCCertificatePassword")
+        defaults.synchronize()
+        UserDefaults.standard.synchronize()
 
-        LCUtils.appGroupUserDefault.set(certificateData, forKey: "LCCertificateData")
-        LCUtils.appGroupUserDefault.set(certificatePassword, forKey: "LCCertificatePassword")
-        LCUtils.appGroupUserDefault.set(NSDate.now, forKey: "LCCertificateUpdateDate")
-        certificateDataFound = true
+        certificateDataFound = LCUtils.certificateData() == data
+            && LCSharedUtils.certificatePassword() == password
+        guard certificateDataFound else {
+            errorInfo = "Certificate import could not be read back by the signing runtime. No successful import has been confirmed."
+            errorShow = true
+            return
+        }
 
         UserDefaults.standard.set(LCSharedUtils.appGroupID(), forKey: "LCAppGroupID")
+        successInfo = "Certificate imported and verified in signing storage."
+        successShow = true
     }
 '''
 s = s[:start] + manual_import + s[end:]
 cb_start = s.index("    func onSideStoreCertificateCallback(certificateData: Data, password: String) {")
 cb_end = s.index("\n    func removeCertificate() async {", cb_start)
 callback = '''    func onSideStoreCertificateCallback(certificateData: Data, password: String) {
-        LCUtils.appGroupUserDefault.set(certificateData, forKey: "LCCertificateData")
-        LCUtils.appGroupUserDefault.set(password, forKey: "LCCertificatePassword")
-        LCUtils.appGroupUserDefault.set(NSDate.now, forKey: "LCCertificateUpdateDate")
-        certificateDataFound = true
+        Task { @MainActor in
+            persistFlekCertificate(certificateData, password: password)
+        }
     }
 '''
 s = s[:cb_start] + callback + s[cb_end:]
+# Removal must clear both domains, otherwise Vibe can retain a stale host password.
+remove_start = s.index("    func removeCertificate() async {")
+remove_end = s.index("    func nukeSideStore() async {", remove_start)
+s = s[:remove_start] + '''    func removeCertificate() async {
+        guard let doRemove = await certificateRemoveAlert.open(), doRemove else { return }
+        for defaults in [flekCertificateDefaults, UserDefaults.standard, LCUtils.appGroupUserDefault] {
+            for key in ["LCCertificateData", "LCCertificatePassword", "LCCertificateUpdateDate"] {
+                defaults.removeObject(forKey: key)
+            }
+            defaults.synchronize()
+        }
+        certificateDataFound = false
+        UserDefaults.standard.removeObject(forKey: "LCAppGroupID")
+    }
+
+''' + s[remove_end:]
+s = s.replace("State(initialValue: LCSharedUtils.certificatePassword() != nil)",
+              "State(initialValue: LCUtils.certificateData() != nil && LCSharedUtils.certificatePassword() != nil)")
+s = s.replace("certificateDataFound = LCSharedUtils.certificatePassword() != nil\n",
+              "certificateDataFound = LCUtils.certificateData() != nil && LCSharedUtils.certificatePassword() != nil\n")
 p.write_text(s)
 
 # 3) VibeContainers 3.8.0 predates Classic Mode. Remove only that newer Flek UI.

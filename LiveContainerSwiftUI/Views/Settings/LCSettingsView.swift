@@ -134,7 +134,7 @@ struct LCSettingsView: View {
     let storeName = LCUtils.getStoreName()
     
     init() {
-        _certificateDataFound = State(initialValue: LCSharedUtils.certificatePassword() != nil)
+        _certificateDataFound = State(initialValue: LCUtils.certificateData() != nil && LCSharedUtils.certificatePassword() != nil)
         _store = State(initialValue: LCUtils.store())
     }
     
@@ -591,7 +591,7 @@ struct LCSettingsView: View {
         }
         .onAppear {
             // Refresh persisted certificate state whenever Settings is shown.
-            certificateDataFound = LCSharedUtils.certificatePassword() != nil
+            certificateDataFound = LCUtils.certificateData() != nil && LCSharedUtils.certificatePassword() != nil
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .settings, let link = sharedModel.deepLink else { return }
                 sharedModel.deepLink = nil
@@ -981,6 +981,12 @@ struct LCSettingsView: View {
         guard let certificateURL = await certificateImportFileAlert.open() else {
             return
         }
+        await importFlekCertificateFile(certificateURL)
+    }
+
+    private func importFlekCertificateFile(_ certificateURL: URL) async {
+        let accessed = certificateURL.startAccessingSecurityScopedResource()
+        defer { if accessed { certificateURL.stopAccessingSecurityScopedResource() } }
         guard let certificatePassword = await certificateImportPasswordAlert.open() else {
             return
         }
@@ -993,18 +999,46 @@ struct LCSettingsView: View {
             return
         }
 
-        guard let _ = LCUtils.getCertTeamId(withKeyData: certificateData, password: certificatePassword) else {
+        await MainActor.run {
+            persistFlekCertificate(certificateData, password: certificatePassword)
+        }
+    }
+
+    // Match the exact Vibe Objective-C reader, including its Unknown fallback.
+    // The Swift appGroupUserDefault property otherwise creates an "Unknown" suite.
+    private var flekCertificateDefaults: UserDefaults {
+        let group = LCSharedUtils.appGroupID() ?? ""
+        if group.isEmpty || group == "Unknown" { return .standard }
+        return UserDefaults(suiteName: group) ?? .standard
+    }
+
+    @MainActor
+    private func persistFlekCertificate(_ data: Data, password: String) {
+        guard LCUtils.getCertTeamId(withKeyData: data, password: password) != nil else {
             errorInfo = "lc.settings.invalidCertError".loc
             errorShow = true
             return
         }
+        let defaults = flekCertificateDefaults
+        defaults.set(data, forKey: "LCCertificateData")
+        defaults.set(password, forKey: "LCCertificatePassword")
+        defaults.set(Date(), forKey: "LCCertificateUpdateDate")
+        // Vibe's bootstrap prefers the host password over its shared domain.
+        UserDefaults.standard.set(password, forKey: "LCCertificatePassword")
+        defaults.synchronize()
+        UserDefaults.standard.synchronize()
 
-        LCUtils.appGroupUserDefault.set(certificateData, forKey: "LCCertificateData")
-        LCUtils.appGroupUserDefault.set(certificatePassword, forKey: "LCCertificatePassword")
-        LCUtils.appGroupUserDefault.set(NSDate.now, forKey: "LCCertificateUpdateDate")
-        certificateDataFound = true
+        certificateDataFound = LCUtils.certificateData() == data
+            && LCSharedUtils.certificatePassword() == password
+        guard certificateDataFound else {
+            errorInfo = "Certificate import could not be read back by the signing runtime. No successful import has been confirmed."
+            errorShow = true
+            return
+        }
 
         UserDefaults.standard.set(LCSharedUtils.appGroupID(), forKey: "LCAppGroupID")
+        successInfo = "Certificate imported and verified in signing storage."
+        successShow = true
     }
 
     func importEmbeddedCertificate() async {
@@ -1097,25 +1131,23 @@ struct LCSettingsView: View {
         await UIApplication.shared.open(url)
     }
     func onSideStoreCertificateCallback(certificateData: Data, password: String) {
-        LCUtils.appGroupUserDefault.set(certificateData, forKey: "LCCertificateData")
-        LCUtils.appGroupUserDefault.set(password, forKey: "LCCertificatePassword")
-        LCUtils.appGroupUserDefault.set(NSDate.now, forKey: "LCCertificateUpdateDate")
-        certificateDataFound = true
+        Task { @MainActor in
+            persistFlekCertificate(certificateData, password: password)
+        }
     }
 
     func removeCertificate() async {
-        guard let doRemove = await certificateRemoveAlert.open(), doRemove else {
-            return
+        guard let doRemove = await certificateRemoveAlert.open(), doRemove else { return }
+        for defaults in [flekCertificateDefaults, UserDefaults.standard, LCUtils.appGroupUserDefault] {
+            for key in ["LCCertificateData", "LCCertificatePassword", "LCCertificateUpdateDate"] {
+                defaults.removeObject(forKey: key)
+            }
+            defaults.synchronize()
         }
-        
-        LCUtils.appGroupUserDefault.set(nil, forKey: "LCCertificateData")
-        LCUtils.appGroupUserDefault.set(nil, forKey: "LCCertificatePassword")
-        LCUtils.appGroupUserDefault.set(nil, forKey: "LCCertificateUpdateDate")
         certificateDataFound = false
-        
-        UserDefaults.standard.set(nil, forKey: "LCAppGroupID")
+        UserDefaults.standard.removeObject(forKey: "LCAppGroupID")
     }
-    
+
     func nukeSideStore() async {
         guard let doRemove = await certificateRemoveAlert.open(), doRemove else {
             return
@@ -1144,13 +1176,21 @@ struct LCSettingsView: View {
     }
     
     func handleURL(url: URL) {
+        if url.isFileURL && url.pathExtension.lowercased() == "p12" {
+            Task { await importFlekCertificateFile(url) }
+            return
+        }
         if url.host == "certificate" {
             if let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
                 let queryItems = components.queryItems?.reduce(into: [String: String]()) { $0[$1.name.lowercased()] = $1.value } ?? [:]
                 guard let encodedCert = queryItems["cert"]?.removingPercentEncoding,
                       let password = queryItems["password"],
                       let certData = Data(base64Encoded: encodedCert)
-                else { return }
+                else {
+                    errorInfo = "The certificate callback did not contain a readable certificate and password. Please try importing the .p12 file."
+                    errorShow = true
+                    return
+                }
                 
                 onSideStoreCertificateCallback(certificateData: certData, password: password)
                 

@@ -97,7 +97,7 @@ struct LCTabView: View {
     func dispatchURL(url: URL) {
         repeat {
             if url.isFileURL {
-                sharedModel.selectedTab = .apps
+                sharedModel.selectedTab = url.pathExtension.lowercased() == "p12" ? .settings : .apps
                 break
             }
             if url.scheme?.lowercased() == "sidestore" {
