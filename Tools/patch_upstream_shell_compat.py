@@ -1,14 +1,6 @@
 from pathlib import Path
 
 
-def replace_between(path: str, start_marker: str, end_marker: str, replacement: str) -> None:
-    p = Path(path)
-    s = p.read_text()
-    start = s.index(start_marker)
-    end = s.index(end_marker, start)
-    p.write_text(s[:start] + replacement + s[end:])
-
-
 # 1) Share-sheet IPA handoff: use Duy LiveContainer's bookmark/original-file flow.
 # Only the app URL scheme stays FlekDeck-specific.
 p = Path("ShareExtension/ShareExtensionViewModel.swift")
@@ -49,7 +41,6 @@ p.write_text(s)
 
 
 # 2) Upstream no longer stages shared IPAs into a fork-only app-group inbox.
-# Keep the launch-time hook callable, but it has nothing to clean.
 p = Path("LiveContainerSwiftUI/Utilities/Shared.swift")
 s = p.read_text()
 start = s.index("    public static func clearStaleShareInbox() {")
@@ -62,11 +53,13 @@ s = s[:start] + '''    public static func clearStaleShareInbox() {
 p.write_text(s)
 
 
-# 3) The Flek download queue stays as UI/progress plumbing, but the final install
-# path must feed Duy's exact LCAppInfo.patchExecAndSignIfNeed implementation.
+# 3) Flek's queue remains the download/progress shell, but the actual IPA install
+# sequence below mirrors Duy LiveContainer: Payload/*.app -> replacement choice ->
+# move -> exact LCAppInfo patch/sign -> copy previous config -> publish model.
 p = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift")
 s = p.read_text()
-# Remove cleanup for the retired staged-share-inbox flow.
+
+# Remove cleanup for the retired staged-share-inbox flow outside the installer.
 staged_cleanup = '''                        // A copy the share extension staged in the app group is
                         // ours to remove, and exists for no other reason than to
                         // have reached us. It sits in a folder of its own.
@@ -77,13 +70,199 @@ staged_cleanup = '''                        // A copy the share extension staged
 '''
 s = s.replace(staged_cleanup, "")
 
-# Duy's pinned upstream install/signing path does not carry the fork-only custom
-# bundle-ID rewrite. Drop it here rather than altering upstream LCAppInfo.
-custom_id_start = "        // A bundle ID chosen on the app's page. Goes through LCAppInfo rather"
-if custom_id_start in s:
-    start = s.index(custom_id_start)
-    end = s.index("\n        var appRelativePath", start)
-    s = s[:start] + s[end:]
+install_start = "    func installIpaFile(_ url:URL, item: InstallItem) async throws {"
+install_end = "\n    func startInstallFromUrl() async {"
+start = s.index(install_start)
+end = s.index(install_end, start)
+
+installer = r'''    func installIpaFile(_ url:URL, item: InstallItem) async throws {
+        let fm = FileManager()
+
+        let installProgress = Progress.discreteProgress(totalUnitCount: 100)
+        // FlekDeck-only UI adapter: Duy uses installProgressPercentage here.
+        // This observer changes presentation only; it does not alter install/signing.
+        let observedItem = item
+        let queue = installQueue
+        let installObserver = installProgress.observe(\.fractionCompleted) { p, v in
+            DispatchQueue.main.async {
+                queue.updateInstallProgress(observedItem, fraction: p.fractionCompleted)
+            }
+        }
+        _ = installObserver
+
+        let decompressProgress = Progress.discreteProgress(totalUnitCount: 100)
+        installProgress.addChild(decompressProgress, withPendingUnitCount: 80)
+        let payloadPath = fm.temporaryDirectory.appendingPathComponent("Payload")
+        if fm.fileExists(atPath: payloadPath.path) {
+            try fm.removeItem(at: payloadPath)
+        }
+
+        // decompress
+        guard await decompress(url.path, fm.temporaryDirectory.path, decompressProgress) == 0 else {
+            throw "lc.appList.urlFileIsNotIpaError".loc
+        }
+
+        let payloadContents = try fm.contentsOfDirectory(atPath: payloadPath.path)
+        var appBundleName : String? = nil
+        for fileName in payloadContents {
+            if fileName.hasSuffix(".app") {
+                appBundleName = fileName
+                break
+            }
+        }
+        guard let appBundleName = appBundleName else {
+            throw "lc.appList.bundleNotFondError".loc
+        }
+
+        let appFolderPath = payloadPath.appendingPathComponent(appBundleName)
+
+        guard let newAppInfo = LCAppInfo(bundlePath: appFolderPath.path) else {
+            throw "lc.appList.infoPlistCannotReadError".loc
+        }
+
+        var appRelativePath = "\(newAppInfo.bundleIdentifier()!.sanitizeNonACSII()).app"
+        var outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)
+        var appToReplace : LCAppModel? = nil
+        // Folder exist! show alert for user to choose which bundle to replace
+        var sameBundleIdApp = sharedModel.apps.filter { app in
+            return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
+        }
+        if sameBundleIdApp.count == 0 {
+            sameBundleIdApp = sharedModel.hiddenApps.filter { app in
+                return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
+            }
+
+            // we found a hidden app, we need to authenticate before proceeding
+            if sameBundleIdApp.count > 0 && !sharedModel.isHiddenAppUnlocked {
+                do {
+                    if !(try await LCUtils.authenticateUser()) {
+                        throw CancellationError()
+                    }
+                } catch {
+                    throw error
+                }
+            }
+        }
+
+        if fm.fileExists(atPath: outputFolder.path) || sameBundleIdApp.count > 0 {
+            appRelativePath = "\(newAppInfo.bundleIdentifier()!)_\(Int(CFAbsoluteTimeGetCurrent())).app"
+
+            self.installOptions = [AppReplaceOption(isReplace: false, nameOfFolderToInstall: appRelativePath)]
+
+            for app in sameBundleIdApp {
+                self.installOptions.append(AppReplaceOption(isReplace: true, nameOfFolderToInstall: app.appInfo.relativeBundlePath, appToReplace: app))
+            }
+
+            guard let installOptionChosen = await installReplaceAlert.open() else {
+                throw CancellationError()
+            }
+
+            if let appToReplace = installOptionChosen.appToReplace, appToReplace.uiIsShared {
+                outputFolder = LCPath.lcGroupBundlePath.appendingPathComponent(installOptionChosen.nameOfFolderToInstall)
+            } else {
+                outputFolder = LCPath.bundlePath.appendingPathComponent(installOptionChosen.nameOfFolderToInstall)
+            }
+            appRelativePath = installOptionChosen.nameOfFolderToInstall
+            appToReplace = installOptionChosen.appToReplace
+            if installOptionChosen.isReplace {
+                try fm.removeItem(at: outputFolder)
+            }
+        }
+        // Move it!
+        try fm.moveItem(at: appFolderPath, to: outputFolder)
+        let finalNewApp = LCAppInfo(bundlePath: outputFolder.path)
+        finalNewApp?.relativeBundlePath = appRelativePath
+
+        guard let finalNewApp else {
+            errorInfo = "lc.appList.appInfoInitError".loc
+            errorShow = true
+            return
+        }
+
+        // patch and sign it -- exact upstream LCAppInfo implementation.
+        var signError : String? = nil
+        var signSuccess = false
+        await withUnsafeContinuation({ c in
+            if appToReplace?.uiDontSign ?? false || LCUtils.appGroupUserDefault.bool(forKey: "LCDontSignApp") {
+                finalNewApp.dontSign = true
+            }
+            finalNewApp.patchExecAndSignIfNeed(completionHandler: { success, error in
+                signError = error
+                signSuccess = success
+                c.resume()
+            }, progressHandler: { signProgress in
+                installProgress.addChild(signProgress!, withPendingUnitCount: 20)
+            }, forceSign: false)
+        })
+
+        // we leave it unsigned even if signing failed
+        if let signError {
+            if signSuccess {
+                errorInfo = "\("lc.appList.signSuccessWithError".loc)\n\n\(signError)"
+            } else {
+                errorInfo = signError.loc
+            }
+            errorShow = true
+        }
+
+        if let appToReplace {
+            // copy previous configration to new app
+            finalNewApp.autoSaveDisabled = true
+            finalNewApp.isLocked = appToReplace.appInfo.isLocked
+            finalNewApp.isHidden = appToReplace.appInfo.isHidden
+            finalNewApp.isJITNeeded = appToReplace.appInfo.isJITNeeded
+            finalNewApp.isShared = appToReplace.appInfo.isShared
+            finalNewApp.spoofSDKVersion = appToReplace.appInfo.spoofSDKVersion
+            finalNewApp.doSymlinkInbox = appToReplace.appInfo.doSymlinkInbox
+            finalNewApp.containerInfo = appToReplace.appInfo.containerInfo
+            finalNewApp.tweakFolder = appToReplace.appInfo.tweakFolder
+            finalNewApp.selectedLanguage = appToReplace.appInfo.selectedLanguage
+            finalNewApp.dataUUID = appToReplace.appInfo.dataUUID
+            finalNewApp.orientationLock = appToReplace.appInfo.orientationLock
+            finalNewApp.dontInjectTweakLoader = appToReplace.appInfo.dontInjectTweakLoader
+            finalNewApp.hideLiveContainer = appToReplace.appInfo.hideLiveContainer
+            finalNewApp.dontLoadTweakLoader = appToReplace.appInfo.dontLoadTweakLoader
+            finalNewApp.doUseLCBundleId = appToReplace.appInfo.doUseLCBundleId
+            finalNewApp.fixFilePickerNew = appToReplace.appInfo.fixFilePickerNew
+            finalNewApp.fixLocalNotification = appToReplace.appInfo.fixLocalNotification
+            finalNewApp.lastLaunched = appToReplace.appInfo.lastLaunched
+            finalNewApp.jitLaunchScriptJs = appToReplace.appInfo.jitLaunchScriptJs
+            finalNewApp.multitaskSpecified = appToReplace.appInfo.multitaskSpecified
+            finalNewApp.classicMode = appToReplace.appInfo.classicMode
+            finalNewApp.autoSaveDisabled = false
+            finalNewApp.save()
+        } else {
+            // enable SDK version spoof by defalut
+            finalNewApp.spoofSDKVersion = true
+        }
+        finalNewApp.installationDate = Date.now
+
+        await MainActor.run {
+            if let appToReplace {
+                let newAppModel = LCAppModel(appInfo: finalNewApp, delegate: self)
+
+                if appToReplace.uiIsHidden {
+                    sharedModel.hiddenApps.removeAll { $0 == appToReplace }
+                    sharedModel.hiddenApps.append(newAppModel)
+                } else {
+                    sharedModel.apps.removeAll { $0 == appToReplace }
+                    sharedModel.apps.append(newAppModel)
+                }
+            } else {
+                let newAppModel = LCAppModel(appInfo: finalNewApp, delegate: self)
+                sharedModel.apps.append(newAppModel)
+
+                // add url schemes
+                if let urlSchemes = finalNewApp.urlSchemes(), urlSchemes.count > 0 {
+                    UserDefaults.lcShared().mutableArrayValue(forKey: "LCGuestURLSchemes")
+                        .addObjects(from: urlSchemes as! [Any])
+                }
+            }
+        }
+    }
+'''
+
+s = s[:start] + installer + s[end:]
 p.write_text(s)
 
 
@@ -175,4 +354,4 @@ extension LCAppModel {
 
 p.write_text(s)
 
-print("Applied FlekDeck shell compatibility without modifying Duy signing/JIT core.")
+print("Applied Flek shell compatibility and Duy-parity IPA install/sign sequence.")
