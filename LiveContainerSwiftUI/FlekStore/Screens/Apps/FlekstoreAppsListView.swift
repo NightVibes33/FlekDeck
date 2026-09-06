@@ -6,21 +6,15 @@
 //
 
 import SwiftUI
-
-// MARK: - View
-// FlekstoreAppsListView.swift
-import SwiftUI
 import Kingfisher
 
 struct FlekstoreAppsListView: View {
     @StateObject private var viewModel = FlekstoreAppsListViewModel()
     @Binding var selectedTab: LCTabIdentifier
-    
+
     @State private var showRepositorySheet = false
-    @State private var showPremiumRequiredSheet = false
     @State private var repos: [AppRepository] = []
-    @State private var udid = Bundle.main.object(forInfoDictionaryKey: "UDID") as? String
-    
+
     private var selectedRepo: AppRepository? {
         repos.first(where: { $0.isSelected })
     }
@@ -34,18 +28,11 @@ struct FlekstoreAppsListView: View {
             }
         )
     }
-    
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                if viewModel.isBanned {
-                    AccessBlockedView(
-                        reason: viewModel.banReason,
-                        message: viewModel.banMessage
-                    )
-                } else if (viewModel.repository == .flekstore)
-                {
-                    // Categories
+                if viewModel.repository == .flekstore {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 8) {
                             CategoryButton(
@@ -54,14 +41,14 @@ struct FlekstoreAppsListView: View {
                             ) {
                                 viewModel.selectCategory(nil)
                             }
-                            
+
                             CategoryButton(
                                 title: "Top",
                                 isSelected: viewModel.selectedCategoryID == "downloads"
                             ) {
                                 viewModel.selectCategory("downloads")
                             }
-                            
+
                             ForEach(viewModel.categories) { cat in
                                 CategoryButton(
                                     title: cat.name,
@@ -75,18 +62,16 @@ struct FlekstoreAppsListView: View {
                     }
                     .frame(height: 44)
                 }
-                // Content
+
                 Group {
-                    if viewModel.isBanned {
-                        EmptyView()
-                    } else if viewModel.apps.isEmpty && viewModel.isLoading {
+                    if viewModel.apps.isEmpty && viewModel.isLoading {
                         ProgressView("Loading apps…")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if let error = viewModel.errorMessage {
                         VStack(spacing: 12) {
                             Text(error)
                                 .foregroundColor(.red)
-                            
+
                             Button("Retry") {
                                 Task { await viewModel.resetAndFetchApps() }
                             }
@@ -98,11 +83,7 @@ struct FlekstoreAppsListView: View {
                                 AppRow(
                                     app: app,
                                     selectedTab: $selectedTab,
-                                    isCustomRepository: (viewModel.repository != .flekstore),
-                                    hasSubscription: viewModel.hasSubscription,
-                                    onPremiumRequired: {
-                                        showPremiumRequiredSheet = true
-                                    }
+                                    isCustomRepository: viewModel.repository != .flekstore
                                 )
                                 .onAppear {
                                     if app == viewModel.apps.last {
@@ -110,7 +91,7 @@ struct FlekstoreAppsListView: View {
                                     }
                                 }
                             }
-                            
+
                             if viewModel.isLoading {
                                 HStack {
                                     Spacer()
@@ -192,12 +173,6 @@ struct FlekstoreAppsListView: View {
                     }
                 )
             }
-            .sheet(isPresented: $showPremiumRequiredSheet) {
-                PremiumRequiredView()
-            }
-        }
-        .onChange(of: viewModel.hasSubscription) {
-            print("HAS SUB:", $0)
         }
         .onAppear {
             Task {
@@ -207,24 +182,11 @@ struct FlekstoreAppsListView: View {
                     await viewModel.fetchApps()
                 }
             }
-            Task {
-                await viewModel.refreshSubscriptionStatus()
-            }
         }
-        .alert(item: $viewModel.deviceDateErrorMessage) { message in
-            Alert(
-                title: Text("Device Date Error"),
-                message: Text(message),
-                dismissButton: .default(Text("OK")) {
-                    viewModel.deviceDateErrorMessage = nil
-                }
-            )
-        }
-        
     }
-    
+
     // MARK: - Repos
-    
+
     private func selectRepository(_ repo: AppRepository) {
         let updated = repos.map {
             AppRepository(
@@ -240,32 +202,27 @@ struct FlekstoreAppsListView: View {
     }
 
     private func switchRepository(_ repo: AppRepository) {
-        //make search field empty so search is not automatically applied when user switches repos
         viewModel.searchQuery = ""
-        
+
         if repo.sourceURL == "Default app catalog" {
             viewModel.repository = .flekstore
         } else {
             viewModel.repository = .custom(url: repo.sourceURL)
         }
-        
+
         Task {
             await viewModel.resetAndFetchApps()
         }
     }
-    
+
     private func loadRepos() async -> AppRepository? {
         if let data = UserDefaults.standard.data(forKey: "savedRepositories"),
            let savedRepos = try? JSONDecoder().decode([AppRepository].self, from: data) {
-            
             await MainActor.run {
                 self.repos = savedRepos
             }
-            
-            // Return only the repo that is selected
             return savedRepos.first(where: { $0.isSelected })
         }
-        
         return nil
     }
 
@@ -274,14 +231,13 @@ struct FlekstoreAppsListView: View {
             UserDefaults.standard.set(data, forKey: "savedRepositories")
         }
     }
-    
 }
 
 fileprivate struct CategoryButton: View {
     let title: String
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
             Text(title)
@@ -310,17 +266,13 @@ fileprivate struct CategoryButton: View {
     }
 }
 
-// MARK: - Row
 struct AppRow: View {
     let app: FSAppModel
     @Binding var selectedTab: LCTabIdentifier
     @EnvironmentObject private var flekstoreSharedModel: FlekstoreSharedModel
-    
+
     let isCustomRepository: Bool
-    let hasSubscription: Bool
-    
-    let onPremiumRequired: () -> Void
-    
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             KFImage(URL(string: app.app_icon))
@@ -329,36 +281,30 @@ struct AppRow: View {
                 .scaledToFit()
                 .frame(width: 60, height: 60)
                 .cornerRadius(12)
-            
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.app_name)
                     .font(.headline)
                     .lineLimit(1)
-                
+
                 Text("Version \(app.app_version)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                
+
                 Text(app.app_short_description)
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(2)
             }
-            
+
             Spacer()
             VStack {
                 Spacer()
                 Button(action: {
-                    // Check your condition here
-                    if isCustomRepository && !hasSubscription {
-                        print("Subscription required")
-                        onPremiumRequired()
-                    } else {
-                        selectedTab = .apps
-                        flekstoreSharedModel.appInstallURL = app.install_url
-                        if !isCustomRepository {
-                            FlekstoreAppsListViewModel.recordDownload(appId: app.app_id)
-                        }
+                    selectedTab = .apps
+                    flekstoreSharedModel.appInstallURL = app.install_url
+                    if !isCustomRepository {
+                        FlekstoreAppsListViewModel.recordDownload(appId: app.app_id)
                     }
                 }) {
                     Text("GET")
