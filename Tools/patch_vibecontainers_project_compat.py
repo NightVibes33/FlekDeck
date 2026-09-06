@@ -59,4 +59,41 @@ if "uint32_t dyld_get_sdk_version(const struct mach_header *mh);" not in s:
     s = s.replace(probe_anchor, probe_decl, 1)
 p.write_text(s)
 
+# VibeContainers' exact LCUtils.m asks MultitaskDockManager for the host window
+# via prepareHostWindowForGuestLaunch. FlekDeck's newer multitask shell already
+# has a deterministic keyWindow resolver but removed that older ObjC selector.
+# Restore only the selector in the shell; do not change Vibe's LCUtils.m.
+p = Path("MultitaskSupport/MultitaskDockView.swift")
+s = p.read_text()
+if "@objc(prepareHostWindowForGuestLaunch)" not in s:
+    key_window_end = '''        return nil
+    }
+
+    /// Ranks scenes so the foreground-active one wins over restored/background
+'''
+    compat = '''        return nil
+    }
+
+    /// VibeContainers 3.8.0 launch compatibility. Its exact LCUtils.m asks the
+    /// multitask manager for a verified host window before creating the guest.
+    /// FlekDeck's newer shell already resolves that window deterministically.
+    @objc(prepareHostWindowForGuestLaunch)
+    public func prepareHostWindowForGuestLaunch() -> UIWindow? {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let window = keyWindow,
+              window.rootViewController != nil,
+              window.windowScene != nil else {
+            return nil
+        }
+        windowHostingView.frame = window.bounds
+        return window
+    }
+
+    /// Ranks scenes so the foreground-active one wins over restored/background
+'''
+    if key_window_end not in s:
+        raise SystemExit("Could not find Flek keyWindow compatibility anchor")
+    s = s.replace(key_window_end, compat, 1)
+p.write_text(s)
+
 print("Restored Vibe TweakLoader project membership and adapted Flek shell to Vibe runtime semantics.")
