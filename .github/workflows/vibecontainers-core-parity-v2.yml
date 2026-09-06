@@ -1,0 +1,260 @@
+name: VibeContainers Core Parity v2
+
+on:
+  push:
+    branches: [sync-upstream-livecontainer-jitless]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vibecontainers-v2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  parity-build:
+    runs-on: macos-latest
+    env:
+      VIBE_SHA: 318d7b0380898840da81c99278b39729147f7fea
+      VIBE_ROOT: /tmp/vibe/LiveContainer-3.8.0
+    steps:
+      - name: Checkout FlekDeck
+        uses: actions/checkout@v4
+        with:
+          ref: sync-upstream-livecontainer-jitless
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fetch pinned VibeContainers
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/vibe
+          git clone --filter=blob:none --no-checkout https://github.com/NightVibes33/VibeContainers.git /tmp/vibe
+          git -C /tmp/vibe fetch --no-tags origin "$VIBE_SHA"
+          git -C /tmp/vibe checkout --detach "$VIBE_SHA"
+          test -d "$VIBE_ROOT"
+
+      - name: Copy exact Vibe install signing JIT runtime
+        run: |
+          set -euo pipefail
+          V="$VIBE_ROOT"
+          files=(
+            LiveContainer/LCBootstrap.m
+            LiveContainer/LCMachOUtils.h
+            LiveContainer/LCMachOUtils.m
+            LiveContainer/LCSharedUtils.h
+            LiveContainer/LCSharedUtils.m
+            LiveContainer/dyld_bypass_validation.h
+            LiveContainer/dyld_bypass_validation.m
+            LiveContainer/main.c
+            LiveContainer/utils.h
+            LiveContainer/utils.m
+            LiveContainer/Tweaks/Dyld.m
+            LiveContainer/Tweaks/Tweaks.h
+            LiveContainerSwiftUI/Utilities/LCUtils.h
+            LiveContainerSwiftUI/Utilities/LCUtils.m
+            LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+            LiveContainerSwiftUI/Utilities/unarchive.h
+            LiveContainerSwiftUI/Utilities/unarchive.m
+            LiveContainerSwiftUI/Models/LCAppInfo.h
+            LiveContainerSwiftUI/Models/LCAppInfo.m
+            LiveContainerSwiftUI/Models/LCAppModel.swift
+            LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+            LiveProcess/main.m
+            LiveProcess/SideStoreLiveProcessHandler.m
+            LiveProcess/LiveProcess.entitlements
+            TweakLoader/DocumentPicker.m
+            TweakLoader/Notification.m
+            TweakLoader/TweakLoader.m
+            TweakLoader/UIKit+GuestHooks.m
+            TweakLoader/utils.h
+            TweakLoader/utils.m
+            entitlements.xml
+            entitlements.catalyst.xml
+          )
+          for p in "${files[@]}"; do
+            cp "$V/$p" "$p"
+          done
+
+          mkdir -p SideStore
+          cp "$V/SideStore/XPCServer.h" SideStore/XPCServer.h
+
+          rm -rf TestJITLess ZSign litehook
+          cp -R "$V/TestJITLess" TestJITLess
+          cp -R "$V/ZSign" ZSign
+          cp -R "$V/litehook" litehook
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.gitmodules')
+          if p.exists():
+              lines = p.read_text().splitlines()
+              out = []
+              skip = False
+              for line in lines:
+                  if line.strip() == '[submodule "litehook"]':
+                      skip = True
+                      continue
+                  if skip and line.startswith('[submodule '):
+                      skip = False
+                  if not skip:
+                      out.append(line)
+              p.write_text('\n'.join(out).rstrip() + '\n')
+          PY
+
+          VIBE_OPENSSL="$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/OpenSSL")"
+          git -C OpenSSL fetch origin "$VIBE_OPENSSL"
+          git -C OpenSSL checkout --detach "$VIBE_OPENSSL"
+
+      - name: Prove exact Vibe core
+        run: |
+          set -euo pipefail
+          V="$VIBE_ROOT"
+          files=(
+            LiveContainer/LCBootstrap.m
+            LiveContainer/LCMachOUtils.h
+            LiveContainer/LCMachOUtils.m
+            LiveContainer/LCSharedUtils.h
+            LiveContainer/LCSharedUtils.m
+            LiveContainer/dyld_bypass_validation.h
+            LiveContainer/dyld_bypass_validation.m
+            LiveContainer/main.c
+            LiveContainer/utils.h
+            LiveContainer/utils.m
+            LiveContainer/Tweaks/Dyld.m
+            LiveContainer/Tweaks/Tweaks.h
+            LiveContainerSwiftUI/Utilities/LCUtils.h
+            LiveContainerSwiftUI/Utilities/LCUtils.m
+            LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+            LiveContainerSwiftUI/Utilities/unarchive.h
+            LiveContainerSwiftUI/Utilities/unarchive.m
+            LiveContainerSwiftUI/Models/LCAppInfo.h
+            LiveContainerSwiftUI/Models/LCAppInfo.m
+            LiveContainerSwiftUI/Models/LCAppModel.swift
+            LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+            LiveProcess/main.m
+            LiveProcess/SideStoreLiveProcessHandler.m
+            LiveProcess/LiveProcess.entitlements
+            TweakLoader/DocumentPicker.m
+            TweakLoader/Notification.m
+            TweakLoader/TweakLoader.m
+            TweakLoader/UIKit+GuestHooks.m
+            TweakLoader/utils.h
+            TweakLoader/utils.m
+            entitlements.xml
+            entitlements.catalyst.xml
+          )
+          for p in "${files[@]}"; do
+            test "$(git hash-object "$p")" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/$p")" || { echo "VIBE PARITY FAIL: $p"; exit 1; }
+            echo "VIBE EXACT: $p"
+          done
+          test "$(git hash-object SideStore/XPCServer.h)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/SideStore/XPCServer.h")"
+          diff -qr TestJITLess "$V/TestJITLess"
+          diff -qr ZSign "$V/ZSign"
+          diff -qr litehook "$V/litehook"
+          VIBE_OPENSSL="$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/OpenSSL")"
+          test "$(git -C OpenSSL rev-parse HEAD)" = "$VIBE_OPENSSL"
+          echo "VIBE EXACT: SideStore/XPCServer.h"
+          echo "VIBE EXACT: TestJITLess"
+          echo "VIBE EXACT: ZSign"
+          echo "VIBE EXACT: litehook"
+          echo "VIBE EXACT: OpenSSL $VIBE_OPENSSL"
+
+      - name: Adapt only FlekDeck shell
+        run: |
+          set -euo pipefail
+          python3 Tools/patch_vibecontainers_shell_compat.py
+          python3 Tools/patch_vibecontainers_project_compat.py
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Parse Swift boundary
+        run: |
+          set -euo pipefail
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+
+      - name: Build unsigned real-device archive
+        run: |
+          set -uo pipefail
+          mkdir -p build
+          set +e
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck-VibeCore.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- compiler/linker errors ---'
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -250 || true
+            exit "$status"
+          fi
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP="$(find "$PWD/build/FlekDeck-VibeCore.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build
+          zip -qry FlekDeck-VibeContainers-core.ipa Payload
+          unzip -t FlekDeck-VibeContainers-core.ipa >/dev/null
+          test -s FlekDeck-VibeContainers-core.ipa
+          shasum -a 256 FlekDeck-VibeContainers-core.ipa
+
+      - name: Persist proven Vibe core
+        run: |
+          set -euo pipefail
+          if git diff --quiet && git diff --cached --quiet; then
+            echo 'Vibe core already persisted'
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A -- \
+            .gitmodules \
+            LiveContainer \
+            LiveContainer.xcodeproj/project.pbxproj \
+            LiveContainerSwiftUI/Utilities/LCUtils.h \
+            LiveContainerSwiftUI/Utilities/LCUtils.m \
+            LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
+            LiveContainerSwiftUI/Utilities/unarchive.h \
+            LiveContainerSwiftUI/Utilities/unarchive.m \
+            LiveContainerSwiftUI/Models/LCAppInfo.h \
+            LiveContainerSwiftUI/Models/LCAppInfo.m \
+            LiveContainerSwiftUI/Models/LCAppModel.swift \
+            LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift \
+            LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift \
+            LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
+            LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
+            LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift \
+            LiveProcess TweakLoader SideStore/XPCServer.h \
+            TestJITLess ZSign litehook OpenSSL \
+            entitlements.xml entitlements.catalyst.xml
+          git commit -m "Match VibeContainers install signing and JIT runtime"
+          git push origin HEAD:sync-upstream-livecontainer-jitless
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-VibeContainers-core-ipa
+          path: build/FlekDeck-VibeContainers-core.ipa
+          if-no-files-found: error
