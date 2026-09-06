@@ -46,6 +46,19 @@ jobs:
           settings = Path('LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift')
           s = settings.read_text(encoding='utf-8')
 
+          # Repair the partial formattedSubscriptionDate removal produced by the
+          # previous cleanup revision. This is intentionally exact and idempotent.
+          s, repaired = re.subn(
+              r'\n        if let dateOnly = dateString\.split\(separator: " "\)\.first \{\n'
+              r'            return String\(dateOnly\)\n'
+              r'        \}\n\n'
+              r'        return dateString\n'
+              r'    \}\n',
+              '\n', s, count=1
+          )
+          if repaired:
+              print('Repaired orphaned formattedSubscriptionDate tail')
+
           if '@State private var udid: String = ""' in s:
               s, n = re.subn(
                   r'    @State private var udid: String = ""\n\s*\n'
@@ -79,7 +92,8 @@ jobs:
 
           if 'private func formattedSubscriptionDate' in s:
               s, n = re.subn(
-                  r'    private func formattedSubscriptionDate\(_ dateString: String\) -> String \{.*?    \}\n\s*\n',
+                  r'    private func formattedSubscriptionDate\(_ dateString: String\) -> String \{.*?'
+                  r'(?=    // MARK: - UDID)',
                   '', s, count=1, flags=re.S
               )
               if n != 1:
@@ -144,6 +158,7 @@ jobs:
               'User UDID is empty',
               'checkSubscription()',
               'hasSubscription',
+              'dateOnly = dateString.split',
           ]
           roots = [Path('LiveContainerSwiftUI'), Path('LiveContainer.xcodeproj/project.pbxproj')]
           violations = []
@@ -162,6 +177,11 @@ jobs:
           print('FlekDeck payment/access cleanup audit passed')
           PY
 
+      - name: Parse cleaned Settings source
+        run: |
+          set -euo pipefail
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+
       - name: Persist standalone cleanup
         run: |
           set -euo pipefail
@@ -172,7 +192,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add LiveContainer.xcodeproj/project.pbxproj LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
-          git commit -m 'Remove remaining FlekSt0re payment settings'
+          git commit -m 'Repair standalone FlekDeck settings cleanup'
           git push origin HEAD:main
 
       - name: Build unsigned real-device archive
