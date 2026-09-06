@@ -1,7 +1,16 @@
-name: iOS Build
+name: iOS Device Unsigned IPA
 
 on:
-
+  push:
+    branches: [main]
+    paths:
+      - "**/*.swift"
+      - "**/*.m"
+      - "**/*.mm"
+      - "**/*.h"
+      - "**/*.xcodeproj/**"
+      - "**/*.xcconfig"
+      - ".github/workflows/build.yml"
   pull_request:
   workflow_dispatch:
 
@@ -13,38 +22,59 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
-      - name: Select Xcode version
+      - name: Select Xcode 26.6
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.4"
+          xcode-version: "26.6"
 
-
-      - name: Build and Archive
+      - name: Build real-device unsigned archive
         run: |
           set -o pipefail
           xcodebuild clean archive \
             -project "LiveContainer.xcodeproj" \
             -scheme "LiveContainer" \
             -configuration Release \
-            -archivePath $PWD/build/LiveContainer.xcarchive \
+            -archivePath "$PWD/build/FlekDeck.xcarchive" \
             -destination "generic/platform=iOS" \
-            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
-          | xcpretty
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
 
-      - name: Create IPA
+      - name: Validate device build
         run: |
+          set -euo pipefail
+          APP="build/FlekDeck.xcarchive/Products/Applications/FlekDeck.app"
+          test -d "$APP"
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          test -f "$APP/$EXECUTABLE"
+          echo "Executable: $EXECUTABLE"
+          file "$APP/$EXECUTABLE"
+          xcrun vtool -show-build "$APP/$EXECUTABLE" | tee build/device-build.txt
+          grep -Eiq 'platform[[:space:]]+(IOS|2)' build/device-build.txt
+          if find "$APP" -name '_CodeSignature' -o -name 'embedded.mobileprovision' | grep -q .; then
+            echo "Unexpected signing material found"
+            exit 1
+          fi
+
+      - name: Create unsigned IPA
+        run: |
+          set -euo pipefail
+          rm -rf build/Payload
           mkdir -p build/Payload
-          cp -r build/LiveContainer.xcarchive/Products/Applications/FlekDeck.app build/Payload/
+          cp -R build/FlekDeck.xcarchive/Products/Applications/FlekDeck.app build/Payload/
           cd build
-          zip -r LiveContainer.ipa Payload
-          rm -rf Payload
-          echo "IPA created successfully:"
-          ls -lh LiveContainer.ipa
+          zip -qry FlekDeck-unsigned-device.ipa Payload
+          test -s FlekDeck-unsigned-device.ipa
+          unzip -l FlekDeck-unsigned-device.ipa | grep -q 'Payload/FlekDeck.app/Info.plist'
+          ls -lh FlekDeck-unsigned-device.ipa
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LiveContainer.ipa
-          path: build/LiveContainer.ipa
+          name: FlekDeck-unsigned-device
+          path: build/FlekDeck-unsigned-device.ipa
+          if-no-files-found: error
+          compression-level: 0
