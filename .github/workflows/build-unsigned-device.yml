@@ -3,8 +3,6 @@ name: Unsigned Real Device IPA
 on:
   push:
     branches: [main]
-    paths:
-      - .github/workflows/build-unsigned-device.yml
   workflow_dispatch:
 
 jobs:
@@ -21,7 +19,7 @@ jobs:
         with:
           xcode-version: '26.6'
 
-      - name: Build unsigned device archive
+      - name: Build unsigned real-device archive
         run: |
           set -euo pipefail
           xcodebuild clean archive \
@@ -35,15 +33,20 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | xcpretty
 
-      - name: Package IPA
+      - name: Validate device product and package IPA
         run: |
           set -euo pipefail
-          APP="$PWD/build/FlekDeck.xcarchive/Products/Applications/FlekDeck.app"
+          APP="$(find "$PWD/build/FlekDeck.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
           test -d "$APP"
+          EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$APP/Info.plist")"
+          test -n "$EXECUTABLE"
+          /usr/bin/file "$APP/$EXECUTABLE"
+          plutil -p "$APP/Info.plist" | head -100
+
+          rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
-          /usr/bin/file "$APP/FlekDeck" || true
-          plutil -p "$APP/Info.plist" | head -80
           cd build
           zip -qry FlekDeck-unsigned-device.ipa Payload
           test -s FlekDeck-unsigned-device.ipa
