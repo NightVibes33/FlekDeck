@@ -1,5 +1,6 @@
 name: Unsigned Real Device IPA
 
+# Builds the standalone FlekDeck tree after FlekSt0re access/payment cleanup.
 on:
   push:
     branches: [main]
