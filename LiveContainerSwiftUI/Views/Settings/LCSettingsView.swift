@@ -38,14 +38,6 @@ struct LCSettingsView: View {
     @State var errorInfo = ""
     @State var successShow = false
     @State var successInfo = ""
-    @State private var udid: String = ""
-    
-    @State private var subscriptionEndDate: String?
-    @State private var hasSubscription: Bool = false
-    @State private var isSubscriptionLoading: Bool = false
-    
-    
-    
     @StateObject private var installLC2Alert = AlertHelper<Int>()
     @State private var certificateDataFound = false
     
@@ -84,7 +76,6 @@ struct LCSettingsView: View {
     
     @AppStorage("LCSideJITServerAddress", store: LCUtils.appGroupUserDefault) var sideJITServerAddress : String = ""
     @AppStorage("LCDeviceUDID", store: LCUtils.appGroupUserDefault) var deviceUDID: String = ""
-    @AppStorage("FSDeviceUDID") private var fsDeviceUDID: String = ""
     @AppStorage("LCJITEnablerType", store: LCUtils.appGroupUserDefault) var JITEnabler: JITEnablerType = .SideJITServer
     
     @State var store : Store = .Unknown
@@ -99,19 +90,6 @@ struct LCSettingsView: View {
     @AppStorage("LCSharePrivateDataWithLiveProcess") var sharePrivateDataWithLiveProcess = false
     @AppStorage("BKNoWatchdogs") var disableLiveProcessWatchdog = false
     
-    ///Flekstore user defaults
-    @AppStorage("FSEncryptedUDID")
-    private var encryptedUDID: String = ""
-
-    @AppStorage("FSSubscriptionEndDate")
-    private var subscriptionEndDateStored: String = ""
-
-    @AppStorage("FSSubscriptionStatus")
-    private var subscriptionStatusStored: Bool = false
-    
-    @AppStorage("FSSubscriptionInitialized")
-    private var subscriptionInitialized: Bool = false
-
     // Written from inside LiveProcess by LCHostIdentityInit. The extension has no
     // UI of its own and cannot be attached to on someone else's device, so the app
     // group is the only way to see whether the identifier reached a parallel guest.
@@ -167,14 +145,6 @@ struct LCSettingsView: View {
             return value
         }
         return "12345"
-    }()
-
-    private static let subscriptionDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone.current
-        return formatter
     }()
 
     // Kept as separate lines on purpose. "What this app published" and "what a
@@ -256,11 +226,6 @@ struct LCSettingsView: View {
         return !publishedEncryptedUdid.isEmpty && hostIdentityUdid != publishedEncryptedUdid
     }
 
-    private func formattedSubscriptionDate(_ dateString: String) -> String {
-        if let date = DateFormatter.deviceServiceFormatter.date(from: dateString) {
-            return Self.subscriptionDateFormatter.string(from: date)
-        }
-
         if let dateOnly = dateString.split(separator: " ").first {
             return String(dateOnly)
         }
@@ -269,33 +234,6 @@ struct LCSettingsView: View {
     }
     
     
-    // MARK: - UDID
-
-    /// The UDID with only its ends legible.
-    ///
-    /// Enough of it survives to recognise the device at a glance and to match
-    /// against a support request, and not enough to register or sign with. The
-    /// copy button beside it still yields the real value, which is the one place
-    /// it is needed — reading it off a screen is not, and a screenshot or a
-    /// shoulder is how it usually escapes.
-    private var maskedUdid: String {
-        Self.masking(udid)
-    }
-
-    /// Keeps the first and last `ends` characters and replaces the rest with one
-    /// bullet each, so the length still shows.
-    ///
-    /// A value too short to split that way is masked completely rather than
-    /// printed with its two ends touching, which would show all of it.
-    static func masking(_ value: String, ends: Int = 6) -> String {
-        guard value.count > ends * 2 else {
-            return String(repeating: "\u{2022}", count: value.count)
-        }
-        return String(value.prefix(ends))
-            + String(repeating: "\u{2022}", count: value.count - ends * 2)
-            + String(value.suffix(ends))
-    }
-
     /// Name of the step the haptics slider currently sits on, shown beside it —
     /// a strength is easier to recognise by name than by a bare number, and the
     /// left end being "Off" is the part worth being explicit about.
@@ -330,51 +268,6 @@ struct LCSettingsView: View {
         NavigationView {
             Form {
                 Section {
-                    HStack(spacing: 12) {
-                        Image(systemName: "wallet.pass.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.white)
-                            .frame(width: 36, height: 36)
-                            .background(Color.blue)
-                            .cornerRadius(8)
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("UDID")
-                                .font(.body)
-                            
-                            Text(maskedUdid)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .scaledToFit()
-                                .minimumScaleFactor(0.3)
-                        }
-                        Spacer()
-                        
-                        if udid.isEmpty {
-                            Button {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                Task {
-                                    await checkSubscription()
-                                }
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 18))
-                                    .foregroundColor(.blue)
-                            }
-                            .disabled(isSubscriptionLoading)
-                        } else {
-                            Button(action: {
-                                UIPasteboard.general.string = udid
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            }) {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.system(size: 18))
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 6)
 
                     // Developer-only. This is a diagnostic — it exists to compare what the
                     // guest's identity check actually saw against what the app holds — and it
@@ -444,62 +337,6 @@ struct LCSettingsView: View {
                         }
                     }
 
-                    // MARK: - Subscription Status
-                    HStack(spacing: 12) {
-                        Image("premiumLogo")
-                            .resizable()
-                            .frame(width: 36, height: 36)
-                            .cornerRadius(8)
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Premium Subscription")
-                                .font(.body)
-
-                            if isSubscriptionLoading {
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                    Text("Checking…")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                            } else if hasSubscription, let endDate = subscriptionEndDate {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                        .font(.subheadline)
-                                    Text("Valid till \(formattedSubscriptionDate(endDate))")
-                                        .font(.subheadline)
-                                        .foregroundColor(.green)
-                                }
-                            } else if let endDate = subscriptionEndDate {
-                                Text("Ended \(formattedSubscriptionDate(endDate))")
-                                    .font(.subheadline)
-                                    .foregroundColor(.red)
-                            } else {
-                                Text("No active subscription")
-                                    .font(.subheadline)
-                                    .foregroundColor(.gray)
-                            }
-                        }
-
-                        Spacer()
-
-                        Button {
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            Task {
-                                if !udid.isEmpty {
-                                    await checkSubscription()
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 18))
-                                .foregroundColor(.blue)
-                        }
-                        .disabled(isSubscriptionLoading)
-                    }
-                    .padding(.vertical, 6)
                 }
                 // MARK: - Certificate (shown only when no certificate is detected)
                 if sharedModel.multiLCStatus != 2 && !certificateDataFound {
@@ -687,27 +524,6 @@ struct LCSettingsView: View {
             }
             .navigationTitle("lc.tabView.settings".loc)
             .navigationBarTitleDisplayMode(.large)
-            .onAppear {
-                loadEncryptedUDIDFromPlist()
-                hydrateSubscriptionStateFromStorage()
-
-                // Fetch once for initial subscription bootstrap only.
-                if !subscriptionInitialized {
-                    Task {
-                        await checkSubscription()
-                        subscriptionInitialized = true
-                    }
-                }
-            }
-            .onChange(of: deviceUDID) { newValue in
-                udid = newValue
-            }
-            .onChange(of: subscriptionStatusStored) { newValue in
-                hasSubscription = newValue
-            }
-            .onChange(of: subscriptionEndDateStored) { newValue in
-                subscriptionEndDate = newValue.isEmpty ? nil : newValue
-            }
             .alert("lc.common.error".loc, isPresented: $errorShow){
             } message: {
                 Text(errorInfo)
@@ -1387,48 +1203,4 @@ struct LCSettingsView: View {
         }
     }
     
-    private func loadEncryptedUDIDFromPlist() {
-        if let dict = Bundle.main.infoDictionary,
-           let value = dict["encryptedUdid"] as? String,
-           !value.isEmpty {
-            encryptedUDID = value
-        }
-    }
-
-    private func hydrateSubscriptionStateFromStorage() {
-        udid = deviceUDID.isEmpty ? fsDeviceUDID : deviceUDID
-        hasSubscription = subscriptionStatusStored
-        subscriptionEndDate = subscriptionEndDateStored.isEmpty ? nil : subscriptionEndDateStored
-    }
-    
-    private func checkSubscription() async {
-        guard !encryptedUDID.isEmpty else { return }
-        if isSubscriptionLoading { return }
-        isSubscriptionLoading = true
-        defer { isSubscriptionLoading = false }
-        
-        guard let url = URL(
-            string: "https://nestapi.flekstore.com/device-service/get-status/\(encryptedUDID)"
-        ) else { return }
-        
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            
-            let response = try JSONDecoder().decode(DeviceStatusResponse.self, from: data)
-            
-            // Save to AppStorage
-            deviceUDID = response.udid
-            udid = response.udid
-            
-            subscriptionStatusStored = response.status
-            subscriptionEndDateStored = response.endDate
-            
-            hasSubscription = response.status
-            subscriptionEndDate = response.endDate
-            
-        } catch {
-            errorInfo = error.localizedDescription
-            errorShow = true
-        }
-    }
 }
