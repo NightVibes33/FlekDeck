@@ -455,25 +455,12 @@ final class ShareExtensionViewModel: ObservableObject {
         defer { isLaunching = false }
 
         do {
-            // What gets handed over is a copy in the app group, not the file the
-            // share sheet gave us -- see stageForInstall. Only when there is no
-            // app group to copy into does the original URL go over, with the
-            // bookmark that used to be the whole of the handover.
-            let urlToInstall: URL
-            if let inbox = LCSharedUtils.shareInboxPath() {
-                urlToInstall = try await Task.detached(priority: .userInitiated) {
-                    try Self.stageForInstall(fileURL, inInbox: inbox)
-                }.value
-            } else {
-                try storeBookmark(for: fileURL)
-                urlToInstall = fileURL
-            }
-
+            try storeBookmark(for: fileURL)
             guard var components = URLComponents(string: "flekdeck://install") else {
                 throw ShareExtensionError("Unable to build install URL.")
             }
             components.queryItems = [
-                URLQueryItem(name: "url", value: urlToInstall.absoluteString)
+                URLQueryItem(name: "url", value: fileURL.absoluteString)
             ]
             guard let installURL = components.url else {
                 throw ShareExtensionError("Unable to build install URL.")
