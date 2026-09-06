@@ -1,0 +1,58 @@
+name: Unsigned Real Device IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-unsigned-device.yml
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Build unsigned device archive
+        run: |
+          set -euo pipefail
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP="$PWD/build/FlekDeck.xcarchive/Products/Applications/FlekDeck.app"
+          test -d "$APP"
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          /usr/bin/file "$APP/FlekDeck" || true
+          plutil -p "$APP/Info.plist" | head -80
+          cd build
+          zip -qry FlekDeck-unsigned-device.ipa Payload
+          test -s FlekDeck-unsigned-device.ipa
+          unzip -t FlekDeck-unsigned-device.ipa >/dev/null
+          ls -lh FlekDeck-unsigned-device.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-unsigned-device-ipa
+          path: build/FlekDeck-unsigned-device.ipa
+          if-no-files-found: error
