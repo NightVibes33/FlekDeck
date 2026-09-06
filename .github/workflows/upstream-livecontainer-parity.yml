@@ -112,6 +112,7 @@ jobs:
               LiveContainerSwiftUI/Models/LCAppModel.swift \
               LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift \
               LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift \
+              LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
               LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
               ShareExtension/ShareExtensionViewModel.swift \
               ZSign TestJITLess entitlements.xml litehook
@@ -130,6 +131,7 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel+Conversion.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/Shared.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
