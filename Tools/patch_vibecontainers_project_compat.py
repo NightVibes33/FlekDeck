@@ -41,4 +41,8 @@ if "static void SSVibeSwizzle(" not in s:
 
 p.write_text(s)
 
-print("Restored Vibe TweakLoader project membership and adapted Flek SideStore hooks to Vibe runtime semantics.")
+# FlekDeck's LCAppListView also carries newer Classic Mode delegate/JIT APIs.
+# Apply the separate UI-only adapter after the Vibe core has been copied.
+exec(Path("Tools/patch_vibecontainers_applist_compat.py").read_text(), {})
+
+print("Restored Vibe TweakLoader project membership and adapted Flek shell to Vibe runtime semantics.")
