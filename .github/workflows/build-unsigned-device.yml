@@ -30,9 +30,6 @@ jobs:
           from pathlib import Path
           import re
 
-          # Xcode's synchronized group retained one deleted file in
-          # membershipExceptions, which makes an otherwise-clean source tree fail
-          # before Swift compilation.
           project = Path('LiveContainer.xcodeproj/project.pbxproj')
           ptext = project.read_text(encoding='utf-8')
           stale_project_entries = [
@@ -46,9 +43,6 @@ jobs:
               ptext = ptext.replace(f'\t\t\t\t"{item}",\n', '')
           project.write_text(ptext, encoding='utf-8')
 
-          # Settings still contained the old FlekSt0re subscription panel and
-          # /device-service/get-status client. Remove the feature, not merely the
-          # missing response type.
           settings = Path('LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift')
           s = settings.read_text(encoding='utf-8')
 
@@ -119,32 +113,18 @@ jobs:
               if n != 1:
                   raise SystemExit('Could not remove premium subscription settings row')
 
-          bootstrap = '''            .onAppear {
-                loadEncryptedUDIDFromPlist()
-                hydrateSubscriptionStateFromStorage()
+          if 'loadEncryptedUDIDFromPlist()' in s:
+              s, n = re.subn(
+                  r'            \.onAppear \{\n'
+                  r'                loadEncryptedUDIDFromPlist\(\).*?'
+                  r'            \.onChange\(of: subscriptionEndDateStored\) \{ newValue in\n'
+                  r'                subscriptionEndDate = newValue\.isEmpty \? nil : newValue\n'
+                  r'            \}\n',
+                  '', s, count=1, flags=re.S
+              )
+              if n != 1:
+                  raise SystemExit('Could not remove subscription lifecycle hooks')
 
-                // Fetch once for initial subscription bootstrap only.
-                if !subscriptionInitialized {
-                    Task {
-                        await checkSubscription()
-                        subscriptionInitialized = true
-                    }
-                }
-            }
-            .onChange(of: deviceUDID) { newValue in
-                udid = newValue
-            }
-            .onChange(of: subscriptionStatusStored) { newValue in
-                hasSubscription = newValue
-            }
-            .onChange(of: subscriptionEndDateStored) { newValue in
-                subscriptionEndDate = newValue.isEmpty ? nil : newValue
-            }
-'''
-          s = s.replace(bootstrap, '')
-
-          # These three functions are the final methods in LCSettingsView and exist
-          # only for the removed access/subscription service.
           tail_marker = '\n    private func loadEncryptedUDIDFromPlist() {'
           if tail_marker in s:
               s = s[:s.index(tail_marker)] + '\n}\n'
@@ -177,7 +157,7 @@ jobs:
                       if token in text:
                           violations.append(f'{f}: {token}')
           if violations:
-              raise SystemExit('FlekSt0re payment/access remnants remain:\n' + '\n'.join(violations))
+              raise SystemExit('FlekSt0re payment/access remnants remain: ' + '; '.join(violations))
 
           print('FlekDeck payment/access cleanup audit passed')
           PY
