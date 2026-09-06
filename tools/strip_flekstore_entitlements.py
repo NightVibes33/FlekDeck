@@ -90,17 +90,17 @@ save(detail_path, s)
 # ---------------------------------------------------------------------------
 tab_path = "LiveContainerSwiftUI/Views/LCTabView.swift"
 s = load(tab_path)
-s = regex(
+s = exact(
     s,
-    r"    @State var previousSelectedTab : LCTabIdentifier = \.apps\n(?:    @State private var .*\n|    @AppStorage\(\"FSEncryptedUDID\"\).*\n)+",
-    "    @State var previousSelectedTab : LCTabIdentifier = .apps\n    @State private var didRunStartup = false\n",
+    """    @State var previousSelectedTab : LCTabIdentifier = .apps\n    @State private var isBlocked = false\n    @State private var hasCheckedBlockedStatus = false\n    @State private var didFailBlockedStatusCheck = false\n    @State private var didRunPostGateStartup = false\n    @State private var isVerifyingAccess = false\n    @State private var accessVerificationFailureMessage = \"Please check your internet connection and try again.\"\n    @State private var blockedReason = \"Unavailable\"\n    @State private var blockedMessage = \"Your access has been limited by the service.\"\n    @AppStorage(\"FSEncryptedUDID\") private var encryptedUDID: String = \"\"\n""",
+    """    @State var previousSelectedTab : LCTabIdentifier = .apps\n    @State private var didRunStartup = false\n""",
     "root access state",
 )
 s = s.replace("    @Environment(\\.scenePhase) var scenePhase\n", "")
-s = regex(
+s = exact(
     s,
-    r"    var body: some View \{\n        Group \{\n            if !hasCheckedBlockedStatus \{.*?\n            \}\n        \}\n        \.modifier\(DeferBottomHomeGestureModifier\(\)\)",
-    """    var body: some View {\n        LCAppListView(searchContext: searchContextAppList)\n        .modifier(DeferBottomHomeGestureModifier())""",
+    """    var body: some View {\n        Group {\n            if !hasCheckedBlockedStatus {\n                ZStack {\n                    Color.black.ignoresSafeArea()\n                    ProgressView()\n                        .tint(.white)\n                }\n            } else if didFailBlockedStatusCheck {\n                AccessVerificationFailedView(message: accessVerificationFailureMessage) {\n                    Task {\n                        await verifyAccess(forceNetworkCheck: true)\n                    }\n                }\n            } else if isBlocked {\n                AccessBlockedView(reason: blockedReason, message: blockedMessage)\n            } else {\n                // FlekDeck: the springboard home screen replaces the old tab bar.\n                // Settings and the Installer are now opened as full-screen pages from\n                // the home screen instead of being separate tabs.\n                LCAppListView(searchContext: searchContextAppList)\n            }\n        }\n        .modifier(DeferBottomHomeGestureModifier())\n""",
+    """    var body: some View {\n        // FlekDeck: the springboard home screen replaces the old tab bar.\n        // Startup is local; there is no FlekSt0re device/access gate.\n        LCAppListView(searchContext: searchContextAppList)\n        .modifier(DeferBottomHomeGestureModifier())\n""",
     "root gated body",
 )
 s = exact(
