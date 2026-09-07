@@ -2,7 +2,7 @@ name: VibeContainers Fast IPA
 
 on:
   push:
-    branches: [sync-upstream-livecontainer-jitless]
+    branches: [main, sync-upstream-livecontainer-jitless]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout FlekDeck without recursive submodules
         uses: actions/checkout@v4
         with:
-          ref: sync-upstream-livecontainer-jitless
+          ref: ${{ github.sha }}
           submodules: false
           fetch-depth: 1
 

@@ -1,17 +1,7 @@
 name: iOS Device Unsigned IPA
 
+# Legacy build: main uses vibecontainers-fast-ipa.yml.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**/*.swift"
-      - "**/*.m"
-      - "**/*.mm"
-      - "**/*.h"
-      - "**/*.xcodeproj/**"
-      - "**/*.xcconfig"
-      - ".github/workflows/build.yml"
-  pull_request:
   workflow_dispatch:
 
 jobs:

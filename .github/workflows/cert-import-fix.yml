@@ -1,8 +1,7 @@
 name: Certificate Import Fix
 
+# Legacy build: main uses vibecontainers-fast-ipa.yml.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
