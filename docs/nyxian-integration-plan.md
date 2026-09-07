@@ -1,6 +1,7 @@
 # Nyxian compatibility integration
 
-Status: source audit only; runtime integration is NOT implemented.
+Status: integration branch in active development. Host routing and generated
+Nyxian build targets are implemented; archive compilation is not yet proven.
 
 ## Baselines
 
@@ -66,5 +67,10 @@ grants that capability.
 
 ## Current changes
 
-Only this plan and the local branch were created. No runtime sources were
-modified, no build was dispatched and nothing was pushed.
+- Per-app backend selection is stored outside the protected Vibe app model.
+- Flek-only launch callers route opted-in apps through `FDNyxianRuntimeBridge`.
+- The bridge reports missing donor code, extension, and entitlement separately.
+- Nyxian is pinned as a submodule at the audited donor commit.
+- Build-only generation creates `NyxianRuntime.framework` and the distinct
+  `NyxianProcess.appex` without editing the donor checkout.
+- The unsigned workflow asserts that both products are embedded in the archive.

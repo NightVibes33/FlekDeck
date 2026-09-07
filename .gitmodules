@@ -4,3 +4,6 @@
 [submodule "OpenSSL"]
 	path = OpenSSL
 	url = https://github.com/krzyzanowskim/OpenSSL
+[submodule "Vendor/Nyxian"]
+	path = Vendor/Nyxian
+	url = https://github.com/emexlab/Nyxian.git
