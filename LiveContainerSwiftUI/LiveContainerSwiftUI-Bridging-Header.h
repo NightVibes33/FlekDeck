@@ -10,6 +10,7 @@
 #include "../LiveContainer/LCSharedUtils.h"
 #include "Utilities/LCUtils.h"
 #include "Utilities/unarchive.h"
+#include "Utilities/FDNyxianRuntimeBridge.h"
 #include "../MultitaskSupport/AppSceneViewController.h"
 #include "../MultitaskSupport/LCGuestVolume.h"
 #include "../MultitaskSupport/DecoratedAppSceneViewController.h"

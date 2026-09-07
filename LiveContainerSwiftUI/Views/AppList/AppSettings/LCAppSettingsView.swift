@@ -206,6 +206,26 @@ struct LCAppSettingsView: View {
             }
 
             Section {
+                Picker("Runtime", selection: $model.uiRuntimeBackend) {
+                    Text("VibeContainers").tag(LCRuntimeBackend.vibe)
+                    Text("Nyxian userspace").tag(LCRuntimeBackend.nyxian)
+                }
+
+                if model.uiRuntimeBackend == .nyxian {
+                    HStack(alignment: .top) {
+                        Image(systemName: FDNyxianRuntimeBridge.shared.state == .ready ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(FDNyxianRuntimeBridge.shared.state == .ready ? .green : .orange)
+                        Text(FDNyxianRuntimeBridge.shared.diagnosticMessage)
+                            .font(.footnote)
+                    }
+                }
+            } header: {
+                Text("Guest runtime")
+            } footer: {
+                Text("VibeContainers remains the default signing and JIT-less runtime. Nyxian is opt-in for applications requiring its userspace process and module compatibility.")
+            }
+
+            Section {
                 Toggle(isOn: $model.uiIsLocked) {
                     Text("lc.appSettings.lockApp".loc)
                 }

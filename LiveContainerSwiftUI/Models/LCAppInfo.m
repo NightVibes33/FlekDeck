@@ -733,4 +733,14 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     [self save];
 }
 
+- (LCRuntimeBackend)runtimeBackend {
+    NSNumber *value = _info[@"FDRuntimeBackend"];
+    return value != nil ? (LCRuntimeBackend)value.integerValue : LCRuntimeBackendVibe;
+}
+
+- (void)setRuntimeBackend:(LCRuntimeBackend)runtimeBackend {
+    _info[@"FDRuntimeBackend"] = @(runtimeBackend);
+    [self save];
+}
+
 @end
