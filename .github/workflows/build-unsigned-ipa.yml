@@ -146,6 +146,11 @@ jobs:
         run: |
           set -euo pipefail
           gem install xcodeproj --no-document
+          XCODEPROJ_ATTR="$(ruby -e 'print Gem::Specification.find_by_name("xcodeproj").full_gem_path')/lib/xcodeproj/project/object_attributes.rb"
+          # xcodeproj 1.28 does not yet accept Xcode 26 synchronized-group
+          # exceptions attached to resource phases. FlekDeck already contains
+          # such objects, so extend the parser's valid phase list before opening.
+          sed -i '' 's/PBXSourcesBuildPhase, PBXCopyFilesBuildPhase]/PBXSourcesBuildPhase, PBXCopyFilesBuildPhase, PBXResourcesBuildPhase]/' "$XCODEPROJ_ATTR"
           python3 Tools/prepare_nyxian_runtime.py
           ruby Tools/integrate_nyxian_runtime.rb
           grep -q 'NyxianRuntime' LiveContainer.xcodeproj/project.pbxproj
