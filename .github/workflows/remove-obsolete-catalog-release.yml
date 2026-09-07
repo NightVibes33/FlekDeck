@@ -1,0 +1,39 @@
+name: Remove obsolete catalog release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/remove-obsolete-catalog-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Delete obsolete release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_id="$(gh api repos/${{ github.repository }}/releases/tags/1.0 --jq .id 2>/dev/null || true)"
+          if [ -n "$release_id" ]; then
+            gh api --method DELETE "repos/${{ github.repository }}/releases/$release_id"
+          fi
+          git push origin :refs/tags/1.0 || true
+
+      - name: Remove this one-time workflow
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/remove-obsolete-catalog-release.yml
+          git commit -m "Remove completed catalog release cleanup [skip ci]"
+          git push origin HEAD:main
