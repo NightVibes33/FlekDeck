@@ -176,15 +176,15 @@ jobs:
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
           cd build
-          zip -qry FlekDeck-VibeContainers-core.ipa Payload
-          unzip -t FlekDeck-VibeContainers-core.ipa >/dev/null
-          shasum -a 256 FlekDeck-VibeContainers-core.ipa | tee FlekDeck-VibeContainers-core.sha256
+          zip -qry FleckDeck.ipa Payload
+          unzip -t FleckDeck.ipa >/dev/null
+          shasum -a 256 FleckDeck.ipa | tee FleckDeck.sha256
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: FlekDeck-VibeContainers-core-ipa
+          name: FleckDeck-ipa
           path: |
-            build/FlekDeck-VibeContainers-core.ipa
-            build/FlekDeck-VibeContainers-core.sha256
+            build/FleckDeck.ipa
+            build/FleckDeck.sha256
           if-no-files-found: error

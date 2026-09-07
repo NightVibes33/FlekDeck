@@ -53,7 +53,7 @@ The JIT-less menu uses VibeContainers' controls and diagnostic page. There is no
 ## Getting started
 
 1. Open [VibeContainers Fast IPA](https://github.com/NightVibes33/FlekDeck/actions/workflows/vibecontainers-fast-ipa.yml) and select a successful **main** run.
-2. Download the **FlekDeck-VibeContainers-core-ipa** artifact and extract `FlekDeck-VibeContainers-core.ipa`.
+2. Download the **FleckDeck-ipa** artifact and extract `FleckDeck.ipa`.
 3. Sign and install the IPA with your iOS signing tool. Build artifacts are **unsigned**.
 4. Open Settings and import your certificate. Files import asks for the `.p12` password; store import/refresh is shown when supported by the detected store.
 5. Confirm **“Certificate imported and verified in signing storage.”**, then run **Test JIT-Less Mode**.
