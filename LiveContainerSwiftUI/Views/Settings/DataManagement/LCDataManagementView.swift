@@ -474,7 +474,7 @@ struct LCDataManagementView : View {
             do {
                 try await sharedModel.apps.first(where: { app in
                     return app.appInfo.bundleIdentifier() == "com.tigisoftware.Filza"
-                })?.runApp(urlStr: launchURLStr)
+                })?.fdRunApp(urlStr: launchURLStr)
             } catch {
                 successInfo = error.localizedDescription
                 successShow = true

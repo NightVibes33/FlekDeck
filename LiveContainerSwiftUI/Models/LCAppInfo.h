@@ -14,11 +14,6 @@ typedef NS_ENUM(NSInteger, MultitaskSpecified){
     MultitaskSpecifiedYes = 2
 };
 
-typedef NS_ENUM(NSInteger, LCRuntimeBackend) {
-    LCRuntimeBackendVibe = 0,
-    LCRuntimeBackendNyxian = 1,
-};
-
 
 @interface LCAppInfo : NSObject {
     NSMutableDictionary* _info;
@@ -50,7 +45,6 @@ typedef NS_ENUM(NSInteger, LCRuntimeBackend) {
 @property NSDate* lastLaunched;
 @property NSDate* installationDate;
 @property NSString* remark;
-@property LCRuntimeBackend runtimeBackend;
 #if is32BitSupported
 @property bool is32bit;
 #endif

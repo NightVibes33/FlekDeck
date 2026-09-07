@@ -109,12 +109,6 @@ class LCAppModel: ObservableObject, Hashable {
             appInfo.remark = uiRemark
         }
     }
-
-    @Published var uiRuntimeBackend: LCRuntimeBackend {
-        didSet {
-            appInfo.runtimeBackend = uiRuntimeBackend
-        }
-    }
     
     @Published var uiIsMultitaskModeSpecificed : MultitaskSpecified {
         didSet {
@@ -185,7 +179,6 @@ class LCAppModel: ObservableObject, Hashable {
         self.jitLaunchScriptJs = appInfo.jitLaunchScriptJs
         self.uiSpoofSDKVersion = appInfo.spoofSDKVersion
         self.uiRemark = appInfo.remark ?? ""
-        self.uiRuntimeBackend = appInfo.runtimeBackend
 #if is32BitSupported
         self.uiIs32bit = appInfo.is32bit
 #endif
@@ -208,20 +201,6 @@ class LCAppModel: ObservableObject, Hashable {
     // You should let LCAppModel.runApp to decide whether to run in multitask mode, but you may override the multitask parameter if necessary
     func runApp(multitask: Bool? = nil, containerFolderName : String? = nil, bundleIdOverride : String? = nil, urlStr : String? = nil, forceJIT: Bool? = nil) async throws{
         if isAppRunning {
-            return
-        }
-
-        if uiRuntimeBackend == .nyxian {
-            guard let bundlePath = appInfo.bundlePath() else {
-                throw "Nyxian runtime could not resolve the application bundle."
-            }
-            await MainActor.run { isAppRunning = true }
-            defer { Task { @MainActor in self.isAppRunning = false } }
-            try await FDNyxianRuntimeBridge.shared.launchApplication(
-                atBundlePath: bundlePath,
-                bundleIdentifier: bundleIdentifier
-            )
-            appInfo.lastLaunched = Date()
             return
         }
         

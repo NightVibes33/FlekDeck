@@ -125,7 +125,7 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
         }
 
         do {
-            try await configuration.model.runApp(multitask: multitask)
+            try await configuration.model.fdRunApp(multitask: multitask)
         } catch {
             showError(error.localizedDescription)
         }

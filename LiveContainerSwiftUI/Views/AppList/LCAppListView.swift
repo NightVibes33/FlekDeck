@@ -1228,9 +1228,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         do {
             if #available(iOS 16.0, *), sharedModel.multiLCStatus != 2, parallel {
-                try await app.runApp(multitask: true)
+                try await app.fdRunApp(multitask: true)
             } else {
-                try await app.runApp(multitask: false)
+                try await app.fdRunApp(multitask: false)
             }
         } catch {
             errorInfo = error.localizedDescription
@@ -1746,7 +1746,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
             
             do {
-                try await appToLaunch.runApp(urlStr: urlToOpen.url!.absoluteString)
+                try await appToLaunch.fdRunApp(urlStr: urlToOpen.url!.absoluteString)
             } catch {
                 errorInfo = error.localizedDescription
                 errorShow = true
@@ -2253,7 +2253,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
 
         do {
-            try await appFound.runApp(multitask: nil, containerFolderName: container, urlStr: urlStr, forceJIT: forceJIT)
+            try await appFound.fdRunApp(multitask: nil, containerFolderName: container, urlStr: urlStr, forceJIT: forceJIT)
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
@@ -2493,4 +2493,3 @@ private struct OrientationLockModifier: ViewModifier {
             }
     }
 }
-

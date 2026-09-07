@@ -37,12 +37,14 @@ struct LCAppSettingsView: View {
     @State private var errorShow = false
     @State private var errorInfo = ""
     @State private var selectUnusedContainerSheetShow = false
+    @State private var runtimeBackend: FDGuestRuntime
     
     @EnvironmentObject private var sharedModel : SharedModel
     
     init(model: LCAppModel) {
         self.appInfo = model.appInfo
         self._model = ObservedObject(wrappedValue: model)
+        self._runtimeBackend = State(initialValue: FDRuntimeSelectionStore.shared.runtime(for: model))
     }
     
     var body: some View {
@@ -206,12 +208,15 @@ struct LCAppSettingsView: View {
             }
 
             Section {
-                Picker("Runtime", selection: $model.uiRuntimeBackend) {
-                    Text("VibeContainers").tag(LCRuntimeBackend.vibe)
-                    Text("Nyxian userspace").tag(LCRuntimeBackend.nyxian)
+                Picker("Runtime", selection: $runtimeBackend) {
+                    Text("VibeContainers").tag(FDGuestRuntime.vibe)
+                    Text("Nyxian userspace").tag(FDGuestRuntime.nyxian)
+                }
+                .onChange(of: runtimeBackend) { newValue in
+                    FDRuntimeSelectionStore.shared.set(newValue, for: model)
                 }
 
-                if model.uiRuntimeBackend == .nyxian {
+                if runtimeBackend == .nyxian {
                     HStack(alignment: .top) {
                         Image(systemName: FDNyxianRuntimeBridge.shared.state == .ready ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                             .foregroundStyle(FDNyxianRuntimeBridge.shared.state == .ready ? .green : .orange)

@@ -150,7 +150,7 @@ struct LCWebView: View {
         }
         
         do {
-            try await app.runApp(urlStr: url.absoluteString)
+            try await app.fdRunApp(urlStr: url.absoluteString)
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
@@ -421,4 +421,3 @@ struct WebView: UIViewRepresentable {
     
 
 }
-
