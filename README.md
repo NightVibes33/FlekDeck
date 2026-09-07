@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>FlekDeck</h1>
+  <h1>FleckDeck</h1>
   <p><strong>Your apps. Your space. Your own iOS workspace.</strong></p>
   <p>A familiar Home Screen, a built-in app library, and the VibeContainers runtime underneath.</p>
   <p>
@@ -15,12 +15,12 @@
 
 ---
 
-FlekDeck brings your apps together in a customizable workspace inside iOS. Browse your repositories, install apps, arrange your Home Screen, and switch between supported guests without leaving the shell.
+FleckDeck brings your apps together in a customizable workspace inside iOS. Browse your repositories, install apps, arrange your Home Screen, and switch between supported guests without leaving the shell.
 
-It keeps FlekDeck's own interface, store browser, installer, and springboard while using **VibeContainers' actual signing and JIT-less runtime**.
+It keeps FleckDeck's own interface, store browser, installer, and springboard while using **VibeContainers' actual signing and JIT-less runtime**.
 
 > [!NOTE]
-> FlekDeck is an app container. It does not boot another copy of iOS or emulate a virtual iPhone.
+> FleckDeck is an app container. It does not boot another copy of iOS or emulate a virtual iPhone.
 
 ## A workspace that feels familiar
 
@@ -42,7 +42,7 @@ Search installed apps and connected repositories from the same interface. Find a
 
 ### 🎨 Make it yours
 
-Customize wallpapers, Home Screen layouts, glass styles, bars, and haptic feedback. FlekDeck keeps its own visual identity and settings organization around the shared runtime.
+Customize wallpapers, Home Screen layouts, glass styles, bars, and haptic feedback. FleckDeck keeps its own visual identity and settings organization around the shared runtime.
 
 ### 🔐 Working certificate import and JIT-less setup
 
@@ -62,15 +62,15 @@ The host signing identity and imported certificate must be compatible. Importing
 
 ### Confirmed working
 
-Certificate import/storage and the JIT-less diagnostic test were **confirmed working on-device** with commit [`8ebcadb`](https://github.com/NightVibes33/FlekDeck/commit/8ebcadb2e32c3fa9c9441f3f37e9a4275424c41c). That build also passed the real-device archive, IPA packaging, artifact upload, ZIP integrity check, and SHA-256 verification.
+Certificate import/storage and the JIT-less diagnostic test were **confirmed working on-device** with main commit [`257f82b`](https://github.com/NightVibes33/FlekDeck/commit/257f82b80c8c739d97db46f31a54913b6aba0735). That build also passed the real-device archive, IPA packaging, artifact upload, ZIP integrity check, and SHA-256 verification.
 
-[View the verified build](https://github.com/NightVibes33/FlekDeck/actions/runs/34066647585)
+[View the verified build](https://github.com/NightVibes33/FlekDeck/actions/runs/34143300184)
 
 A passing diagnostic confirms the JIT-less test setup; it is not a guarantee that every guest app or multitasking scenario works.
 
 ## Under the hood
 
-| FlekDeck keeps | VibeContainers supplies |
+| FleckDeck keeps | VibeContainers supplies |
 | --- | --- |
 | Home Screen and springboard | Guest bootstrap and dyld runtime |
 | Repository browser, search, and downloads | IPA extraction and Mach-O patching |
@@ -83,12 +83,12 @@ The runtime is pinned to [VibeContainers](https://github.com/NightVibes33/VibeCo
 318d7b0380898840da81c99278b39729147f7fea
 ```
 
-This snapshot is the runtime source of truth—not current LiveContainer upstream. The workflow copies and verifies the protected core, including the pinned signing dependencies and runtime entitlements, before compiling. FlekDeck's full app is not intended to be byte-identical to VibeContainers.
+This snapshot is the runtime source of truth—not current LiveContainer upstream. The workflow copies and verifies the protected core, including the pinned signing dependencies and runtime entitlements, before compiling. FleckDeck's full app is not intended to be byte-identical to VibeContainers.
 
 <details>
 <summary><strong>Build and contributor details</strong></summary>
 
-The main build uses **Xcode 26.6**, the `LiveContainer` scheme, and a generic iOS device archive. It fetches the pinned VibeContainers and OpenSSL revisions, verifies the protected source, applies FlekDeck shell adapters, then builds and packages the IPA with a SHA-256 checksum.
+The main build uses **Xcode 26.6**, the `LiveContainer` scheme, and a generic iOS device archive. It fetches the pinned VibeContainers and OpenSSL revisions, verifies the protected source, applies FleckDeck shell adapters, then builds and packages the IPA with a SHA-256 checksum.
 
 Use [the fast workflow](.github/workflows/vibecontainers-fast-ipa.yml) for reproducible builds. It checks out the triggering commit on main or the integration branch. Older main build/patch workflows are manual-only so they cannot automatically rewrite the verified certificate flow.
 
@@ -98,13 +98,13 @@ Compatibility fixes belong in the shell or its adapters:
 - [Project and runtime API adapters](Tools/patch_vibecontainers_project_compat.py)
 - [App-list adapters](Tools/patch_vibecontainers_applist_compat.py)
 
-Keep the protected Vibe core unchanged when fixing FlekDeck integration errors. Never commit certificates, passwords, private keys, or provisioning credentials, or upload them to CI.
+Keep the protected Vibe core unchanged when fixing FleckDeck integration errors. Never commit certificates, passwords, private keys, or provisioning credentials, or upload them to CI.
 
 </details>
 
 ## Compatibility
 
-Apps differ in their frameworks, entitlements, extensions, and system-service requirements. Some guests may not launch or may have limited functionality. Offline use depends on the guest app itself. FlekDeck does not promise universal compatibility or jailbreak capabilities.
+Apps differ in their frameworks, entitlements, extensions, and system-service requirements. Some guests may not launch or may have limited functionality. Offline use depends on the guest app itself. FleckDeck does not promise universal compatibility or jailbreak capabilities.
 
 Apps inside a container may not have the same isolation as separately installed iOS apps. Use trusted apps and repositories.
 
