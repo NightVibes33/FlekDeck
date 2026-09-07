@@ -1,102 +1,85 @@
-<div align="center">
-  <img width="217" height="217" src="https://flekstore.com/img-storage/apps/1565/flekdeck.png" alt="FlekDeck icon">
-</div>
+# FlekDeck
 
-<div align="center">
-  <h1>FlekDeck</h1>
-  <p><strong>Your apps. Your space. A whole new way to use iOS.</strong></p>
-  <p>Developed by <a href="https://flekstore.com">FlekStore</a></p>
-</div>
+FlekDeck combines its own Home Screen, repository browser, installer, and multitasking interface with the signing and JIT-less runtime from [VibeContainers](https://github.com/NightVibes33/VibeContainers).
 
-FlekDeck is a powerful app environment designed to feel like a second operating system inside iOS.
+Apps run inside FlekDeck's process environment. This is an app container, not a virtual iPhone or a full iOS virtual machine.
 
-It brings together a familiar Home Screen, built-in multitasking, fast app switching, a dedicated Installer, and extensive customization in one seamless experience. Discover and install apps from your repositories, run multiple apps at the same time, personalize your workspace, and switch between apps just like you are used to on iOS.
+## Current development branch
 
-Built on [LiveContainer](https://github.com/LiveContainer/LiveContainer) and reimagined from the ground up, FlekDeck also includes dozens of compatibility and stability improvements for hundreds of apps.
+[`sync-upstream-livecontainer-jitless`](https://github.com/NightVibes33/FlekDeck/tree/sync-upstream-livecontainer-jitless)
 
-> [!NOTE]
-> FlekDeck runs apps inside its own environment. It is an app launcher, not an emulator or a virtual machine.
+The runtime reference is pinned to VibeContainers commit:
 
-## Highlights
+```text
+318d7b0380898840da81c99278b39729147f7fea
+```
 
-### A brand-new Home Screen
+This branch uses that VibeContainers snapshot as its source of truth. It does not track the current LiveContainer upstream runtime.
 
-Your apps live on a familiar paged Home Screen with free icon placement and a multitasking dock. Arrange everything around the way you work and play.
+## What stays FlekDeck
 
-### Edit mode and reordering
+- The Home Screen and springboard shell.
+- Repository browsing, app details, search, and download management.
+- The installer interface and app organization.
+- Multitasking controls and personalization.
 
-Long-press an icon to enter edit mode. Rearrange apps, move them between pages, or remove them from the grid with simple, familiar gestures.
+## What comes from VibeContainers
 
-### Reworked multitasking
+The protected core covers IPA extraction, Mach-O patching, ZSign signing, certificate and Team-ID readers, JIT-less diagnostics, TestJITLess, and guest bootstrap/dyld machinery. It also includes the pinned TweakLoader, LiveProcess, litehook, OpenSSL revision, and runtime entitlements.
 
-See everything that is running as live app cards, swipe between apps, and jump back in instantly. Close apps one by one or clear them all at once.
+The build copies the protected files from the pinned snapshot and verifies their contents before compiling. FlekDeck-specific API and storage adaptations live in the shell and compatibility scripts. The complete app is not intended to be byte-identical to VibeContainers.
 
-### Per-app audio control
+The JIT-less menu uses VibeContainers' controls and diagnostic page. Duplicate certificate controls and automatic bundled-certificate import have been removed.
 
-Adjust the volume or mute any running app independently, without interrupting audio from the others.
+## Verified status
 
-### Improved compatibility
+As of September 7, 2026, build commit [`8ebcadb`](https://github.com/NightVibes33/FlekDeck/commit/8ebcadb2e32c3fa9c9441f3f37e9a4275424c41c) has:
 
-Compatibility and stability improvements allow many apps and games that previously failed to launch—or became stuck during startup—to run properly in FlekDeck.
+- Passed the protected Vibe core parity checks.
+- Produced a successful real-device archive, packaged IPA, and uploaded artifact.
+- Passed downloaded IPA ZIP integrity and SHA-256 verification.
+- Received on-device confirmation that certificate import/storage and the JIT-less diagnostic test work.
 
-### Universal Search
+The certificate fix routes imports to the defaults domain used by Vibe's readers, verifies the saved certificate and password through those readers, and routes opened `.p12` files to certificate import.
 
-Spotlight gives you one place to search across both your installed apps and every connected repository.
+A passing JIT-less test confirms the test setup works. It does not establish that every guest app, extension, or multitasking scenario works.
 
-### A redesigned Installer
+## Download and install
 
-Explore detailed app pages with screenshots, descriptions, and useful information before you install.
+Use the [VibeContainers Fast IPA workflow](https://github.com/NightVibes33/FlekDeck/actions/workflows/vibecontainers-fast-ipa.yml) on the development branch.
 
-### Parallel downloads
+[Verified build run](https://github.com/NightVibes33/FlekDeck/actions/runs/34066647585)
 
-Download several apps at the same time. Each app displays its own progress directly on its icon and can be cancelled individually.
+1. Open a successful run and download the `FlekDeck-VibeContainers-core-ipa` artifact.
+2. Extract `FlekDeck-VibeContainers-core.ipa` and its `.sha256` file.
+3. Sign and install the IPA with your iOS signing tool. CI produces an **unsigned IPA**.
+4. Import your certificate in Settings. Files import asks for the `.p12` password; the store import/refresh control appears when the detected store supports it.
+5. Confirm the import-success message, then run **Test JIT-Less Mode**.
 
-### Personalization
+Certificate presence, certificate validity, and a passing JIT-less test are separate checks. The host's signing identity and imported certificate must be compatible; importing a certificate does not re-sign the installed host.
 
-Make FlekDeck yours with custom wallpapers, glass styles, bar shapes, Home Screen layouts, and haptic feedback options.
+Do not commit certificates, passwords, private keys, or provisioning credentials to the repository or upload them to CI.
 
-### Reworked Settings
+## Building
 
-Settings are organized into clear categories, making every option easier to find and understand.
+The fast workflow uses Xcode 26.6 and archives the `LiveContainer` scheme for a generic iOS device. It fetches the pinned VibeContainers and OpenSSL revisions, copies and verifies the protected core, applies the shell adapters, builds, and packages the IPA.
 
-### Automatic game detection
+For a reproducible build, use that workflow rather than compiling an unprepared checkout.
 
-FlekDeck automatically recognizes games and displays the appropriate compatibility warnings and rotation prompts.
+Compatibility changes belong in the FlekDeck shell or these adapters:
 
-### Offline access
+- [Shell and certificate adapters](Tools/patch_vibecontainers_shell_compat.py)
+- [Project and runtime API adapters](Tools/patch_vibecontainers_project_compat.py)
+- [App-list adapters](Tools/patch_vibecontainers_applist_compat.py)
 
-Once installed, your apps can open and run without a network connection.
-
-### iOS 27 support
-
-FlekDeck supports the latest iOS experience, including Liquid Glass materials and Dark Mode.
-
-### Built for iPad
-
-A dedicated iPad Home Screen and multitasking layout make better use of the larger display.
-
-## What you can do with FlekDeck
-
-- Keep your apps together on a customizable Home Screen.
-- Run multiple supported apps and switch between them quickly.
-- Browse connected repositories and install apps without leaving FlekDeck.
-- Track and manage multiple downloads independently.
-- Give each running app its own audio level.
-- Use installed apps even when you are offline.
-- Create a workspace that feels at home on both iPhone and iPad.
+Keep protected Vibe core files unchanged when resolving FlekDeck compiler or integration errors.
 
 ## Compatibility
 
-FlekDeck contains extensive fixes for apps and games that do not run correctly in the original LiveContainer. Because apps differ in their frameworks, entitlements, extensions, and system-service requirements, compatibility cannot be guaranteed for every app.
+Guest compatibility depends on the app's frameworks, entitlements, extensions, and system-service requirements. Offline operation also depends on the guest app itself. No universal app compatibility or jailbreak capability is claimed.
 
-## Privacy and security
+## Credits and license
 
-Apps running inside a container may not be isolated from one another in the same way as separately installed iOS apps. Only install software from developers and repositories you trust, and avoid using unknown builds with sensitive accounts or data.
+This fork builds on [VibeContainers](https://github.com/NightVibes33/VibeContainers) and the original [LiveContainer project](https://github.com/LiveContainer/LiveContainer), together with their contributors and included dependencies.
 
-## Credits
-
-FlekDeck is developed and maintained by [FlekStore](https://flekstore.com).
-
-FlekDeck is based on the open-source [LiveContainer project](https://github.com/LiveContainer/LiveContainer). We are grateful to the LiveContainer maintainers and contributors whose work made FlekDeck possible.
-
-FlekDeck is distributed under the same license as the original LiveContainer: the [GNU Affero General Public License v3.0](https://github.com/LiveContainer/LiveContainer/blob/main/LICENSE).
+See [LICENSE](LICENSE) for the GNU Affero General Public License v3.0. Dependency licenses and source notices remain in their respective files.
