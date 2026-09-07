@@ -1,4 +1,4 @@
-name: VibeContainers Fast IPA
+name: Build Unsigned IPA
 
 on:
   push:

@@ -1,6 +1,6 @@
 name: Unsigned Real Device IPA
 
-# Legacy build: main uses vibecontainers-fast-ipa.yml.
+# Legacy build: main uses build-unsigned-ipa.yml.
 on:
   workflow_dispatch:
 

@@ -3,11 +3,11 @@
   <p><strong>Your apps. Your space. Your own iOS workspace.</strong></p>
   <p>A familiar Home Screen, a built-in app library, and the VibeContainers runtime underneath.</p>
   <p>
-    <a href="https://github.com/NightVibes33/FlekDeck/actions/workflows/vibecontainers-fast-ipa.yml"><img src="https://github.com/NightVibes33/FlekDeck/actions/workflows/vibecontainers-fast-ipa.yml/badge.svg?branch=main" alt="Main IPA build"></a>
+    <a href="https://github.com/NightVibes33/FlekDeck/actions/workflows/build-unsigned-ipa.yml"><img src="https://github.com/NightVibes33/FlekDeck/actions/workflows/build-unsigned-ipa.yml/badge.svg?branch=main" alt="Build Unsigned IPA"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL v3 license"></a>
   </p>
   <p>
-    <a href="https://github.com/NightVibes33/FlekDeck/actions/workflows/vibecontainers-fast-ipa.yml">Download a build</a>
+    <a href="https://github.com/NightVibes33/FlekDeck/actions/workflows/build-unsigned-ipa.yml">Download a build</a>
     · <a href="#getting-started">Getting started</a>
     · <a href="#under-the-hood">Under the hood</a>
   </p>
@@ -52,7 +52,7 @@ The JIT-less menu uses VibeContainers' controls and diagnostic page. There is no
 
 ## Getting started
 
-1. Open [VibeContainers Fast IPA](https://github.com/NightVibes33/FlekDeck/actions/workflows/vibecontainers-fast-ipa.yml) and select a successful **main** run.
+1. Open [Build Unsigned IPA](https://github.com/NightVibes33/FlekDeck/actions/workflows/build-unsigned-ipa.yml) and select a successful **main** run.
 2. Download the **FleckDeck-ipa** artifact and extract `FleckDeck.ipa`.
 3. Sign and install the IPA with your iOS signing tool. Build artifacts are **unsigned**.
 4. Open Settings and import your certificate. Files import asks for the `.p12` password; store import/refresh is shown when supported by the detected store.
@@ -90,7 +90,7 @@ This snapshot is the runtime source of truth—not current LiveContainer upstrea
 
 The main build uses **Xcode 26.6**, the `LiveContainer` scheme, and a generic iOS device archive. It fetches the pinned VibeContainers and OpenSSL revisions, verifies the protected source, applies FleckDeck shell adapters, then builds and packages the IPA with a SHA-256 checksum.
 
-Use [the fast workflow](.github/workflows/vibecontainers-fast-ipa.yml) for reproducible builds. It checks out the triggering commit on main or the integration branch. Older main build/patch workflows are manual-only so they cannot automatically rewrite the verified certificate flow.
+Use [Build Unsigned IPA](.github/workflows/build-unsigned-ipa.yml) for reproducible builds. It checks out the triggering commit on main or the integration branch. Older main build/patch workflows are manual-only so they cannot automatically rewrite the verified certificate flow.
 
 Compatibility fixes belong in the shell or its adapters:
 
