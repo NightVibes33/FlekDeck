@@ -3,11 +3,12 @@
   <p><strong>Your apps. Your space. Your own iOS workspace.</strong></p>
   <p>A familiar Home Screen, a built-in app library, and the VibeContainers runtime underneath.</p>
   <p>
-    <a href="https://github.com/NightVibes33/FlekDeck/actions/workflows/build-unsigned-ipa.yml"><img src="https://github.com/NightVibes33/FlekDeck/actions/workflows/build-unsigned-ipa.yml/badge.svg?branch=main" alt="Build Unsigned IPA"></a>
+    <a href="https://github.com/NightVibes33/FlekDeck/releases/tag/FlexDeck"><img src="https://img.shields.io/badge/download-current%20release-brightgreen" alt="Download current release"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL v3 license"></a>
   </p>
   <p>
-    <a href="https://github.com/NightVibes33/FlekDeck/actions/workflows/build-unsigned-ipa.yml">Download a build</a>
+    <a href="https://github.com/NightVibes33/FlekDeck/releases/download/FlexDeck/FlekDeck.ipa">Download IPA</a>
+    · <a href="https://github.com/NightVibes33/FlekDeck/releases/tag/FlexDeck">Current release</a>
     · <a href="#getting-started">Getting started</a>
     · <a href="#under-the-hood">Under the hood</a>
   </p>
@@ -52,11 +53,10 @@ The JIT-less menu uses VibeContainers' controls and diagnostic page. There is no
 
 ## Getting started
 
-1. Open [Build Unsigned IPA](https://github.com/NightVibes33/FlekDeck/actions/workflows/build-unsigned-ipa.yml) and select a successful **main** run.
-2. Download the **FleckDeck-ipa** artifact and extract `FleckDeck.ipa`.
-3. Sign and install the IPA with your iOS signing tool. Build artifacts are **unsigned**.
-4. Open Settings and import your certificate. Files import asks for the `.p12` password; store import/refresh is shown when supported by the detected store.
-5. Confirm **“Certificate imported and verified in signing storage.”**, then run **Test JIT-Less Mode**.
+1. Download [`FlekDeck.ipa`](https://github.com/NightVibes33/FlekDeck/releases/download/FlexDeck/FlekDeck.ipa) from the [current working release](https://github.com/NightVibes33/FlekDeck/releases/tag/FlexDeck).
+2. Sign and install the IPA with your iOS signing tool. The release IPA is **unsigned**.
+3. Open Settings and import your certificate. Files import asks for the `.p12` password; store import/refresh is shown when supported by the detected store.
+4. Confirm **“Certificate imported and verified in signing storage.”**, then run **Test JIT-Less Mode**.
 
 The host signing identity and imported certificate must be compatible. Importing a certificate does not re-sign the installed host app.
 
@@ -64,7 +64,7 @@ The host signing identity and imported certificate must be compatible. Importing
 
 Certificate import/storage and the JIT-less diagnostic test were **confirmed working on-device** with main commit [`257f82b`](https://github.com/NightVibes33/FlekDeck/commit/257f82b80c8c739d97db46f31a54913b6aba0735). That build also passed the real-device archive, IPA packaging, artifact upload, ZIP integrity check, and SHA-256 verification.
 
-[View the verified build](https://github.com/NightVibes33/FlekDeck/actions/runs/34143300184)
+[Download the confirmed working release](https://github.com/NightVibes33/FlekDeck/releases/tag/FlexDeck)
 
 A passing diagnostic confirms the JIT-less test setup; it is not a guarantee that every guest app or multitasking scenario works.
 
