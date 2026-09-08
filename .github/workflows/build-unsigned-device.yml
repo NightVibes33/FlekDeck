@@ -1,8 +1,7 @@
 name: Unsigned Real Device IPA
 
-# Legacy build: main uses build-unsigned-ipa.yml.
-# Keep a narrowly scoped push trigger so changes to this workflow can validate
-# the legacy build path without running it for ordinary source pushes.
+# This is the standalone unsigned-device artifact build.
+# Changes to this workflow self-validate it; ordinary source pushes do not run it.
 on:
   push:
     branches:
@@ -52,8 +51,6 @@ jobs:
           settings = Path('LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift')
           s = settings.read_text(encoding='utf-8')
 
-          # Repair the partial formattedSubscriptionDate removal produced by the
-          # previous cleanup revision. This is intentionally exact and idempotent.
           s, repaired = re.subn(
               r'\n        if let dateOnly = dateString\.split\(separator: " "\)\.first \{\n'
               r'            return String\(dateOnly\)\n'
@@ -145,9 +142,6 @@ jobs:
               if n != 1:
                   raise SystemExit('Could not remove subscription lifecycle hooks')
 
-          # Certificate ownership fix: never silently import FlekSt0re's embedded
-          # identity. Keep the LiveContainer/SideStore PKCS#12 picker as the user-
-          # controlled path, and allow it to replace existing persisted cert state.
           s = s.replace(
               '                if sharedModel.multiLCStatus != 2 && !certificateDataFound {\n',
               '                if sharedModel.multiLCStatus != 2 {\n',
@@ -168,11 +162,9 @@ jobs:
               '        .onAppear {\n'
           )
 
-          # The file importer must stay SideStore/LiveContainer-compatible PKCS#12.
           if '.betterFileImporter(isPresented: $certificateImportFileAlert.show, types: [.p12]' not in s:
               raise SystemExit('PKCS#12 (.p12) certificate picker is missing')
 
-          # Remove the separate Settings beta warning card as well as the overlay.
           s, beta_cards = re.subn(
               r'\n                if isBetaiOS \{\n'
               r'                    Section \{.*?'
@@ -189,8 +181,6 @@ jobs:
 
           settings.write_text(s, encoding='utf-8')
 
-          # The always-on beta badge is managed separately by LCTabView. Force it
-          # hidden regardless of stale LC app-group preferences from older builds.
           tab = Path('LiveContainerSwiftUI/Views/LCTabView.swift')
           t = tab.read_text(encoding='utf-8')
           t = t.replace(
@@ -267,7 +257,9 @@ jobs:
 
       - name: Build unsigned real-device archive
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          mkdir -p build
+          set +e
           xcodebuild clean archive \
             -project LiveContainer.xcodeproj \
             -scheme LiveContainer \
@@ -277,7 +269,14 @@ jobs:
             CODE_SIGN_IDENTITY='' \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            | xcpretty
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- compiler/linker errors ---'
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -250 || true
+            exit "$status"
+          fi
 
       - name: Validate device product and package IPA
         run: |
