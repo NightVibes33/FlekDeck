@@ -13,6 +13,7 @@ on:
       - 'Tools/patch_direct_multitask_host_bridge.py'
       - 'LiveContainerSwiftUI/Utilities/LCUtils.h'
       - 'MultitaskSupport/AppSceneViewController.m'
+      - 'MultitaskSupport/PiPManager.m'
 
 jobs:
   build:
