@@ -6,7 +6,9 @@ if "extern mach_port_t bootstrap_port" not in s:s=s.replace(m,m+h,1)
 i="@implementation LCUtils\n"
 c=r'''
 extern mach_port_t bootstrap_port;
-extern kern_return_t bootstrap_look_up(mach_port_t, const char *, mach_port_t *);\nextern int sandbox_check(pid_t, const char *, int, ...);\n#define FLEK_SANDBOX_FILTER_GLOBAL_NAME 2
+extern kern_return_t bootstrap_look_up(mach_port_t, const char *, mach_port_t *);
+extern int sandbox_check(pid_t, const char *, int, ...);
+#define FLEK_SANDBOX_FILTER_GLOBAL_NAME 2
 extern void *SecTaskCreateFromSelf(CFAllocatorRef);
 extern CFTypeRef SecTaskCopyValueForEntitlement(void *, CFStringRef, CFErrorRef *);
 static BOOL FlekPVMatch(const char*r){if(!r)return NO;NSString*v=[[NSString stringWithUTF8String:r]lowercaseString];return[v containsString:@"preview"]||[v containsString:@"xojit"]||[v containsString:@"appmanager"]||[v containsString:@"grantexecute"]||[v containsString:@"copyurl"]||[v containsString:@"agentdescriptor"]||[v containsString:@"jitload"];}
