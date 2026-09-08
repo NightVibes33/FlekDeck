@@ -21,59 +21,8 @@ jobs:
       - name: Wire copy button into experimental diagnostic build
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          script = Path('Tools/patch_diagnostic_copy.py')
-          script.write_text(r'''from pathlib import Path
-
-path = Path("LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift")
-s = path.read_text()
-old = ''' + '"""' + r'''            .alert("lc.common.error".loc, isPresented: $errorShow){
-            } message: {
-                Text(errorInfo)
-            }
-''' + '"""' + r'''
-new = ''' + '"""' + r'''            .alert("lc.common.error".loc, isPresented: $errorShow) {
-                Button("lc.common.copy".loc) {
-                    UIPasteboard.general.string = errorInfo
-                }
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorInfo)
-            }
-''' + '"""' + r'''
-marker = "UIPasteboard.general.string = errorInfo"
-if marker not in s:
-    if old not in s:
-        raise SystemExit("Unable to locate JIT-less error alert for Copy-button patch")
-    s = s.replace(old, new, 1)
-path.write_text(s)
-print("Applied JIT-less diagnostic Copy button")
-''')
-
-          wf = Path('.github/workflows/build-unsigned-ipa.yml')
-          s = wf.read_text()
-          if 'python3 Tools/patch_diagnostic_copy.py' not in s:
-              s = s.replace(
-                  '          python3 Tools/patch_oopjit_bad_query.py\n',
-                  '          python3 Tools/patch_oopjit_bad_query.py\n          python3 Tools/patch_diagnostic_copy.py\n',
-                  1,
-              )
-          if 'python3 -m py_compile Tools/patch_diagnostic_copy.py' not in s:
-              s = s.replace(
-                  '          python3 -m py_compile Tools/patch_oopjit_bad_query.py\n',
-                  '          python3 -m py_compile Tools/patch_oopjit_bad_query.py\n          python3 -m py_compile Tools/patch_diagnostic_copy.py\n',
-                  1,
-              )
-          old_assert = '          test "$(git hash-object LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift")"\n'
-          new_assert = "          grep -q 'UIPasteboard.general.string = errorInfo' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift\n"
-          if old_assert in s:
-              s = s.replace(old_assert, new_assert, 1)
-          elif new_assert not in s:
-              raise SystemExit('Unable to update diagnostic parity assertion')
-          wf.write_text(s)
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpjb3B5X3NjcmlwdCA9IHIiIiJmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCnBhdGggPSBQYXRoKCJMaXZlQ29udGFpbmVyU3dpZnRVSS9WaWV3cy9TZXR0aW5ncy9MQ0pJVExlc3NEaWFnbm9zZVZpZXcuc3dpZnQiKQpzID0gcGF0aC5yZWFkX3RleHQoKQpvbGQgPSAiIiIgICAgICAgICAgICAuYWxlcnQoImxjLmNvbW1vbi5lcnJvciIubG9jLCBpc1ByZXNlbnRlZDogJGVycm9yU2hvdyl7CiAgICAgICAgICAgIH0gbWVzc2FnZTogewogICAgICAgICAgICAgICAgVGV4dChlcnJvckluZm8pCiAgICAgICAgICAgIH0KIiIiCm5ldyA9ICIiIiAgICAgICAgICAgIC5hbGVydCgibGMuY29tbW9uLmVycm9yIi5sb2MsIGlzUHJlc2VudGVkOiAkZXJyb3JTaG93KSB7CiAgICAgICAgICAgICAgICBCdXR0b24oImxjLmNvbW1vbi5jb3B5Ii5sb2MpIHsKICAgICAgICAgICAgICAgICAgICBVSVBhc3RlYm9hcmQuZ2VuZXJhbC5zdHJpbmcgPSBlcnJvckluZm8KICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIEJ1dHRvbigiT0siLCByb2xlOiAuY2FuY2VsKSB7fQogICAgICAgICAgICB9IG1lc3NhZ2U6IHsKICAgICAgICAgICAgICAgIFRleHQoZXJyb3JJbmZvKQogICAgICAgICAgICB9CiIiIgptYXJrZXIgPSAiVUlQYXN0ZWJvYXJkLmdlbmVyYWwuc3RyaW5nID0gZXJyb3JJbmZvIgppZiBtYXJrZXIgbm90IGluIHM6CiAgICBpZiBvbGQgbm90IGluIHM6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgiVW5hYmxlIHRvIGxvY2F0ZSBKSVQtbGVzcyBlcnJvciBhbGVydCBmb3IgQ29weS1idXR0b24gcGF0Y2giKQogICAgcyA9IHMucmVwbGFjZShvbGQsIG5ldywgMSkKcGF0aC53cml0ZV90ZXh0KHMpCnByaW50KCJBcHBsaWVkIEpJVC1sZXNzIGRpYWdub3N0aWMgQ29weSBidXR0b24iKQoiIiIKClBhdGgoIlRvb2xzL3BhdGNoX2RpYWdub3N0aWNfY29weS5weSIpLndyaXRlX3RleHQoY29weV9zY3JpcHQpCgp3ZiA9IFBhdGgoIi5naXRodWIvd29ya2Zsb3dzL2J1aWxkLXVuc2lnbmVkLWlwYS55bWwiKQpzID0gd2YucmVhZF90ZXh0KCkKCmlmICJweXRob24zIFRvb2xzL3BhdGNoX2RpYWdub3N0aWNfY29weS5weSIgbm90IGluIHM6CiAgICBzID0gcy5yZXBsYWNlKAogICAgICAgICIgICAgICAgICAgcHl0aG9uMyBUb29scy9wYXRjaF9vb3BqaXRfYmFkX3F1ZXJ5LnB5XG4iLAogICAgICAgICIgICAgICAgICAgcHl0aG9uMyBUb29scy9wYXRjaF9vb3BqaXRfYmFkX3F1ZXJ5LnB5XG4gICAgICAgICAgcHl0aG9uMyBUb29scy9wYXRjaF9kaWFnbm9zdGljX2NvcHkucHlcbiIsCiAgICAgICAgMSwKICAgICkKaWYgInB5dGhvbjMgLW0gcHlfY29tcGlsZSBUb29scy9wYXRjaF9kaWFnbm9zdGljX2NvcHkucHkiIG5vdCBpbiBzOgogICAgcyA9IHMucmVwbGFjZSgKICAgICAgICAiICAgICAgICAgIHB5dGhvbjMgLW0gcHlfY29tcGlsZSBUb29scy9wYXRjaF9vb3BqaXRfYmFkX3F1ZXJ5LnB5XG4iLAogICAgICAgICIgICAgICAgICAgcHl0aG9uMyAtbSBweV9jb21waWxlIFRvb2xzL3BhdGNoX29vcGppdF9iYWRfcXVlcnkucHlcbiAgICAgICAgICBweXRob24zIC1tIHB5X2NvbXBpbGUgVG9vbHMvcGF0Y2hfZGlhZ25vc3RpY19jb3B5LnB5XG4iLAogICAgICAgIDEsCiAgICApCgpvbGRfYXNzZXJ0ID0gJyAgICAgICAgICB0ZXN0ICIkKGdpdCBoYXNoLW9iamVjdCBMaXZlQ29udGFpbmVyU3dpZnRVSS9WaWV3cy9TZXR0aW5ncy9MQ0pJVExlc3NEaWFnbm9zZVZpZXcuc3dpZnQpIiA9ICIkKGdpdCAtQyAvdG1wL3ZpYmUgcmV2LXBhcnNlICIkVklCRV9TSEE6TGl2ZUNvbnRhaW5lci0zLjguMC9MaXZlQ29udGFpbmVyU3dpZnRVSS9WaWV3cy9TZXR0aW5ncy9MQ0pJVExlc3NEaWFnbm9zZVZpZXcuc3dpZnQiKSJcbicKbmV3X2Fzc2VydCA9ICIgICAgICAgICAgZ3JlcCAtcSAnVUlQYXN0ZWJvYXJkLmdlbmVyYWwuc3RyaW5nID0gZXJyb3JJbmZvJyBMaXZlQ29udGFpbmVyU3dpZnRVSS9WaWV3cy9TZXR0aW5ncy9MQ0pJVExlc3NEaWFnbm9zZVZpZXcuc3dpZnRcbiIKaWYgb2xkX2Fzc2VydCBpbiBzOgogICAgcyA9IHMucmVwbGFjZShvbGRfYXNzZXJ0LCBuZXdfYXNzZXJ0LCAxKQplbGlmIG5ld19hc3NlcnQgbm90IGluIHM6CiAgICByYWlzZSBTeXN0ZW1FeGl0KCJVbmFibGUgdG8gdXBkYXRlIGRpYWdub3N0aWMgcGFyaXR5IGFzc2VydGlvbiIpCgp3Zi53cml0ZV90ZXh0KHMpCg==' | base64 --decode > /tmp/patch-copy.py
+          python3 /tmp/patch-copy.py
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
