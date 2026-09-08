@@ -1,2 +1,2 @@
-trigger: 2026-09-08T16:26:00-05:00
-reason: run build-unsigned-ipa only; do not update release
+trigger: 2026-09-08T12:30:00-05:00
+reason: validate LiveContainer-style parallel bookmarks and current StikDebug PID routing on temp branch only
