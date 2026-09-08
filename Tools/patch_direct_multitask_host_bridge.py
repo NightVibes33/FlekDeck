@@ -64,7 +64,7 @@ elif "static void LCFlekClassicProbeBypass" not in s:
 
 s = s.replace('bypass_os_variant_has_internal_content(^{', 'LCFlekClassicProbeBypass(^{')
 
-if 'bypass_os_variant_has_internal_content(^{'' in s:
+if 'bypass_os_variant_has_internal_content(^{ ' in s or 'bypass_os_variant_has_internal_content(^{\n' in s:
     raise SystemExit("Unresolved classic-mode bypass call remains")
 if "static void LCFlekClassicProbeBypass" not in s:
     raise SystemExit("Local classic-mode bypass helper missing")
