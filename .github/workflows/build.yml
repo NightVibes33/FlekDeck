@@ -1,8 +1,14 @@
 name: iOS Device Unsigned IPA
 
 # Legacy build: main uses build-unsigned-ipa.yml.
+# Temp multitask branch self-validates this exact workflow when it is edited.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - experiment/multitask-control-jit-diagnosis
+    paths:
+      - '.github/workflows/build.yml'
 
 jobs:
   build:
