@@ -1,4 +1,5 @@
 from pathlib import Path
+import plistlib
 
 # Keep FlekDeck's SideStore integration rebrand-aware without changing the
 # LiveContainer/VibeContainers JIT-less execution semantics.
@@ -58,4 +59,225 @@ if "LCUtils.validateJITLessSetup" not in diag:
 if "LCSharedUtils.launchToGuestApp" not in model:
     raise SystemExit("LCAppModel no longer contains the upstream JIT-less guest launch path")
 
-print("Applied signer-compatible SideStore integration and removed the false development-certificate launch alert")
+# ---------------------------------------------------------------------------
+# TEMP EXPERIMENT: PreviewShell-style OOPJIT executable mapping.
+#
+# This branch deliberately asks for the Apple-private loader entitlement that
+# PreviewShell carries. A normal provisioning profile may strip/reject it; that
+# is part of the experiment. The runtime test below reads the *effective*
+# entitlement and only reports success after a freshly ZSign-signed dylib is
+# copied to /private/var/OOPJit/previews and actually dlopen()ed.
+# ---------------------------------------------------------------------------
+OOPJIT_ENTITLEMENT = "com.apple.private.oop-jit.loader"
+OOPJIT_LOADER = "previews"
+
+def add_oopjit_loader(path_string: str) -> None:
+    path = Path(path_string)
+    if not path.exists():
+        raise SystemExit(f"OOPJIT entitlement target missing: {path}")
+    with path.open("rb") as f:
+        data = plistlib.load(f)
+    data[OOPJIT_ENTITLEMENT] = OOPJIT_LOADER
+    with path.open("wb") as f:
+        plistlib.dump(data, f, fmt=plistlib.FMT_XML, sort_keys=False)
+
+# Host entitlement is what ESign/SideStore will see. Patch both LiveProcess
+# entitlement variants too so the experiment remains valid if launch routes
+# through the extension.
+for entitlement_path in (
+    "entitlements.xml",
+    "LiveProcess/LiveProcess.entitlements",
+    "LiveProcess/LiveProcessRelease.entitlements",
+):
+    add_oopjit_loader(entitlement_path)
+
+utils_path = Path("LiveContainerSwiftUI/Utilities/LCUtils.m")
+utils = utils_path.read_text()
+start_marker = '+ (void)validateJITLessSetupWithCompletionHandler:(void (^)(BOOL success, NSError *error))completionHandler {'
+end_marker = '+ (NSURL *)archiveIPAWithBundleName:'
+start = utils.find(start_marker)
+end = utils.find(end_marker, start)
+if start == -1 or end == -1:
+    raise SystemExit("Unable to locate validateJITLessSetup for OOPJIT experiment")
+
+experimental_validate = r'''+ (void)validateJITLessSetupWithCompletionHandler:(void (^)(BOOL success, NSError *error))completionHandler {
+    // EXPERIMENT: prove the effective PreviewShell-style entitlement and then
+    // perform a real executable load from /private/var/OOPJit/previews.
+    NSString *path = NSTemporaryDirectory();
+    [NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *tmpLibPath = [path stringByAppendingPathComponent:@"TestJITLess.dylib"];
+    [NSFileManager.defaultManager removeItemAtPath:tmpLibPath error:nil];
+    NSError *copySourceError = nil;
+    [NSFileManager.defaultManager copyItemAtPath:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/TestJITLess.dylib"]
+                                           toPath:tmpLibPath
+                                            error:&copySourceError];
+    if (copySourceError) {
+        completionHandler(NO, copySourceError);
+        return;
+    }
+
+    dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+    __block bool signSuccess = false;
+    __block NSError *signError = nil;
+    [LCUtils signFilesWithZSignWithURLs:@[[NSURL fileURLWithPath:tmpLibPath]]
+                      completionHandler:^(BOOL success, NSError *_Nullable error) {
+        signSuccess = success;
+        signError = error;
+        dispatch_semaphore_signal(sema);
+    }];
+    dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!signSuccess) {
+            completionHandler(NO, signError);
+            [NSFileManager.defaultManager removeItemAtPath:tmpLibPath error:nil];
+            return;
+        }
+        if (!checkCodeSignature([tmpLibPath UTF8String])) {
+            completionHandler(NO, [NSError errorWithDomain:NSBundle.mainBundle.bundleIdentifier
+                                                       code:2
+                                                   userInfo:@{NSLocalizedDescriptionKey: @"OOPJIT probe: signed TestJITLess.dylib failed code-signature validation."}]);
+            [NSFileManager.defaultManager removeItemAtPath:tmpLibPath error:nil];
+            return;
+        }
+
+        SecTaskRef task = SecTaskCreateFromSelf(NULL);
+        CFErrorRef entitlementError = NULL;
+        CFTypeRef loaderValue = task ? SecTaskCopyValueForEntitlement(task, CFSTR("com.apple.private.oop-jit.loader"), &entitlementError) : NULL;
+        NSString *loader = nil;
+        if (loaderValue && CFGetTypeID(loaderValue) == CFStringGetTypeID()) {
+            loader = [(__bridge NSString *)loaderValue copy];
+        }
+        if (loaderValue) CFRelease(loaderValue);
+        if (entitlementError) CFRelease(entitlementError);
+        if (task) CFRelease(task);
+
+        if (![loader isEqualToString:@"previews"]) {
+            NSString *message = [NSString stringWithFormat:@"OOPJIT probe stopped: effective com.apple.private.oop-jit.loader is %@, expected previews. The signing/provisioning path stripped or did not grant the private entitlement.", loader ?: @"<missing>"];
+            completionHandler(NO, [NSError errorWithDomain:NSBundle.mainBundle.bundleIdentifier
+                                                       code:1001
+                                                   userInfo:@{NSLocalizedDescriptionKey: message}]);
+            [NSFileManager.defaultManager removeItemAtPath:tmpLibPath error:nil];
+            return;
+        }
+
+        const char *oopRoot = "/private/var/OOPJit";
+        const char *oopDir = "/private/var/OOPJit/previews";
+        errno = 0;
+        int rootResult = mkdir(oopRoot, 0755);
+        int rootErrno = errno;
+        errno = 0;
+        int dirResult = mkdir(oopDir, 0700);
+        int dirErrno = errno;
+
+        NSString *oopPath = [NSString stringWithFormat:@"/private/var/OOPJit/previews/FlekDeck-TestJITLess-%d.dylib", getpid()];
+        [NSFileManager.defaultManager removeItemAtPath:oopPath error:nil];
+        NSError *oopCopyError = nil;
+        BOOL copied = [NSFileManager.defaultManager copyItemAtPath:tmpLibPath toPath:oopPath error:&oopCopyError];
+        if (!copied) {
+            NSString *message = [NSString stringWithFormat:@"OOPJIT entitlement is effective, but staging failed. mkdir root=%d errno=%d, mkdir previews=%d errno=%d, copy=%@", rootResult, rootErrno, dirResult, dirErrno, oopCopyError.localizedDescription ?: @"unknown error"];
+            completionHandler(NO, [NSError errorWithDomain:NSBundle.mainBundle.bundleIdentifier
+                                                       code:1002
+                                                   userInfo:@{NSLocalizedDescriptionKey: message}]);
+            [NSFileManager.defaultManager removeItemAtPath:tmpLibPath error:nil];
+            return;
+        }
+
+        unsetenv("LC_JITLESS_TEST_LOADED");
+        dlerror();
+        void *handle = dlopen(oopPath.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
+        const char *rawDlError = dlerror();
+        NSString *dlError = rawDlError ? [NSString stringWithUTF8String:rawDlError] : nil;
+        BOOL constructorRan = getenv("LC_JITLESS_TEST_LOADED") && strcmp(getenv("LC_JITLESS_TEST_LOADED"), "1") == 0;
+
+        if (handle) dlclose(handle);
+        [NSFileManager.defaultManager removeItemAtPath:oopPath error:nil];
+        [NSFileManager.defaultManager removeItemAtPath:tmpLibPath error:nil];
+
+        if (!handle || !constructorRan) {
+            NSString *message = [NSString stringWithFormat:@"OOPJIT staging succeeded and loader entitlement is effective, but executable dlopen failed. handle=%p constructor=%@ error=%@", handle, constructorRan ? @"YES" : @"NO", dlError ?: @"<none>"];
+            completionHandler(NO, [NSError errorWithDomain:NSBundle.mainBundle.bundleIdentifier
+                                                       code:1003
+                                                   userInfo:@{NSLocalizedDescriptionKey: message}]);
+            return;
+        }
+
+        NSLog(@"[FlekDeck OOPJIT] PASS: effective loader=previews and TestJITLess executed from /private/var/OOPJit/previews");
+        completionHandler(YES, nil);
+    });
+}
+
+'''
+utils = utils[:start] + experimental_validate + utils[end:]
+if "OOPJIT probe stopped" not in utils or "/private/var/OOPJit/previews" not in utils:
+    raise SystemExit("OOPJIT LCUtils runtime probe patch did not apply")
+utils_path.write_text(utils)
+
+dyld_path = Path("LiveContainer/Tweaks/Dyld.m")
+dyld = dyld_path.read_text()
+old_mmap = r'''void* jitless_hook_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
+    void *map = __mmap(addr, len, prot, flags, fd, offset);
+    // only handle mapping __TEXT segment from fd outside of permitted path
+    if (map != MAP_FAILED || !(prot & PROT_EXEC) || fd < 0) return map;
+    
+    // to get around `file system sandbox blocked mmap()` we temporarily move it to permitted path
+    char filePath[PATH_MAX];
+    if (fcntl(fd, F_GETPATH, filePath) != 0) return map;
+    char newTmpPath[PATH_MAX];
+    sprintf(newTmpPath, "%s/Documents/%p.dylib", getenv("LP_HOME_PATH"), addr);
+    rename(filePath, newTmpPath);
+    map = __mmap(addr, len, prot, flags, fd, offset);
+    rename(newTmpPath, filePath);
+    
+    return map;
+}
+'''
+new_mmap = r'''void* jitless_hook_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
+    void *map = __mmap(addr, len, prot, flags, fd, offset);
+    // only handle mapping __TEXT segment from fd outside of permitted path
+    if (map != MAP_FAILED || !(prot & PROT_EXEC) || fd < 0) return map;
+
+    char filePath[PATH_MAX];
+    if (fcntl(fd, F_GETPATH, filePath) != 0) return map;
+
+    // TEMP EXPERIMENT: try the PreviewShell OOPJIT executable-map area first.
+    // If the private loader entitlement caused the OS to issue the paired
+    // sandbox capability, moving the same vnode under this path should let the
+    // original fd pass file-map-executable. Always restore the original path.
+    (void)mkdir("/private/var/OOPJit", 0755);
+    (void)mkdir("/private/var/OOPJit/previews", 0700);
+    char oopTmpPath[PATH_MAX];
+    snprintf(oopTmpPath, sizeof(oopTmpPath), "/private/var/OOPJit/previews/flekdeck-%d-%p.dylib", getpid(), addr);
+    if (rename(filePath, oopTmpPath) == 0) {
+        void *oopMap = __mmap(addr, len, prot, flags, fd, offset);
+        int oopMapErrno = errno;
+        (void)rename(oopTmpPath, filePath);
+        if (oopMap != MAP_FAILED) {
+            NSLog(@"[FlekDeck OOPJIT] executable mmap succeeded via /private/var/OOPJit/previews");
+            return oopMap;
+        }
+        errno = oopMapErrno;
+    }
+
+    // Preserve upstream LiveContainer's private-container workaround as the
+    // fallback so this experiment cannot regress development-signed behavior.
+    const char *lpHome = getenv("LP_HOME_PATH");
+    if (!lpHome) return map;
+    char newTmpPath[PATH_MAX];
+    snprintf(newTmpPath, sizeof(newTmpPath), "%s/Documents/%p.dylib", lpHome, addr);
+    if (rename(filePath, newTmpPath) == 0) {
+        map = __mmap(addr, len, prot, flags, fd, offset);
+        (void)rename(newTmpPath, filePath);
+    }
+
+    return map;
+}
+'''
+if old_mmap not in dyld:
+    raise SystemExit("Unable to locate upstream jitless_hook_mmap for OOPJIT experiment")
+dyld = dyld.replace(old_mmap, new_mmap, 1)
+if "[FlekDeck OOPJIT] executable mmap succeeded" not in dyld:
+    raise SystemExit("OOPJIT dyld mmap fallback patch did not apply")
+dyld_path.write_text(dyld)
+
+print("Applied signer-compatible SideStore integration plus TEMP PreviewShell OOPJIT runtime experiment")

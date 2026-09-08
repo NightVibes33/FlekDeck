@@ -1,0 +1,25 @@
+name: Dispatch OOPJIT experiment build
+
+on:
+  push:
+    branches:
+      - experiment/oopjit-runtime-probe
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch signer-compatible IPA workflow on this branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run build-unsigned-ipa.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${GITHUB_REF_NAME}"
+          echo "Dispatched build-unsigned-ipa.yml for ${GITHUB_REF_NAME}@${GITHUB_SHA}"
