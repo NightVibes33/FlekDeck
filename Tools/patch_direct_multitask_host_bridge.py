@@ -90,9 +90,12 @@ end_anchor = '''
 
 // The delegate is passed in rather than read from self:'''
 
-start = s.find(start_anchor)
+init_start = s.find('- (instancetype)initWithBundleId:')
+if init_start < 0:
+    raise SystemExit("AppSceneViewController initializer anchor not found")
+start = s.find(start_anchor, init_start)
 if start < 0:
-    raise SystemExit("AppSceneViewController Documents handoff anchor not found")
+    raise SystemExit("AppSceneViewController Documents handoff anchor not found inside initializer")
 end = s.find(end_anchor, start)
 if end < 0:
     raise SystemExit("AppSceneViewController init tail anchor not found")
@@ -167,7 +170,6 @@ for needle in required:
         raise SystemExit(f"Missing upstream bookmark handoff marker: {needle}")
 
 # The build-time source must no longer enter the app-group staging launch path.
-init_start = s.find('- (instancetype)initWithBundleId:')
 init_end = s.find('// The delegate is passed in rather than read from self:', init_start)
 init_body = s[init_start:init_end]
 if 'LCStageAppToAppGroup(' in init_body:
