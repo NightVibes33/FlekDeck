@@ -20,23 +20,7 @@ jobs:
       - name: Make upstream XPC cleanup ARC-safe
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('Tools/patch_diagnostic_copy.py')
-          s = p.read_text()
-          old = '        xpc_release(identifier);\n'
-          new = '''#if !OS_OBJECT_USE_OBJC
-        xpc_release(identifier);
-#endif
-'''
-          count = s.count(old)
-          if count == 0:
-              print('ARC-safe XPC cleanup already applied')
-          else:
-              s = s.replace(old, new)
-              p.write_text(s)
-              print(f'Converted {count} xpc_release call sites to ARC-safe conditionals')
-          PY
+          python3 -c "from pathlib import Path; p=Path('Tools/patch_diagnostic_copy.py'); s=p.read_text(); old='        xpc_release(identifier);\\n'; new='#if !OS_OBJECT_USE_OBJC\\n        xpc_release(identifier);\\n#endif\\n'; n=s.count(old); print(f'Converting {n} xpc_release call sites'); p.write_text(s.replace(old,new))"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Tools/patch_diagnostic_copy.py
