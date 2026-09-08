@@ -1,4 +1,4 @@
-name: Build SideStore-ready IPA
+name: Build signer-compatible IPA
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - main
       - sync-upstream-livecontainer-jitless
       - fix/free-sidestore-development-signing
+      - fix/livecontainer-jitless-parity
   workflow_dispatch:
 
 permissions:
@@ -154,8 +155,20 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
           grep -q 'com.fs.flekdeck' SideStoreSupport/SideStoreHooks.m
           grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
-          grep -q 'FlekHostHasDevelopmentSigning' LiveContainerSwiftUI/Models/LCAppModel.swift
-          grep -q 'FlekDeck host does not have get-task-allow' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+
+          # Match LiveContainer/VibeContainers JIT-less semantics: get-task-allow
+          # may be reported as a warning, but it must never become a Flek-only
+          # hard gate before the real signed-library test or guest launch.
+          ! grep -q 'FlekHostHasDevelopmentSigning' LiveContainerSwiftUI/Models/LCAppModel.swift
+          ! grep -q 'FlekHostDevelopmentSigningError' LiveContainerSwiftUI/Models/LCAppModel.swift
+          ! grep -q 'FlekDeck host does not have get-task-allow' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          grep -q 'LCUtils.validateJITLessSetup' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          grep -q 'LCSharedUtils.launchToGuestApp' LiveContainerSwiftUI/Models/LCAppModel.swift
+
+          # No Flek compatibility layer is allowed to rewrite these two runtime
+          # files. They stay byte-for-byte identical to the pinned Vibe core.
+          test "$(git hash-object LiveContainerSwiftUI/Models/LCAppModel.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Models/LCAppModel.swift")"
+          test "$(git hash-object LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift")"
 
       - name: Build unsigned real-device archive
         run: |
@@ -185,7 +198,7 @@ jobs:
           set -euo pipefail
           brew install ldid
 
-      - name: Package SideStore-ready IPA
+      - name: Package signer-compatible IPA
         run: |
           set -euo pipefail
           APP="$(find "$PWD/build/FlekDeck-VibeCore.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
@@ -195,16 +208,15 @@ jobs:
           test -n "$EXECUTABLE"
           test "$BUNDLE_ID" = "com.fs.flekdeck"
 
-          # SideStore uses this metadata to provision the shared app group for a
-          # Personal Team install/refresh.
+          # Preserve SideStore metadata for Personal Team provisioning. Other
+          # signers such as ESign may replace these entitlements/profile values.
           /usr/libexec/PlistBuddy -c 'Delete :ALTAppGroups' "$APP/Info.plist" >/dev/null 2>&1 || true
           /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups array' "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups:0 string group.com.SideStore.SideStore' "$APP/Info.plist"
 
-          # The Xcode archive is deliberately unsigned. Give the host executable
-          # an ad-hoc entitlement declaration before creating the distribution
-          # IPA. SideStore can then discover/request get-task-allow when it
-          # re-signs FlekDeck with a free Apple ID's development profile.
+          # The archive is deliberately unsigned. Add an ad-hoc entitlement
+          # declaration so SideStore can discover/request its normal permissions.
+          # Third-party signers are free to replace this with their own profile.
           cp entitlements.xml build/FlekDeck-SideStore.entitlements
           python3 - <<'PY'
           from pathlib import Path
