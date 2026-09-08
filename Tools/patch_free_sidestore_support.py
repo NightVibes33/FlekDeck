@@ -58,4 +58,12 @@ if "LCUtils.validateJITLessSetup" not in diag:
 if "LCSharedUtils.launchToGuestApp" not in model:
     raise SystemExit("LCAppModel no longer contains the upstream JIT-less guest launch path")
 
+# Temp-branch-only probe. Main does not contain this file, so the production
+# compatibility layer remains unchanged there. The experiment script runs after
+# the pinned Vibe core has been copied, which is the only point where its signer
+# and Library Validation code can be instrumented meaningfully.
+experiment = Path("Tools/patch_multitask_jit_diagnosis.py")
+if experiment.exists():
+    exec(compile(experiment.read_text(), str(experiment), "exec"), {})
+
 print("Applied signer-compatible SideStore integration and removed the false development-certificate launch alert")
