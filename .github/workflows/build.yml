@@ -11,9 +11,12 @@ on:
     paths:
       - '.github/workflows/build.yml'
       - 'Tools/patch_direct_multitask_host_bridge.py'
+      - 'Tools/patch_stikdebug_pid_verification.py'
+      - 'Tools/patch_guest_native_pip_bridge.py'
       - 'LiveContainerSwiftUI/Utilities/LCUtils.h'
       - 'MultitaskSupport/AppSceneViewController.m'
       - 'MultitaskSupport/PiPManager.m'
+      - 'LiveContainer/LCBootstrap.m'
 
 jobs:
   build:
@@ -34,8 +37,15 @@ jobs:
         run: |
           set -euo pipefail
           python3 Tools/patch_direct_multitask_host_bridge.py
+          python3 Tools/patch_stikdebug_pid_verification.py
+          python3 Tools/patch_guest_native_pip_bridge.py
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
+          grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
+          grep -q 'com.flekdeck.nativepip.start' LiveContainer/LCBootstrap.m
+          grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m
+          grep -q 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
 
       - name: Build real-device unsigned archive
         run: |
