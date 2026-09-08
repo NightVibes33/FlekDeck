@@ -20,12 +20,12 @@ jobs:
       - name: Make upstream XPC cleanup ARC-safe
         run: |
           set -euo pipefail
-          python3 -c "from pathlib import Path; p=Path('Tools/patch_diagnostic_copy.py'); s=p.read_text(); old='        xpc_release(identifier);\\n'; new='#if !OS_OBJECT_USE_OBJC\\n        xpc_release(identifier);\\n#endif\\n'; n=s.count(old); print(f'Converting {n} xpc_release call sites'); p.write_text(s.replace(old,new))"
+          python3 -c "from pathlib import Path; p=Path('Tools/patch_diagnostic_copy.py'); s=p.read_text(); pairs=[('        xpc_release(identifier);\\n','#if !OS_OBJECT_USE_OBJC\\n        xpc_release(identifier);\\n#endif\\n'),('    xpc_release(identifier);\\n','#if !OS_OBJECT_USE_OBJC\\n    xpc_release(identifier);\\n#endif\\n')]; n=0; [(globals().update()) for _ in []]; new=s; exec('for old,repl in pairs:\n c=new.count(old)\n n+=c\n new=new.replace(old,repl)',globals(),locals()); print(f'Converting {n} remaining xpc_release call sites'); p.write_text(new)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Tools/patch_diagnostic_copy.py
           if git diff --cached --quiet; then
             exit 0
           fi
-          git commit -m "Make bad_query XPC cleanup ARC-safe"
+          git commit -m "Finish ARC-safe bad_query XPC cleanup"
           git push origin HEAD:experiment/oopjit-runtime-probe
