@@ -20,9 +20,26 @@ if 'com.fs.flekdeck' not in s or 'flekdeck-side-source.json' not in s:
     raise SystemExit("SideStore rebrand patch did not apply")
 p.write_text(s)
 
-# Upstream LiveContainer intentionally treats get-task-allow as a warning and
-# lets the real signed-library validation / guest launch decide whether the
-# current signer works. Do not reintroduce FlekDeck-only hard gates here.
+# Upstream exposes get-task-allow as diagnostic information, but a successful
+# signed-library JIT-less test proves that the current signer actually works.
+# FlekDeck must not surface the old fatal-sounding startup alert for an ESign /
+# distribution-signed host after the real JIT-less path is usable. Keep the
+# entitlement visible in the diagnostics screen; only remove the misleading
+# lifecycle alert.
+tab_path = Path("LiveContainerSwiftUI/Views/LCTabView.swift")
+tab = tab_path.read_text()
+old_check = '''    func checkGetTaskAllow() {\n        let task = SecTaskCreateFromSelf(nil)\n        guard let value = SecTaskCopyValueForEntitlement(task, "get-task-allow" as CFString, nil), (value.takeRetainedValue() as? NSNumber)?.boolValue ?? false else {\n            errorInfo = "lc.settings.notDevCert".loc\n            errorShow = true\n            return\n        }\n    }\n'''
+new_check = '''    func checkGetTaskAllow() {\n        // Informational only. `get-task-allow` is not an authoritative JIT-less\n        // capability test for every third-party signer. The signed-library\n        // diagnostic and real guest launch are the source of truth.\n        let task = SecTaskCreateFromSelf(nil)\n        let allowed = SecTaskCopyValueForEntitlement(task, "get-task-allow" as CFString, nil)\n            .map { ($0.takeRetainedValue() as? NSNumber)?.boolValue ?? false } ?? false\n        if !allowed {\n            print("FlekDeck: get-task-allow is false; continuing with signer-based JIT-less validation")\n        }\n    }\n'''
+if old_check in tab:
+    tab = tab.replace(old_check, new_check, 1)
+elif 'errorInfo = "lc.settings.notDevCert".loc' in tab:
+    raise SystemExit("Unexpected get-task-allow alert shape in LCTabView")
+
+if 'errorInfo = "lc.settings.notDevCert".loc' in tab:
+    raise SystemExit("Fatal development-certificate alert still present in LCTabView")
+tab_path.write_text(tab)
+
+# Preserve the actual Vibe/LiveContainer JIT-less signer and guest-launch path.
 model = Path("LiveContainerSwiftUI/Models/LCAppModel.swift").read_text()
 diag = Path("LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift").read_text()
 
@@ -41,4 +58,4 @@ if "LCUtils.validateJITLessSetup" not in diag:
 if "LCSharedUtils.launchToGuestApp" not in model:
     raise SystemExit("LCAppModel no longer contains the upstream JIT-less guest launch path")
 
-print("Applied signer-compatible SideStore integration while preserving LiveContainer JIT-less behavior")
+print("Applied signer-compatible SideStore integration and removed the false development-certificate launch alert")
