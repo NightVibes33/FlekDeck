@@ -58,6 +58,13 @@ if "LCUtils.validateJITLessSetup" not in diag:
 if "LCSharedUtils.launchToGuestApp" not in model:
     raise SystemExit("LCAppModel no longer contains the upstream JIT-less guest launch path")
 
+# Temp-branch-only LiveContainer/StikDebug alignment. This keeps normal single
+# launch untouched while restoring Duy LiveContainer's private-app bookmark
+# handoff for LiveProcess and using StikDebug's current PID-targeted URL scheme.
+livecontainer_alignment = Path("Tools/patch_livecontainer_multitask_stikdebug.py")
+if livecontainer_alignment.exists():
+    exec(compile(livecontainer_alignment.read_text(), str(livecontainer_alignment), "exec"), {})
+
 # Temp-branch-only probes. Main does not contain these files, so the production
 # compatibility layer remains unchanged there. They run after the pinned Vibe
 # core has been copied, which is the only point where its signer/Library
