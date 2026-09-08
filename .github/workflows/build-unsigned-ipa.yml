@@ -138,6 +138,7 @@ jobs:
           python3 Tools/patch_vibecontainers_shell_compat.py
           python3 Tools/patch_vibecontainers_project_compat.py
           python3 Tools/patch_free_sidestore_support.py
+          python3 Tools/patch_oopjit_bad_query.py
 
       - name: Select Xcode 26.6
         uses: maxim-lobanov/setup-xcode@v1
@@ -148,6 +149,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m py_compile Tools/patch_free_sidestore_support.py
+          python3 -m py_compile Tools/patch_oopjit_bad_query.py
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
@@ -155,6 +157,9 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
           grep -q 'com.fs.flekdeck' SideStoreSupport/SideStoreHooks.m
           grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
+          grep -q 'FlekBadQueryAcquirePath' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -q 'bad_query rootHandle' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -q 'guest executable mmap PASS via OOPJit/bad_query' LiveContainer/Tweaks/Dyld.m
 
           # Match LiveContainer/VibeContainers JIT-less semantics: get-task-allow
           # may be reported as a warning, but it must never become a Flek-only
@@ -241,6 +246,7 @@ jobs:
           plutil -lint "$PWD/build/FlekDeck-host-entitlements.plist"
           test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$PWD/build/FlekDeck-host-entitlements.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$PWD/build/FlekDeck-host-entitlements.plist")" = "AAAAA11111.com.fs.flekdeck"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.private.oop-jit.loader' "$PWD/build/FlekDeck-host-entitlements.plist")" = "previews"
           test "$(/usr/libexec/PlistBuddy -c 'Print :ALTAppGroups:0' "$APP/Info.plist")" = "group.com.SideStore.SideStore"
 
           rm -rf build/Payload
