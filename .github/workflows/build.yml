@@ -2,7 +2,7 @@ name: iOS Device Unsigned IPA
 
 # Legacy build: main uses build-unsigned-ipa.yml.
 # Temp multitask branch self-validates this exact workflow and its direct-build
-# compatibility bridge without triggering the other IPA workflows.
+# compatibility patches without triggering the other IPA workflows.
 on:
   workflow_dispatch:
   push:
@@ -10,7 +10,7 @@ on:
       - experiment/multitask-control-jit-diagnosis
     paths:
       - '.github/workflows/build.yml'
-      - 'MultitaskSupport/MultitaskDockManager+VibeCompat.swift'
+      - 'Tools/patch_direct_multitask_host_bridge.py'
       - 'LiveContainerSwiftUI/Utilities/LCUtils.h'
 
 jobs:
@@ -27,6 +27,13 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "26.6"
+
+      - name: Apply direct-build multitask compatibility
+        run: |
+          set -euo pipefail
+          python3 Tools/patch_direct_multitask_host_bridge.py
+          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
+          grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
 
       - name: Build real-device unsigned archive
         run: |
