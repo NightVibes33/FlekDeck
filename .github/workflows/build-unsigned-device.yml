@@ -1,7 +1,14 @@
 name: Unsigned Real Device IPA
 
 # Legacy build: main uses build-unsigned-ipa.yml.
+# Keep a narrowly scoped push trigger so changes to this workflow can validate
+# the legacy build path without running it for ordinary source pushes.
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-unsigned-device.yml'
   workflow_dispatch:
 
 permissions:
