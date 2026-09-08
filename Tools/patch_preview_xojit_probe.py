@@ -1,10 +1,12 @@
 from pathlib import Path
 p=Path("LiveContainerSwiftUI/Utilities/LCUtils.m");s=p.read_text();m="@import Security;\n"
-h="""#include <mach-o/dyld.h>\n#include <servers/bootstrap.h>\n#include <objc/runtime.h>\n#include <sandbox.h>\n"""
+h="""#include <mach-o/dyld.h>\n#include <mach/mach.h>\n#include <objc/runtime.h>\n#include <sandbox.h>\n"""
 if m not in s:raise SystemExit("import marker missing")
-if "servers/bootstrap.h" not in s:s=s.replace(m,m+h,1)
+if "extern mach_port_t bootstrap_port" not in s:s=s.replace(m,m+h,1)
 i="@implementation LCUtils\n"
 c=r'''
+extern mach_port_t bootstrap_port;
+extern kern_return_t bootstrap_look_up(mach_port_t, const char *, mach_port_t *);
 extern void *SecTaskCreateFromSelf(CFAllocatorRef);
 extern CFTypeRef SecTaskCopyValueForEntitlement(void *, CFStringRef, CFErrorRef *);
 static BOOL FlekPVMatch(const char*r){if(!r)return NO;NSString*v=[[NSString stringWithUTF8String:r]lowercaseString];return[v containsString:@"preview"]||[v containsString:@"xojit"]||[v containsString:@"appmanager"]||[v containsString:@"grantexecute"]||[v containsString:@"copyurl"]||[v containsString:@"agentdescriptor"]||[v containsString:@"jitload"];}
