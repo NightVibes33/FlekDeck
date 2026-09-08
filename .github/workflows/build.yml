@@ -27,7 +27,9 @@ jobs:
 
       - name: Build real-device unsigned archive
         run: |
-          set -o pipefail
+          set -uo pipefail
+          mkdir -p build
+          set +e
           xcodebuild clean archive \
             -project "LiveContainer.xcodeproj" \
             -scheme "LiveContainer" \
@@ -37,7 +39,14 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            | xcpretty
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- compiler/linker errors ---'
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -250 || true
+            exit "$status"
+          fi
 
       - name: Validate device build
         run: |
