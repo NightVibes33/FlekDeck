@@ -43,7 +43,7 @@ jobs:
           grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
           grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
-          grep -q 'com.flekdeck.nativepip.start' LiveContainer/LCBootstrap.m
+          grep -q 'com.flekdeck.nativepip.%@.%d' LiveContainer/LCBootstrap.m
           grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m
           grep -q 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
 
