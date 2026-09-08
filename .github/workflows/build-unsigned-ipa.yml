@@ -1,12 +1,15 @@
-name: Build Unsigned IPA
+name: Build SideStore-ready IPA
 
 on:
   push:
-    branches: [main, sync-upstream-livecontainer-jitless]
+    branches:
+      - main
+      - sync-upstream-livecontainer-jitless
+      - fix/free-sidestore-development-signing
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -128,22 +131,31 @@ jobs:
           test "$(git -C OpenSSL rev-parse HEAD)" = "$VIBE_OPENSSL"
           echo "Exact Vibe signing/JIT parity proven."
 
-      - name: Apply Flek shell compatibility only
+      - name: Apply Flek compatibility layers
         run: |
           set -euo pipefail
           python3 Tools/patch_vibecontainers_shell_compat.py
           python3 Tools/patch_vibecontainers_project_compat.py
+          python3 Tools/patch_free_sidestore_support.py
 
       - name: Select Xcode 26.6
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26.6'
 
-      - name: Parse compatibility boundary
+      - name: Parse and verify compatibility boundary
         run: |
           set -euo pipefail
+          python3 -m py_compile Tools/patch_free_sidestore_support.py
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          grep -q 'com.fs.flekdeck' SideStoreSupport/SideStoreHooks.m
+          grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
+          grep -q 'FlekHostHasDevelopmentSigning' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -q 'FlekDeck host does not have get-task-allow' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
 
       - name: Build unsigned real-device archive
         run: |
@@ -168,23 +180,82 @@ jobs:
             exit "$status"
           fi
 
-      - name: Package IPA
+      - name: Install ldid
+        run: |
+          set -euo pipefail
+          brew install ldid
+
+      - name: Package SideStore-ready IPA
         run: |
           set -euo pipefail
           APP="$(find "$PWD/build/FlekDeck-VibeCore.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$APP"
+          EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$APP/Info.plist")"
+          BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")"
+          test -n "$EXECUTABLE"
+          test "$BUNDLE_ID" = "com.fs.flekdeck"
+
+          # SideStore uses this metadata to provision the shared app group for a
+          # Personal Team install/refresh.
+          /usr/libexec/PlistBuddy -c 'Delete :ALTAppGroups' "$APP/Info.plist" >/dev/null 2>&1 || true
+          /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups array' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups:0 string group.com.SideStore.SideStore' "$APP/Info.plist"
+
+          # The Xcode archive is deliberately unsigned. Give the host executable
+          # an ad-hoc entitlement declaration before creating the distribution
+          # IPA. SideStore can then discover/request get-task-allow when it
+          # re-signs FlekDeck with a free Apple ID's development profile.
+          cp entitlements.xml build/FlekDeck-SideStore.entitlements
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build/FlekDeck-SideStore.entitlements')
+          s = p.read_text()
+          replacements = {
+              '$(DEVELOPMENT_TEAM)': 'AAAAA11111',
+              '$(PRODUCT_BUNDLE_IDENTIFIER)': 'com.fs.flekdeck',
+              '$(APP_GROUP_SIDESTORE)': 'group.com.SideStore.SideStore',
+              '$(APP_GROUP_ALTSTORE)': 'group.com.rileytestut.AltStore',
+              '$(AppIdentifierPrefix)': 'AAAAA11111.',
+          }
+          for old, new in replacements.items():
+              s = s.replace(old, new)
+          if '$(' in s:
+              raise SystemExit('unresolved entitlement build variable remains')
+          p.write_text(s)
+          PY
+          plutil -lint build/FlekDeck-SideStore.entitlements
+          ldid -S"$PWD/build/FlekDeck-SideStore.entitlements" "$APP/$EXECUTABLE"
+          ldid -e "$APP/$EXECUTABLE" > "$PWD/build/FlekDeck-host-entitlements.plist"
+          plutil -lint "$PWD/build/FlekDeck-host-entitlements.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$PWD/build/FlekDeck-host-entitlements.plist")" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$PWD/build/FlekDeck-host-entitlements.plist")" = "AAAAA11111.com.fs.flekdeck"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ALTAppGroups:0' "$APP/Info.plist")" = "group.com.SideStore.SideStore"
+
+          rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
           cd build
-          zip -qry FleckDeck.ipa Payload
-          unzip -t FleckDeck.ipa >/dev/null
-          shasum -a 256 FleckDeck.ipa | tee FleckDeck.sha256
+          zip -qry FlekDeck.ipa Payload
+          unzip -t FlekDeck.ipa >/dev/null
+          shasum -a 256 FlekDeck.ipa | tee FlekDeck.sha256
+          ls -lh FlekDeck.ipa FlekDeck.sha256 FlekDeck-host-entitlements.plist
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: FleckDeck-ipa
+          name: FlekDeck-ipa
           path: |
-            build/FleckDeck.ipa
-            build/FleckDeck.sha256
+            build/FlekDeck.ipa
+            build/FlekDeck.sha256
+            build/FlekDeck-host-entitlements.plist
           if-no-files-found: error
+
+      - name: Update current release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: FlexDeck
+          overwrite_files: true
+          files: |
+            build/FlekDeck.ipa
+            build/FlekDeck.sha256
