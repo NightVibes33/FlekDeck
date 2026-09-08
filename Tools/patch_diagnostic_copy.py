@@ -98,7 +98,9 @@ BAD_QUERY_REPLACEMENT = r'''static int64_t FlekBadQueryAcquirePathEx(const char 
         ? "../../../../../../../..%s"
         : "../../../../../../../../..%s";
     if (asprintf(&part, traversal, path) == -1 || !part) {
+#if !OS_OBJECT_USE_OBJC
         xpc_release(identifier);
+#endif
         queryFree(query);
         dlclose(mgr);
         return -5;
@@ -109,7 +111,9 @@ BAD_QUERY_REPLACEMENT = r'''static int64_t FlekBadQueryAcquirePathEx(const char 
     void *result = queryGetSingleResult(query);
     if (!result) {
         free(part);
+#if !OS_OBJECT_USE_OBJC
         xpc_release(identifier);
+#endif
         queryFree(query);
         dlclose(mgr);
         return -3; // containermanager traversal produced no result
@@ -118,7 +122,9 @@ BAD_QUERY_REPLACEMENT = r'''static int64_t FlekBadQueryAcquirePathEx(const char 
     char *token = copySandboxToken(result);
     if (!token) {
         free(part);
+#if !OS_OBJECT_USE_OBJC
         xpc_release(identifier);
+#endif
         queryFree(query);
         dlclose(mgr);
         return -4; // kernel/service refused to issue a sandbox extension
