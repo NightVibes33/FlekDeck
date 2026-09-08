@@ -58,6 +58,20 @@ jobs:
             exit "$status"
           fi
 
+      - name: Normalize unsigned archive
+        run: |
+          set -euo pipefail
+          APP="build/FlekDeck.xcarchive/Products/Applications/FlekDeck.app"
+          test -d "$APP"
+          echo "Removing residual signing material from unsigned archive:"
+          find "$APP" \( -type d -name '_CodeSignature' -o -type f -name 'embedded.mobileprovision' \) -print || true
+          find "$APP" -type d -name '_CodeSignature' -prune -exec rm -rf {} +
+          find "$APP" -type f -name 'embedded.mobileprovision' -delete
+          if find "$APP" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit | grep -q .; then
+            echo "Residual signing material remains after normalization"
+            exit 1
+          fi
+
       - name: Validate device build
         run: |
           set -euo pipefail
@@ -69,7 +83,7 @@ jobs:
           file "$APP/$EXECUTABLE"
           xcrun vtool -show-build "$APP/$EXECUTABLE" | tee build/device-build.txt
           grep -Eiq 'platform[[:space:]]+(IOS|2)' build/device-build.txt
-          if find "$APP" -name '_CodeSignature' -o -name 'embedded.mobileprovision' | grep -q .; then
+          if find "$APP" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit | grep -q .; then
             echo "Unexpected signing material found"
             exit 1
           fi
