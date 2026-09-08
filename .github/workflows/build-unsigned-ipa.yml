@@ -140,6 +140,7 @@ jobs:
           python3 Tools/patch_free_sidestore_support.py
           python3 Tools/patch_oopjit_bad_query.py
           python3 Tools/patch_diagnostic_copy.py
+          python3 Tools/patch_preview_xojit_probe.py
 
       - name: Select Xcode 26.6
         uses: maxim-lobanov/setup-xcode@v1
@@ -152,6 +153,7 @@ jobs:
           python3 -m py_compile Tools/patch_free_sidestore_support.py
           python3 -m py_compile Tools/patch_oopjit_bad_query.py
           python3 -m py_compile Tools/patch_diagnostic_copy.py
+          python3 -m py_compile Tools/patch_preview_xojit_probe.py
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
@@ -162,6 +164,7 @@ jobs:
           grep -q 'FlekBadQueryAcquirePath' LiveContainerSwiftUI/Utilities/LCUtils.m
           grep -q 'bad_query rootHandle' LiveContainerSwiftUI/Utilities/LCUtils.m
           grep -q 'guest executable mmap PASS via OOPJit/bad_query' LiveContainer/Tweaks/Dyld.m
+          grep -q 'FlekRunPreviewXOJITProbe' LiveContainerSwiftUI/Utilities/LCUtils.m
 
           # Match LiveContainer/VibeContainers JIT-less semantics: get-task-allow
           # may be reported as a warning, but it must never become a Flek-only
