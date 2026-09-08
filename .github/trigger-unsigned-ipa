@@ -1,2 +1,2 @@
-trigger: 2026-09-08T12:30:00-05:00
-reason: validate LiveContainer-style parallel bookmarks and current StikDebug PID routing on temp branch only
+trigger: 2026-09-08T13:20:00-05:00
+reason: run only build-unsigned-ipa.yml for multitask LiveContainer/StikDebug temp-branch validation
