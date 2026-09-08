@@ -21,12 +21,8 @@ if 'com.fs.flekdeck' not in s or 'flekdeck-side-source.json' not in s:
     raise SystemExit("SideStore rebrand patch did not apply")
 p.write_text(s)
 
-# Upstream exposes get-task-allow as diagnostic information, but a successful
-# signed-library JIT-less test proves that the current signer actually works.
-# FlekDeck must not surface the old fatal-sounding startup alert for an ESign /
-# distribution-signed host after the real JIT-less path is usable. Keep the
-# entitlement visible in the diagnostics screen; only remove the misleading
-# lifecycle alert.
+# Keep get-task-allow informational. The real signed-library probe and guest
+# launch are the source of truth for this experiment.
 tab_path = Path("LiveContainerSwiftUI/Views/LCTabView.swift")
 tab = tab_path.read_text()
 old_check = '''    func checkGetTaskAllow() {\n        let task = SecTaskCreateFromSelf(nil)\n        guard let value = SecTaskCopyValueForEntitlement(task, "get-task-allow" as CFString, nil), (value.takeRetainedValue() as? NSNumber)?.boolValue ?? false else {\n            errorInfo = "lc.settings.notDevCert".loc\n            errorShow = true\n            return\n        }\n    }\n'''
@@ -35,7 +31,6 @@ if old_check in tab:
     tab = tab.replace(old_check, new_check, 1)
 elif 'errorInfo = "lc.settings.notDevCert".loc' in tab:
     raise SystemExit("Unexpected get-task-allow alert shape in LCTabView")
-
 if 'errorInfo = "lc.settings.notDevCert".loc' in tab:
     raise SystemExit("Fatal development-certificate alert still present in LCTabView")
 tab_path.write_text(tab)
@@ -43,17 +38,11 @@ tab_path.write_text(tab)
 # Preserve the actual Vibe/LiveContainer JIT-less signer and guest-launch path.
 model = Path("LiveContainerSwiftUI/Models/LCAppModel.swift").read_text()
 diag = Path("LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift").read_text()
-
-for forbidden in (
-    "FlekHostHasDevelopmentSigning",
-    "FlekHostDevelopmentSigningError",
-):
+for forbidden in ("FlekHostHasDevelopmentSigning", "FlekHostDevelopmentSigningError"):
     if forbidden in model:
         raise SystemExit(f"Unexpected FlekDeck JIT-less hard gate in LCAppModel: {forbidden}")
-
 if "FlekDeck host does not have get-task-allow" in diag:
     raise SystemExit("Unexpected FlekDeck get-task-allow hard gate in JIT-less diagnostics")
-
 if "LCUtils.validateJITLessSetup" not in diag:
     raise SystemExit("JIT-less diagnostic no longer performs the real signed-library validation")
 if "LCSharedUtils.launchToGuestApp" not in model:
@@ -61,12 +50,6 @@ if "LCSharedUtils.launchToGuestApp" not in model:
 
 # ---------------------------------------------------------------------------
 # TEMP EXPERIMENT: PreviewShell-style OOPJIT executable mapping.
-#
-# This branch deliberately asks for the Apple-private loader entitlement that
-# PreviewShell carries. A normal provisioning profile may strip/reject it; that
-# is part of the experiment. The runtime test below reads the *effective*
-# entitlement and only reports success after a freshly ZSign-signed dylib is
-# copied to /private/var/OOPJit/previews and actually dlopen()ed.
 # ---------------------------------------------------------------------------
 OOPJIT_ENTITLEMENT = "com.apple.private.oop-jit.loader"
 OOPJIT_LOADER = "previews"
@@ -81,9 +64,6 @@ def add_oopjit_loader(path_string: str) -> None:
     with path.open("wb") as f:
         plistlib.dump(data, f, fmt=plistlib.FMT_XML, sort_keys=False)
 
-# Host entitlement is what ESign/SideStore will see. Patch both LiveProcess
-# entitlement variants too so the experiment remains valid if launch routes
-# through the extension.
 for entitlement_path in (
     "entitlements.xml",
     "LiveProcess/LiveProcess.entitlements",
@@ -101,6 +81,11 @@ if start == -1 or end == -1:
     raise SystemExit("Unable to locate validateJITLessSetup for OOPJIT experiment")
 
 experimental_validate = r'''+ (void)validateJITLessSetupWithCompletionHandler:(void (^)(BOOL success, NSError *error))completionHandler {
+    // Security.framework does not publicly expose SecTask's concrete typedef,
+    // while LiveContainer already uses these private entry points as void*.
+    extern void *SecTaskCreateFromSelf(CFAllocatorRef allocator);
+    extern CFTypeRef SecTaskCopyValueForEntitlement(void *task, CFStringRef key, CFErrorRef *error);
+
     // EXPERIMENT: prove the effective PreviewShell-style entitlement and then
     // perform a real executable load from /private/var/OOPJit/previews.
     NSString *path = NSTemporaryDirectory();
@@ -141,7 +126,7 @@ experimental_validate = r'''+ (void)validateJITLessSetupWithCompletionHandler:(v
             return;
         }
 
-        SecTaskRef task = SecTaskCreateFromSelf(NULL);
+        void *task = SecTaskCreateFromSelf(NULL);
         CFErrorRef entitlementError = NULL;
         CFTypeRef loaderValue = task ? SecTaskCopyValueForEntitlement(task, CFSTR("com.apple.private.oop-jit.loader"), &entitlementError) : NULL;
         NSString *loader = nil;
@@ -150,7 +135,7 @@ experimental_validate = r'''+ (void)validateJITLessSetupWithCompletionHandler:(v
         }
         if (loaderValue) CFRelease(loaderValue);
         if (entitlementError) CFRelease(entitlementError);
-        if (task) CFRelease(task);
+        if (task) CFRelease((CFTypeRef)task);
 
         if (![loader isEqualToString:@"previews"]) {
             NSString *message = [NSString stringWithFormat:@"OOPJIT probe stopped: effective com.apple.private.oop-jit.loader is %@, expected previews. The signing/provisioning path stripped or did not grant the private entitlement.", loader ?: @"<missing>"];
@@ -234,16 +219,12 @@ old_mmap = r'''void* jitless_hook_mmap(void *addr, size_t len, int prot, int fla
 '''
 new_mmap = r'''void* jitless_hook_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
     void *map = __mmap(addr, len, prot, flags, fd, offset);
-    // only handle mapping __TEXT segment from fd outside of permitted path
     if (map != MAP_FAILED || !(prot & PROT_EXEC) || fd < 0) return map;
 
     char filePath[PATH_MAX];
     if (fcntl(fd, F_GETPATH, filePath) != 0) return map;
 
     // TEMP EXPERIMENT: try the PreviewShell OOPJIT executable-map area first.
-    // If the private loader entitlement caused the OS to issue the paired
-    // sandbox capability, moving the same vnode under this path should let the
-    // original fd pass file-map-executable. Always restore the original path.
     (void)mkdir("/private/var/OOPJit", 0755);
     (void)mkdir("/private/var/OOPJit/previews", 0700);
     char oopTmpPath[PATH_MAX];
@@ -259,8 +240,7 @@ new_mmap = r'''void* jitless_hook_mmap(void *addr, size_t len, int prot, int fla
         errno = oopMapErrno;
     }
 
-    // Preserve upstream LiveContainer's private-container workaround as the
-    // fallback so this experiment cannot regress development-signed behavior.
+    // Preserve upstream LiveContainer's private-container workaround.
     const char *lpHome = getenv("LP_HOME_PATH");
     if (!lpHome) return map;
     char newTmpPath[PATH_MAX];
@@ -269,7 +249,6 @@ new_mmap = r'''void* jitless_hook_mmap(void *addr, size_t len, int prot, int fla
         map = __mmap(addr, len, prot, flags, fd, offset);
         (void)rename(newTmpPath, filePath);
     }
-
     return map;
 }
 '''
