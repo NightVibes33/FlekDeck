@@ -7,6 +7,7 @@ on:
       - sync-upstream-livecontainer-jitless
       - fix/free-sidestore-development-signing
       - fix/livecontainer-jitless-parity
+      - fix/accurate-jitless-host-capability
   workflow_dispatch:
 
 permissions:
@@ -156,18 +157,21 @@ jobs:
           grep -q 'com.fs.flekdeck' SideStoreSupport/SideStoreHooks.m
           grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
 
-          # Match LiveContainer/VibeContainers JIT-less semantics: get-task-allow
-          # may be reported as a warning, but it must never become a Flek-only
-          # hard gate before the real signed-library test or guest launch.
-          ! grep -q 'FlekHostHasDevelopmentSigning' LiveContainerSwiftUI/Models/LCAppModel.swift
-          ! grep -q 'FlekHostDevelopmentSigningError' LiveContainerSwiftUI/Models/LCAppModel.swift
-          ! grep -q 'FlekDeck host does not have get-task-allow' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          # The imported certificate signing test alone is not enough: iOS needs
+          # the installed host to have get-task-allow for JIT-less executable
+          # mmap from Documents. Verify the capability check is wired into both
+          # the diagnostic helper and only the non-JIT launch path.
+          grep -q 'hostAllowsJITLessExecution' LiveContainerSwiftUI/Utilities/LCUtils.h
+          grep -q 'hostAllowsJITLessExecution' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -q 'FlekDeckJITLessHostCapability' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -q 'flekWillUseJIT' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -q 'LCUtils.hostAllowsJITLessExecution' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -q 'LCUtils.validateJITLessSetup' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
           grep -q 'LCSharedUtils.launchToGuestApp' LiveContainerSwiftUI/Models/LCAppModel.swift
 
-          # No Flek compatibility layer is allowed to rewrite these two runtime
-          # files. They stay byte-for-byte identical to the pinned Vibe core.
-          test "$(git hash-object LiveContainerSwiftUI/Models/LCAppModel.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Models/LCAppModel.swift")"
+          # The diagnostic UI itself stays upstream; LCUtils now makes its result
+          # authoritative. The rest of the guest launch implementation remains
+          # Vibe core after the small pre-launch host capability gate.
           test "$(git hash-object LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift")"
 
       - name: Build unsigned real-device archive
