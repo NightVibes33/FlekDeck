@@ -1,0 +1,86 @@
+name: Add diagnostic copy button
+
+on:
+  push:
+    branches:
+      - experiment/oopjit-runtime-probe
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/oopjit-runtime-probe
+          fetch-depth: 0
+
+      - name: Wire copy button into experimental diagnostic build
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          script = Path('Tools/patch_diagnostic_copy.py')
+          script.write_text(r'''from pathlib import Path
+
+path = Path("LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift")
+s = path.read_text()
+old = ''' + '"""' + r'''            .alert("lc.common.error".loc, isPresented: $errorShow){
+            } message: {
+                Text(errorInfo)
+            }
+''' + '"""' + r'''
+new = ''' + '"""' + r'''            .alert("lc.common.error".loc, isPresented: $errorShow) {
+                Button("lc.common.copy".loc) {
+                    UIPasteboard.general.string = errorInfo
+                }
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorInfo)
+            }
+''' + '"""' + r'''
+marker = "UIPasteboard.general.string = errorInfo"
+if marker not in s:
+    if old not in s:
+        raise SystemExit("Unable to locate JIT-less error alert for Copy-button patch")
+    s = s.replace(old, new, 1)
+path.write_text(s)
+print("Applied JIT-less diagnostic Copy button")
+''')
+
+          wf = Path('.github/workflows/build-unsigned-ipa.yml')
+          s = wf.read_text()
+          if 'python3 Tools/patch_diagnostic_copy.py' not in s:
+              s = s.replace(
+                  '          python3 Tools/patch_oopjit_bad_query.py\n',
+                  '          python3 Tools/patch_oopjit_bad_query.py\n          python3 Tools/patch_diagnostic_copy.py\n',
+                  1,
+              )
+          if 'python3 -m py_compile Tools/patch_diagnostic_copy.py' not in s:
+              s = s.replace(
+                  '          python3 -m py_compile Tools/patch_oopjit_bad_query.py\n',
+                  '          python3 -m py_compile Tools/patch_oopjit_bad_query.py\n          python3 -m py_compile Tools/patch_diagnostic_copy.py\n',
+                  1,
+              )
+          old_assert = '          test "$(git hash-object LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift")"\n'
+          new_assert = "          grep -q 'UIPasteboard.general.string = errorInfo' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift\n"
+          if old_assert in s:
+              s = s.replace(old_assert, new_assert, 1)
+          elif new_assert not in s:
+              raise SystemExit('Unable to update diagnostic parity assertion')
+          wf.write_text(s)
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Tools/patch_diagnostic_copy.py .github/workflows/build-unsigned-ipa.yml
+          if git diff --cached --quiet; then
+            echo "Copy-button patch already present."
+            exit 0
+          fi
+          git commit -m "Add Copy action to OOPJIT diagnostic error"
+          git push origin HEAD:experiment/oopjit-runtime-probe
