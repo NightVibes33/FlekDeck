@@ -99,7 +99,11 @@ BAD_QUERY_REPLACEMENT = r'''static int64_t FlekBadQueryAcquirePathEx(const char 
         : "../../../../../../../../..%s";
     if (asprintf(&part, traversal, path) == -1 || !part) {
 #if !OS_OBJECT_USE_OBJC
-        xpc_release(identifier);
+#if !OS_OBJECT_USE_OBJC
+    #if !OS_OBJECT_USE_OBJC
+    xpc_release(identifier);
+#endif
+#endif
 #endif
         queryFree(query);
         dlclose(mgr);
@@ -112,7 +116,11 @@ BAD_QUERY_REPLACEMENT = r'''static int64_t FlekBadQueryAcquirePathEx(const char 
     if (!result) {
         free(part);
 #if !OS_OBJECT_USE_OBJC
-        xpc_release(identifier);
+#if !OS_OBJECT_USE_OBJC
+    #if !OS_OBJECT_USE_OBJC
+    xpc_release(identifier);
+#endif
+#endif
 #endif
         queryFree(query);
         dlclose(mgr);
@@ -123,7 +131,11 @@ BAD_QUERY_REPLACEMENT = r'''static int64_t FlekBadQueryAcquirePathEx(const char 
     if (!token) {
         free(part);
 #if !OS_OBJECT_USE_OBJC
-        xpc_release(identifier);
+#if !OS_OBJECT_USE_OBJC
+    #if !OS_OBJECT_USE_OBJC
+    xpc_release(identifier);
+#endif
+#endif
 #endif
         queryFree(query);
         dlclose(mgr);
@@ -133,7 +145,9 @@ BAD_QUERY_REPLACEMENT = r'''static int64_t FlekBadQueryAcquirePathEx(const char 
     int64_t handle = consumeExtension(token);
     free(token);
     free(part);
+#if !OS_OBJECT_USE_OBJC
     xpc_release(identifier);
+#endif
     queryFree(query);
     dlclose(mgr);
     return handle;
