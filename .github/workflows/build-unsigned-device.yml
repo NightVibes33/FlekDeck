@@ -1,7 +1,14 @@
 name: Unsigned Real Device IPA
 
 # Legacy build: main uses build-unsigned-ipa.yml.
+# One-shot push trigger scoped only to .gitmodules so the repaired submodule
+# metadata can be validated by this legacy workflow without creating a loop.
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.gitmodules'
   workflow_dispatch:
 
 permissions:
