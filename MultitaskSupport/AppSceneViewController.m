@@ -265,8 +265,8 @@ static void LCUnstageAppFromAppGroup(NSString *bundleId, NSString *dataUUID, BOO
         }
     }
 
-    // The bundle is shared between every window running this app, so it only
-    // goes once the last of them has exited.
+    // The bundle is shared between every window running that app, so it only
+    // goes once the last window has exited.
     if(wasLastUser) {
         NSURL *stagedBundle = [appGroupLC URLByAppendingPathComponent:[NSString stringWithFormat:@"Applications/%@", bundleId]];
         LCDiscardTree(stagedBundle, appGroupLC);
@@ -372,6 +372,18 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
         @"bookmarks": bookmarks,
         @"lcHomePath": NSHomeDirectory(),
     }.mutableCopy;
+
+    // The host has already selected and validated the signing identity before
+    // Run Parallel reaches this boundary. LiveProcess has its own defaults
+    // domain, so it cannot infer that identity from the host process. Carry the
+    // same password across the extension request; LiveProcess/main.m restores it
+    // as LCCertificatePassword before entering LiveContainerMain. Without this,
+    // iOS 26+ bootstrap mistakes an otherwise JIT-less signed guest for a
+    // no-certificate launch and unconditionally asks the child process for JIT.
+    NSString *certificatePassword = LCSharedUtils.certificatePassword;
+    if(certificatePassword.length) {
+        userInfo[@"certificatePassword"] = certificatePassword;
+    }
     
     NSString* launchAppUrlScheme = [NSUserDefaults.standardUserDefaults stringForKey:@"launchAppUrlScheme"];
     [NSUserDefaults.lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
@@ -574,294 +586,4 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
         [parameters updateSettingsWithBlock:updateSceneSettings];
         [parameters updateClientSettingsWithBlock:updateSceneClientSettings];
         FBScene *scene = [[PrivClass(FBSceneManager) sharedInstance] createSceneWithDefinition:definition initialParameters:parameters];
-        self.presenter = [scene.uiPresentationManager createPresenterWithIdentifier:self.sceneID];
-        [self.presenter modifyPresentationContext:^(UIMutableScenePresentationContext *context) {
-            context.appearanceStyle = 2;
-        }];
-        [self.presenter activate];
-        
-        self.contentView = [[UIView alloc] init];
-        [self.contentView addSubview:self.presenter.presentationView];
-    }
-    [self.view addSubview:_contentView];
-    
-    // If we have a staging URL scheme, pass it now
-    NSString *launchUrl = [NSUserDefaults.standardUserDefaults stringForKey:@"launchAppUrlScheme"];
-    if(launchUrl) {
-        [NSUserDefaults.standardUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
-        [self openURLScheme:launchUrl];
-    }
-    
-    __weak typeof(self) weakSelf = self;
-    [self.extension setRequestInterruptionBlock:^(NSUUID *uuid) {
-        [weakSelf appTerminationCleanUp];
-    }];
-    
-    // Black out every layer between us and the guest's rendered content. The
-    // host view sits above self.view, so colouring self.view alone still left
-    // white showing wherever the guest's drawable is smaller than the container
-    // (landscape aspect mismatch, mid-rotation).
-    [self applyBackdropColor];
-
-    self.contentView.layer.anchorPoint = CGPointMake(0, 0);
-    self.contentView.layer.position = CGPointMake(0, 0);
-    
-    [self.view.window.windowScene _registerSettingsDiffActionArray:@[self] forKey:self.sceneID];
-
-    if([self.delegate respondsToSelector:@selector(appSceneVCDidPresentScene:)]) {
-        [self.delegate appSceneVCDidPresentScene:self];
-    }
-}
-
-- (void)terminate {
-    if(self.isAppRunning) {
-        [self.extension _kill:SIGTERM];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self.extension _kill:SIGKILL];
-        });
-    } else {
-        // No process to signal yet — most likely the window was closed while its
-        // files were still being staged. Tear down anyway: that releases the
-        // staged bundle and stops a guest that has not started from outliving
-        // the window that asked for it. A no-op if the teardown already ran.
-        [self appTerminationCleanUp];
-    }
-}
-
-- (void)_performActionsForUIScene:(UIScene *)scene withUpdatedFBSScene:(id)fbsScene settingsDiff:(FBSSceneSettingsDiff *)diff fromSettings:(UIApplicationSceneSettings *)settings transitionContext:(id)context lifecycleActionType:(uint32_t)actionType {
-    if(!self.isAppRunning) {
-        [self appTerminationCleanUp];
-    }
-    if(!diff) return;
-    
-    [self applyBackdropColor];
-    UIMutableApplicationSceneSettings *baseSettings = [diff settingsByApplyingToMutableCopyOfSettings:settings];
-    UIApplicationSceneTransitionContext *newContext = [context copy];
-    newContext.actions = nil;
-    [self.delegate appSceneVC:self didUpdateFromSettings:baseSettings transitionContext:newContext lifecycleActionType:actionType];
-}
-
-// Re-stamped rather than set once: UIKit can swap or re-style the presentation
-// view when the guest flips orientation, which would drop a one-shot colour.
-- (void)applyBackdropColor {
-    self.view.backgroundColor = UIColor.blackColor;
-    self.contentView.backgroundColor = UIColor.blackColor;
-    self.presenter.presentationView.backgroundColor = UIColor.blackColor;
-}
-
-- (void)viewWillLayoutSubviews {
-    [self applyBackdropColor];
-    void (^pendingBlock)(UIMutableApplicationSceneSettings *) = self.nextUpdateSettingsBlock;
-    self.nextUpdateSettingsBlock = nil;
-    /// For native window we let iPadOS handle it however it wants, which is usually live resize (autoresizingMask set in appSceneVCWillActivateScene)
-    if(_contentView.autoresizingMask != (UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight)) {
-        [self updateFrameWithSettingsBlock:pendingBlock];
-    }
-}
-- (void)updateFrameWithSettingsBlock:(void (^)(UIMutableApplicationSceneSettings *settings))block {
-    __block int currentDebounceToken = ++_resizeDebounceToken;
-    dispatch_block_t queueBlock = ^{
-        if(currentDebounceToken != self.resizeDebounceToken) {
-            return;
-        }
-        // HARD LOCK: hold the guest's geometry while the phone is flat. The frame
-        // computed below is what reshapes the drawable, and a reshape reads as a
-        // rotation to any app that lays out responsively. Gated on the scene
-        // already having a frame so first-time setup is never blocked.
-        if(LCRotationIsLocked() && self.presenter.scene.settings.frame.size.width > 0) {
-            return;
-        }
-        [self updateSettingsWithBlock:^(UIMutableApplicationSceneSettings *settings) {
-            // HARD LOCK: leave both alone while the phone is flat.
-            //
-            // `settings` here is a copy of the guest's own live settings, so not
-            // writing means it keeps the orientation it already had. This matters
-            // more than it looks: the value written here is not only handed to the
-            // guest, it also drives the width/height swap that reshapes the
-            // content view in `updateSettingsWithBlock:`. Stamping the host's
-            // (upright) orientation on a turned guest re-shapes its drawable even
-            // where the orientation itself never reaches the scene.
-            if(!LCRotationIsLocked()) {
-                settings.interfaceOrientation = self.view.window.windowScene.interfaceOrientation;
-                UIDeviceOrientation guestDevice = LCDeviceOrientationForInterface(settings.interfaceOrientation);
-                // Only ever written with a real answer; unknown leaves it as it is.
-                if(guestDevice != UIDeviceOrientationUnknown) settings.deviceOrientation = guestDevice;
-            }
-            CGRect frame = self.view.frame;
-            if(!self.usesHostingControllerAPI) {
-                frame.size.width /= self.scaleRatio;
-                frame.size.height /= self.scaleRatio;
-            }
-            if(UIInterfaceOrientationIsLandscape(settings.interfaceOrientation)) {
-                CGSize size = frame.size;
-                frame.size.width = size.height;
-                frame.size.height = size.width;
-            }
-            settings.frame = frame;
-            if(block) {
-                block(settings);
-            }
-        }];
-    };
-    if(_shouldSkipDebounceOnce) {
-        _shouldSkipDebounceOnce = NO;
-        queueBlock();
-    } else {
-        dispatch_time_t delay = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC));
-        dispatch_after(delay, dispatch_get_main_queue(), queueBlock);
-    }
-}
-- (void)updateSettingsWithBlock:(void(^)(UIMutableApplicationSceneSettings *settings))updateSettingsBlock {
-    if(_shouldIgnoreSceneUpdates) {
-        // Ignore all updates when in PiP mode
-        return;
-    }
-    
-    if(!_hostingController && self.contentView) {
-        // Legacy path
-        [self.presenter.scene updateSettingsWithBlock:updateSettingsBlock];
-        return;
-    }
-    
-    /// iOS 18.0 path, most are automatically handled by setting values to _UISceneHostingViewController
-    /// This is also reachable on legacy path when contentView is nil during early setup
-    UIMutableApplicationSceneSettings *tempSettings = [self.presenter.scene.settings mutableCopy];
-    if(!tempSettings) {
-        tempSettings = [UIMutableApplicationSceneSettings new];
-    }
-    updateSettingsBlock(tempSettings);
-    CGRect frame = tempSettings.frame;
-    if(UIInterfaceOrientationIsLandscape(tempSettings.interfaceOrientation)) {
-        frame = CGRectMake(frame.origin.x, frame.origin.y, frame.size.height, frame.size.width);
-    }
-    
-    if (self.contentView) {
-        BOOL isiOS26 = NO;
-        if(@available(iOS 19.0, *)) { if(@available(iOS 27.0, *)) {} else isiOS26 = YES; }
-        // Discard position
-        frame.origin = CGPointZero;
-        self.contentView.frame = frame;
-    } else {
-        // This method can be called while contentView is nil to set up initial frame
-        self.view.frame = frame;
-    }
-}
-
-- (BOOL)isAppRunning {
-    return _pid > 0 && getpgid(_pid) > 0;
-}
-
-- (void)appTerminationCleanUp {
-    if(_isAppTerminationCleanUpCalled) {
-        return;
-    }
-    _isAppTerminationCleanUpCalled = true;
-
-    [_audio invalidate];
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // Bring the guest's container back and release the staged bundle. This
-        // is off the closing path entirely now: it used to delete the local
-        // container and copy thousands of files back over it while the close
-        // animation was waiting to run, which is what made large apps take so
-        // long to shut.
-        //
-        // Claimed here rather than above because staging finishes on this queue
-        // too. Deciding on the main thread orders the two against each other, so
-        // a window closed while it was still staging is released exactly once —
-        // by whichever of the two runs second.
-        if (self.stagedToAppGroup) {
-            self.stagedToAppGroup = false;
-            NSString *bundleId = self.bundleId;
-            NSString *dataUUID = self.dataUUID;
-            dispatch_async(LCStagingQueue(), ^{
-                LCUnstageAppFromAppGroup(bundleId, dataUUID, YES);
-            });
-        }
-
-        if(self.sceneID) {
-            [[PrivClass(FBSceneManager) sharedInstance] destroyScene:self.sceneID withTransitionContext:nil];
-        }
-        if(self.usesHostingControllerAPI) {
-            if(@available(iOS 17.0, *)) {
-                [self.hostingController invalidate];
-                [self.hostingController.sceneViewController removeFromParentViewController];
-                self.hostingController = nil;
-            }
-        } else if(self.presenter){
-            [self.presenter deactivate];
-            [self.presenter invalidate];
-        }
-        self.presenter = nil;
-        
-        [self.delegate appSceneVCAppDidExit:self];
-        [MultitaskManager unregisterMultitaskContainerWithContainer:self.dataUUID];
-    });
-}
-
-// Created on first use rather than at init: a window that is never touched
-// never registers a notification token, and most never are.
-- (LCGuestVolume *)audio {
-    if(!_audio) {
-        _audio = [[LCGuestVolume alloc] initWithDataUUID:self.dataUUID];
-    }
-    return _audio;
-}
-
-- (void)setBackgroundNotificationEnabled:(bool)enabled {
-    if(self.usesHostingControllerAPI) {
-        /// Issue with new API: FBSSceneObserver takes priority over to send UIApplicationWillResignActiveNotification regressed #942,
-        /// so here we make it foreground (UIApplicationDidBecomeActiveNotification) again.
-        [self.presenter.scene updateSettingsWithBlock:^(UIMutableApplicationSceneSettings *settings) {
-            settings.foreground = YES;
-            settings.deactivationReasons = 0;
-        }];
-        return;
-    }
-    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
-    if(enabled) {
-        // Re-add UIApplicationDidEnterBackgroundNotification
-        [center addObserver:self.extension selector:@selector(_hostDidEnterBackgroundNote:) name:UIApplicationDidEnterBackgroundNotification object:UIApp];
-        [center addObserver:self.extension selector:@selector(_hostWillResignActiveNote:) name:UIApplicationWillResignActiveNotification object:UIApp];
-    } else {
-        // Remove UIApplicationDidEnterBackgroundNotification so apps like YouTube can continue playing video
-        [center removeObserver:self.extension name:UIApplicationDidEnterBackgroundNotification object:UIApp];
-        [center removeObserver:self.extension name:UIApplicationWillResignActiveNotification object:UIApp];
-    }
-}
-
-- (void)viewDidMoveToWindow:(UIWindow *)newWindow shouldAppearOrDisappear:(BOOL)appear {
-    [super viewDidMoveToWindow:newWindow shouldAppearOrDisappear:appear];
-    if(!newWindow) {
-        if(self.sceneID) {
-            [self.view.window.windowScene _unregisterSettingsDiffActionArrayForKey:self.sceneID];
-        }
-        self.delegate = nil;
-    }
-}
-
-- (void)openURLScheme:(NSString *)urlString {
-    [self.presenter.scene updateSettingsWithTransitionBlock:^(id settings) {
-        // pull from UserDefaults.standard.setValue(launchURLStr, forKey: "launchAppUrlScheme")
-        UIApplicationSceneTransitionContext *context = [UIApplicationSceneTransitionContext new];
-        NSURL *url = [NSURL URLWithString:urlString];
-        context.payload = @{UIApplicationLaunchOptionsURLKey: urlString};
-        context.actions = [NSSet setWithObject:[[UIOpenURLAction alloc] initWithURL:url]];
-        return context;
-    }];
-}
-
-- (void)handleStatusBarTapAction:(UIAction *)action {
-    [self.presenter.scene updateSettingsWithTransitionBlock:^(id settings) {
-        UIApplicationSceneTransitionContext *context = [UIApplicationSceneTransitionContext new];
-        context.actions = [NSSet setWithObject:action];
-        return context;
-    }];
-}
-
-- (BOOL)usesHostingControllerAPI {
-    return _hostingController != nil;
-}
-
-@end
- 
+        self.presenter = [scene.ui...
