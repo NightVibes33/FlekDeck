@@ -122,7 +122,7 @@ void SideStoreMyAppsViewController_hook_viewDidload(UICollectionViewController* 
 }
 
 void SideStoreMyAppsViewController_hook_escapeButtonTapped(UICollectionViewController* self, SEL cmd, id target) {
-    [LCSharedUtils launchToGuestAppWithClassicMode:0];
+    [LCSharedUtils launchToGuestApp];
 }
 
 
@@ -165,13 +165,11 @@ static void SSInstallVersionWindow(UIWindowScene *windowScene)
     [rootController.view addSubview:versionLabel];
     
     if(windowScene.keyWindow.safeAreaInsets.bottom == 0) {
-        // old devices with no bottom safe area
         [NSLayoutConstraint activateConstraints:@[
             [versionLabel.centerXAnchor constraintEqualToAnchor:rootController.view.centerXAnchor],
             [versionLabel.topAnchor constraintEqualToAnchor: rootController.view.safeAreaLayoutGuide.topAnchor]
         ]];
     } else {
-        // new devices
         [NSLayoutConstraint activateConstraints:@[
             [versionLabel.centerXAnchor constraintEqualToAnchor:rootController.view.centerXAnchor],
             [versionLabel.bottomAnchor constraintEqualToAnchor: rootController.view.safeAreaLayoutGuide.bottomAnchor
@@ -182,9 +180,7 @@ static void SSInstallVersionWindow(UIWindowScene *windowScene)
 
     window.rootViewController = rootController;
     window.backgroundColor = UIColor.clearColor;
-
     window.windowLevel = UIWindowLevelAlert;
-
     window.hidden = NO;
 
     SSVersionWindows[identifier] = window;
@@ -199,18 +195,15 @@ void installSideStoreHooks(void) {
     swizzleClassMethod(NSBundle.class, @selector(activeBundle), @selector(hook_activeBundle));
     swizzleClassMethod(NSBundle.class, @selector(baseAltStoreAppGroupID), @selector(hook_baseAltStoreAppGroupID));
     
-    // replace altStoreSourceURL
     Method altStoreSourceURLMethod = class_getClassMethod(PrivClass(Source), @selector(altStoreSourceURL));
     method_setImplementation(altStoreSourceURLMethod, (IMP)SideStoreSource_hook_altStoreSourceURL);
     
     if (!NSUserDefaults.isLiveProcess) {
-        // add escape button
         Method viewDidLoadMethod = class_getInstanceMethod(PrivClass(MyAppsViewController), @selector(viewDidLoad));
         SideStoreMyAppsViewController_orig_viewDidload = (void (*)(UICollectionViewController *, SEL))method_getImplementation(viewDidLoadMethod);
         method_setImplementation(viewDidLoadMethod, (IMP)SideStoreMyAppsViewController_hook_viewDidload);
         class_addMethod(PrivClass(MyAppsViewController), @selector(escapeButtonTapped:), (IMP)SideStoreMyAppsViewController_hook_escapeButtonTapped, "v@:@");
         
-        // add version number
         SSVersionWindows = [NSMutableDictionary dictionary];
 
         SSSceneObserver =
@@ -224,12 +217,7 @@ void installSideStoreHooks(void) {
                 SSInstallVersionWindow((UIWindowScene *)scene);
             }
         }];
-        
-        
-        
     }
-    
-
 }
 #pragma clang diagnostic pop
 
