@@ -13,8 +13,8 @@ on:
       - 'Tools/patch_direct_multitask_host_bridge.py'
       - 'Tools/patch_stikdebug_pid_verification.py'
       - 'Tools/patch_guest_native_pip_bridge.py'
+      - 'Tools/patch_youtube_native_pip_render.py'
       - 'Tools/patch_pip_state_separation.py'
-      - 'Tools/patch_guest_gesture_bridge.py'
       - 'LiveContainerSwiftUI/Utilities/LCUtils.h'
       - 'MultitaskSupport/AppSceneViewController.m'
       - 'MultitaskSupport/PiPManager.m'
@@ -42,24 +42,32 @@ jobs:
           python3 Tools/patch_direct_multitask_host_bridge.py
           python3 Tools/patch_stikdebug_pid_verification.py
           python3 Tools/patch_guest_native_pip_bridge.py
+          python3 Tools/patch_youtube_native_pip_render.py
           python3 Tools/patch_pip_state_separation.py
-          python3 Tools/patch_guest_gesture_bridge.py
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
           grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
           grep -q 'com.flekdeck.nativepip.%@.%d' LiveContainer/LCBootstrap.m
+          grep -q 'LCYouTubePiPRefreshSource' LiveContainer/LCBootstrap.m
+          grep -q 'newContentSource' LiveContainer/LCBootstrap.m
+          grep -q 'contentSourceNeedsRefresh' LiveContainer/LCBootstrap.m
+          grep -q 'YouTube source bound=' LiveContainer/LCBootstrap.m
           grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m
           grep -q 'LCNativePiPDoesNotOwnWindowLifecycle' MultitaskSupport/PiPManager.m
           grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
           grep -q 'self.usesMediaCrop = NO;' MultitaskSupport/PiPManager.m
           grep -q 'preferredContentSize = self.sourceContentSize' MultitaskSupport/PiPManager.m
-          grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift
-          grep -q 'LCPersistentSwitcherSwipeStartup' MultitaskSupport/MultitaskDockView.swift
-          grep -q 'persistentSwitcherSwipeZone' MultitaskSupport/MultitaskDockView.swift
-          grep -q 'syncPersistentSwitcherSwipeZone' MultitaskSupport/MultitaskDockView.swift
+          # Preserve the exact pre-PiP/main bottom-swipe implementation. The prior
+          # temp gesture rewrite was the regression and must not be compiled.
+          grep -q 'private func installSwipeZone' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'self?.showAppSwitcher()' MultitaskSupport/MultitaskDockView.swift
+          if grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift; then
+            echo 'Temp persistent swipe rewrite is still compiled'
+            exit 1
+          fi
           if grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift; then
-            echo 'Obsolete lower-window switcher swipe bridge is still compiled'
+            echo 'Temp lower-window swipe rewrite is still compiled'
             exit 1
           fi
           grep -q 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
