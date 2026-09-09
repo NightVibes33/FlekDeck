@@ -14,9 +14,11 @@ on:
       - 'Tools/patch_stikdebug_pid_verification.py'
       - 'Tools/patch_guest_native_pip_bridge.py'
       - 'Tools/patch_pip_state_separation.py'
+      - 'Tools/patch_guest_gesture_bridge.py'
       - 'LiveContainerSwiftUI/Utilities/LCUtils.h'
       - 'MultitaskSupport/AppSceneViewController.m'
       - 'MultitaskSupport/PiPManager.m'
+      - 'MultitaskSupport/MultitaskDockView.swift'
       - 'LiveContainer/LCBootstrap.m'
 
 jobs:
@@ -41,6 +43,7 @@ jobs:
           python3 Tools/patch_stikdebug_pid_verification.py
           python3 Tools/patch_guest_native_pip_bridge.py
           python3 Tools/patch_pip_state_separation.py
+          python3 Tools/patch_guest_gesture_bridge.py
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
@@ -51,6 +54,9 @@ jobs:
           grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
           grep -q 'self.usesMediaCrop = NO;' MultitaskSupport/PiPManager.m
           grep -q 'preferredContentSize = self.sourceContentSize' MultitaskSupport/PiPManager.m
+          grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCImmediateSwitcherSwipeInstall' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'hasVisibleAppOrInternalPage' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
 
       - name: Build real-device unsigned archive
