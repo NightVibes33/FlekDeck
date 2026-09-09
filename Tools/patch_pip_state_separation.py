@@ -76,16 +76,17 @@ if s.count(preferred) != 2:
 s = s.replace(preferred, 'self.pipVideoCallViewController.preferredContentSize = self.sourceContentSize;')
 
 # Prove the native-media block itself cannot mutate Window-PiP/switcher state.
+# Match executable Objective-C calls/state assignments, not explanatory comments.
 finish_start = s.find('- (void)finishNativePiP')
 window_start = s.find('- (void)startWindowPiPWithVC:')
 if finish_start < 0 or window_start < 0 or finish_start >= window_start:
     raise SystemExit("Unable to isolate native media PiP host block")
 native_block = s[finish_start:window_start]
 for forbidden in [
-    'minimizeWindowPiP',
-    'unminimizeWindowPiP',
-    'setBackgroundNotificationEnabled:false',
-    'shouldIgnoreSceneUpdates = YES',
+    '[self.displayingDecoratedVC minimizeWindowPiP];',
+    '[self.displayingDecoratedVC unminimizeWindowPiP];',
+    '[self.displayingVC setBackgroundNotificationEnabled:false];',
+    'self.displayingVC.shouldIgnoreSceneUpdates = YES;',
 ]:
     if forbidden in native_block:
         raise SystemExit(f"Native media PiP still mutates Window-PiP state: {forbidden}")
