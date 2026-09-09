@@ -1,0 +1,25 @@
+name: Dispatch Parallel IPA build
+
+on:
+  push:
+    branches:
+      - experiment/parallel-guest-layout-safearea
+    paths:
+      - '.github/trigger-parallel-ipa'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch signer-compatible IPA workflow on experiment branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run build-unsigned-ipa.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref experiment/parallel-guest-layout-safearea
