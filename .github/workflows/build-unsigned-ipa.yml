@@ -142,7 +142,8 @@ jobs:
       - name: Verify compiled switcher matches successful main build
         run: |
           set -euo pipefail
-          test "$(git hash-object MultitaskSupport/MultitaskDockView.swift)" = e4e205d5fca752d668673e58fa495cd4b6a65e6a
+          # Includes main's required prepareHostWindowForGuestLaunch adapter.
+          test "$(git hash-object MultitaskSupport/MultitaskDockView.swift)" = f76e89bac7dd25fbc60af60be1071e110db06cfb
           test "$(git hash-object MultitaskSupport/UIKitHooks.m)" = 2ee54f1993d71b5770052722037197a756b3fd26
           test "$(git hash-object MultitaskSupport/PiPManager.m)" = eb44a67ef4084aa380cac8c90ea534781804b0fb
           ! grep -q 'lcParallelTikTok_bounds' TweakLoader/UIKit+GuestHooks.m
