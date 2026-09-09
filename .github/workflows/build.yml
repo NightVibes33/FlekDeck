@@ -13,6 +13,7 @@ on:
       - 'Tools/patch_direct_multitask_host_bridge.py'
       - 'Tools/patch_stikdebug_pid_verification.py'
       - 'Tools/patch_guest_native_pip_bridge.py'
+      - 'Tools/patch_pip_state_separation.py'
       - 'LiveContainerSwiftUI/Utilities/LCUtils.h'
       - 'MultitaskSupport/AppSceneViewController.m'
       - 'MultitaskSupport/PiPManager.m'
@@ -39,12 +40,17 @@ jobs:
           python3 Tools/patch_direct_multitask_host_bridge.py
           python3 Tools/patch_stikdebug_pid_verification.py
           python3 Tools/patch_guest_native_pip_bridge.py
+          python3 Tools/patch_pip_state_separation.py
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
           grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
           grep -q 'com.flekdeck.nativepip.%@.%d' LiveContainer/LCBootstrap.m
           grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m
+          grep -q 'LCNativePiPDoesNotOwnWindowLifecycle' MultitaskSupport/PiPManager.m
+          grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
+          grep -q 'self.usesMediaCrop = NO;' MultitaskSupport/PiPManager.m
+          grep -q 'preferredContentSize = self.sourceContentSize' MultitaskSupport/PiPManager.m
           grep -q 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
 
       - name: Build real-device unsigned archive
