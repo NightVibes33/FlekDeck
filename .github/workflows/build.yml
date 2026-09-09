@@ -54,9 +54,14 @@ jobs:
           grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
           grep -q 'self.usesMediaCrop = NO;' MultitaskSupport/PiPManager.m
           grep -q 'preferredContentSize = self.sourceContentSize' MultitaskSupport/PiPManager.m
-          grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift
-          grep -q 'LCImmediateSwitcherSwipeInstall' MultitaskSupport/MultitaskDockView.swift
-          grep -q 'hasVisibleAppOrInternalPage' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCPersistentSwitcherSwipeStartup' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'persistentSwitcherSwipeZone' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'syncPersistentSwitcherSwipeZone' MultitaskSupport/MultitaskDockView.swift
+          if grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift; then
+            echo 'Obsolete lower-window switcher swipe bridge is still compiled'
+            exit 1
+          fi
           grep -q 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
 
       - name: Build real-device unsigned archive
