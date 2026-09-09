@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - experiment/multitask-control-jit-diagnosis
+      - temp/vibe-settings-port-final-validation
     paths:
       - '.github/workflows/build.yml'
       - 'Tools/patch_direct_multitask_host_bridge.py'
