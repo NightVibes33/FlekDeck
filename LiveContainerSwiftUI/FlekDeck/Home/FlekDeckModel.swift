@@ -17,6 +17,19 @@ enum FlekDeckKeys {
     static let homeScreenOrder = "FlekHomeScreenOrder" // ordered IDs of all home screen items (default apps + installed)
     static let homeScreenPageSizes = "FlekHomeScreenPageSizes" // per-page item counts for custom page layouts
     static let cardStyleGlass = "FlekCardStyleGlass" // true = liquid glass, false = thin material
+
+    // VibeContainers customization controls, adapted to FlekDeck's shared
+    // app-group state. Defaults are chosen in FlekAppearanceStore so an existing
+    // install keeps its current appearance until the user changes something.
+    static let accentChoice = "FlekAccentChoice"
+    static let gridColumns = "FlekGridColumns"
+    static let showAppLabels = "FlekShowAppLabels"
+    static let hideDockBackground = "FlekHideDockBackground"
+    static let pageTransition = "FlekPageTransition"
+    static let reduceMotion = "FlekReduceMotion"
+    static let showMotes = "FlekShowMotes"
+    static let moteDensity = "FlekMoteDensity"
+    static let scanlines = "FlekScanlines"
 }
 
 /// Home screen layout chosen on the Personalization page.
