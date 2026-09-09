@@ -260,11 +260,11 @@ show_dock_replacement = '''    @objc public func showDock() {
         // Experiment: restore Vibe's host-owned bottom gesture boundary. The
         // recognizer is inert on FlekDeck's SpringBoard and only begins while a
         // virtual guest/internal page is visibly hosted.
-        FlekGuestBottomGestureBridge.shared.install(on: keyWindow)
+        // Temp Parallel layout build: keep the base control path unchanged.
         
         DispatchQueue.main.async {
 '''
-if "FlekGuestBottomGestureBridge.shared.install(on: keyWindow)" not in s:
+if "// Temp Parallel layout build: keep the base control path unchanged." not in s:
     if show_dock_anchor not in s:
         raise SystemExit("MultitaskDockView.showDock shape changed")
     s = s.replace(show_dock_anchor, show_dock_replacement, 1)
