@@ -4,6 +4,24 @@
 #include <objc/runtime.h>
 #include "utils.h"
 
+static NSURL *FlekCanonicalScopedURL(NSURL *globalRoot, NSURL *candidate) {
+    // Vibe-style global/per-app entries are symlink projections of the
+    // canonical __FlekLibrary item. A parallel LiveProcess receives a cloned
+    // Tweaks tree, and an absolute symlink copied from the host may still point
+    // at the host Documents container. Resolve by *name* inside the staged root
+    // instead, so the exact same scope tree works in single and parallel launch.
+    NSNumber *isSymlink = nil;
+    [candidate getResourceValue:&isSymlink forKey:NSURLIsSymbolicLinkKey error:nil];
+    if (!isSymlink.boolValue) return candidate;
+
+    NSURL *libraryItem = [[globalRoot URLByAppendingPathComponent:@"__FlekLibrary" isDirectory:YES]
+                          URLByAppendingPathComponent:candidate.lastPathComponent];
+    if ([NSFileManager.defaultManager fileExistsAtPath:libraryItem.path]) {
+        return libraryItem;
+    }
+    return candidate;
+}
+
 static NSString *loadTweakAtURL(NSURL *url) {
     NSString *tweakPath = url.path;
     NSString *tweak = tweakPath.lastPathComponent;
@@ -19,7 +37,8 @@ static NSString *loadTweakAtURL(NSURL *url) {
         }
         tweakPath = [[url URLByAppendingPathComponent:binary] path];
     }
-    
+
+    dlerror();
     void *handle = dlopen(tweakPath.UTF8String, RTLD_LAZY | RTLD_GLOBAL);
     const char *error = dlerror();
     if (handle) {
@@ -34,40 +53,44 @@ static NSString *loadTweakAtURL(NSURL *url) {
     }
 }
 
-static void loadTweaksRecursively(NSURL *folderURL, NSMutableArray *errors) {
-    NSArray<NSURL *> *items = [NSFileManager.defaultManager contentsOfDirectoryAtURL:folderURL includingPropertiesForKeys:@[NSURLIsDirectoryKey] options:0 error:nil];
-    for (NSURL *fileURL in items) {
-        NSString *name = fileURL.lastPathComponent;
+static void loadTweaksRecursively(NSURL *folderURL, NSURL *globalRoot, NSMutableArray *errors) {
+    NSArray<NSURL *> *items = [NSFileManager.defaultManager contentsOfDirectoryAtURL:folderURL
+        includingPropertiesForKeys:@[NSURLIsDirectoryKey, NSURLIsSymbolicLinkKey]
+        options:0 error:nil] ?: @[];
+    for (NSURL *rawURL in items) {
+        NSString *name = rawURL.lastPathComponent;
         if ([name hasSuffix:@".disabled"]) {
             NSLog(@"Skipping disabled tweak %@", name);
             continue;
         }
+
+        NSURL *fileURL = FlekCanonicalScopedURL(globalRoot, rawURL);
         NSNumber *isDirectory = nil;
         [fileURL getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
-        // a .framework is a directory but loads as a single tweak
-        if (isDirectory.boolValue && ![name hasSuffix:@".framework"]) {
-            loadTweaksRecursively(fileURL, errors);
+        // A .framework is a directory but loads as one tweak.
+        if (isDirectory.boolValue && ![name hasSuffix:@".framework"] && ![fileURL.path hasSuffix:@".framework"]) {
+            loadTweaksRecursively(fileURL, globalRoot, errors);
         } else {
             NSString *error = loadTweakAtURL(fileURL);
-            if (error) {
-                [errors addObject:error];
-            }
+            if (error) [errors addObject:error];
         }
     }
 }
 
 static void showDlerrAlert(NSString *error) {
     UIWindow *window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Failed to load tweaks" message:error preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Failed to load tweaks"
+                                                                   message:error
+                                                            preferredStyle:UIAlertControllerStyleAlert];
     UIAlertAction* okAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction * action) {
         window.windowScene = nil;
     }];
     [alert addAction:okAction];
-    UIAlertAction* cancelAction = [UIAlertAction actionWithTitle:@"Copy" style:UIAlertActionStyleCancel handler:^(UIAlertAction * action) {
+    UIAlertAction* copyAction = [UIAlertAction actionWithTitle:@"Copy" style:UIAlertActionStyleCancel handler:^(UIAlertAction * action) {
         UIPasteboard.generalPasteboard.string = error;
         window.windowScene = nil;
     }];
-    [alert addAction:cancelAction];
+    [alert addAction:copyAction];
     window.rootViewController = [UIViewController new];
     window.windowLevel = 1000;
     window.windowScene = (id)UIApplication.sharedApplication.connectedScenes.anyObject;
@@ -77,14 +100,21 @@ static void showDlerrAlert(NSString *error) {
 }
 
 static NSString *FlekGuestBundleIdentifier(void) {
-    NSString *bundleIdentifier = NSUserDefaults.guestAppInfo[@"CFBundleIdentifier"];
+    // This is the identifier LCBootstrap already resolved for the guest (and is
+    // the same identifier FlekTweakStore uses as its per-app directory key).
+    NSString *bundleIdentifier = NSUserDefaults.lcGuestAppId;
+    if (![bundleIdentifier isKindOfClass:NSString.class] || bundleIdentifier.length == 0) {
+        bundleIdentifier = NSUserDefaults.guestAppInfo[@"LCOrignalBundleIdentifier"];
+    }
     if (![bundleIdentifier isKindOfClass:NSString.class] || bundleIdentifier.length == 0) {
         bundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
     }
     if (![bundleIdentifier isKindOfClass:NSString.class] || bundleIdentifier.length == 0) {
         bundleIdentifier = @"unknown";
     }
-    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"];
+
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:
+        @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"];
     NSMutableString *safe = [NSMutableString new];
     for (NSUInteger i = 0; i < bundleIdentifier.length; i++) {
         unichar c = [bundleIdentifier characterAtIndex:i];
@@ -94,28 +124,27 @@ static NSString *FlekGuestBundleIdentifier(void) {
     return safe;
 }
 
- __attribute__((constructor))
+__attribute__((constructor))
 static void TweakLoaderConstructor() {
     const char *tweakFolderC = getenv("LC_GLOBAL_TWEAKS_FOLDER");
     if (!tweakFolderC) return;
     NSString *globalTweakFolder = @(tweakFolderC);
     unsetenv("LC_GLOBAL_TWEAKS_FOLDER");
-    
+
     if([NSUserDefaults.guestAppInfo[@"dontInjectTweakLoader"] boolValue]) {
-        // don't load any tweak since tweakloader is loaded after all initializers
         NSLog(@"Skip loading tweaks");
         return;
     }
-    
+
     NSMutableArray *errors = [NSMutableArray new];
-    NSURL *globalFolderURL = [NSURL fileURLWithPath:globalTweakFolder];
+    NSURL *globalFolderURL = [NSURL fileURLWithPath:globalTweakFolder isDirectory:YES];
     NSArray<NSURL *> *globalTweaks = [NSFileManager.defaultManager contentsOfDirectoryAtURL:globalFolderURL
-    includingPropertiesForKeys:@[] options:0 error:nil] ?: @[];
+        includingPropertiesForKeys:@[NSURLIsSymbolicLinkKey] options:0 error:nil] ?: @[];
     NSString *tweakFolderName = NSUserDefaults.guestAppInfo[@"LCTweakFolder"];
     NSString *bundleIdentifier = FlekGuestBundleIdentifier();
 
-    // Vibe-style per-app scope is represented as an additive TweakLoader overlay.
-    // It does not replace or rewrite the existing LCTweakFolder profile.
+    // Vibe-style per-app scope is additive. It never replaces the existing
+    // LCTweakFolder profile selected in FlekDeck app settings.
     NSURL *perAppFolder = [[[globalFolderURL URLByAppendingPathComponent:@"__FlekPerApp" isDirectory:YES]
                             URLByAppendingPathComponent:bundleIdentifier isDirectory:YES] standardizedURL];
     NSURL *blockedFolder = [[[globalFolderURL URLByAppendingPathComponent:@"__FlekBlocked" isDirectory:YES]
@@ -125,7 +154,7 @@ static void TweakLoaderConstructor() {
     NSMutableSet<NSString *> *blockedNames = [NSMutableSet new];
     for (NSURL *url in blockedURLs) [blockedNames addObject:url.lastPathComponent];
 
-    // Load CydiaSubstrate
+    // Load CydiaSubstrate exactly as FlekDeck did before this port.
     const char *lcMainBundlePath;
     if(NSUserDefaults.isLiveProcess) {
         lcMainBundlePath = NSUserDefaults.lcMainBundle.bundlePath.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent.fileSystemRepresentation;
@@ -134,54 +163,57 @@ static void TweakLoaderConstructor() {
     }
     char substratePath[PATH_MAX];
     snprintf(substratePath, sizeof(substratePath), "%s/Frameworks/CydiaSubstrate.framework/CydiaSubstrate", lcMainBundlePath);
+    dlerror();
     dlopen(substratePath, RTLD_LAZY | RTLD_GLOBAL);
     const char *substrateError = dlerror();
-    if (substrateError) {
-        [errors addObject:@(substrateError)];
-    }
+    if (substrateError) [errors addObject:@(substrateError)];
 
-    // Root-level tweaks are FlekDeck's existing global scope. Reserved Vibe
-    // management directories are data only and are never treated as tweaks.
+    // Root-level dylibs/frameworks are FlekDeck's existing global scope. The
+    // three reserved management directories are state only, never global tweaks.
     NSLog(@"Loading tweaks from the global folder");
-    NSSet<NSString *> *reserved = [NSSet setWithArray:@[@"__FlekLibrary", @"__FlekPerApp", @"__FlekBlocked"]];
-    for (NSURL *fileURL in globalTweaks) {
-        NSString *name = fileURL.lastPathComponent;
-        if ([name isEqualToString:@"TweakLoader.dylib"] || [reserved containsObject:name]) {
-            continue;
-        }
+    NSSet<NSString *> *reserved = [NSSet setWithArray:@[
+        @"__FlekLibrary", @"__FlekPerApp", @"__FlekBlocked"
+    ]];
+    for (NSURL *rawURL in globalTweaks) {
+        NSString *name = rawURL.lastPathComponent;
+        if ([name isEqualToString:@"TweakLoader.dylib"] || [reserved containsObject:name]) continue;
         if ([name hasSuffix:@".disabled"]) {
             NSLog(@"Skipping disabled global tweak %@", name);
             continue;
         }
         if ([blockedNames containsObject:name]) {
-            NSLog(@"Skipping globally-scoped tweak %@ for %@ (Vibe per-app block)", name, bundleIdentifier);
+            NSLog(@"Skipping global tweak %@ for %@ (per-app opt-out)", name, bundleIdentifier);
             continue;
         }
+
+        NSURL *fileURL = FlekCanonicalScopedURL(globalFolderURL, rawURL);
         NSString *error = loadTweakAtURL(fileURL);
-        if (error) {
-            [errors addObject:error];
+        if (error) [errors addObject:error];
+    }
+
+    // Existing named tweak profile — unchanged and still recursive.
+    if (tweakFolderName.length > 0) {
+        NSLog(@"Loading tweaks from the selected folder");
+        NSURL *profile = [globalFolderURL URLByAppendingPathComponent:tweakFolderName isDirectory:YES];
+        NSString *rootPath = globalFolderURL.standardizedURL.path;
+        NSString *profilePath = profile.standardizedURL.path;
+        // Defensive containment check: app metadata cannot escape Tweaks.
+        if ([profilePath isEqualToString:rootPath] || [profilePath hasPrefix:[rootPath stringByAppendingString:@"/"]]) {
+            loadTweaksRecursively(profile, globalFolderURL, errors);
         }
     }
 
-    // Load the user's existing named tweak folder recursively, unchanged.
-    if (tweakFolderName.length > 0) {
-        NSLog(@"Loading tweaks from the selected folder");
-        NSString *tweakFolder = [globalTweakFolder stringByAppendingPathComponent:tweakFolderName];
-        loadTweaksRecursively([NSURL fileURLWithPath:tweakFolder], errors);
-    }
-
-    // Then load Vibe-style per-app selections. These are symlink overlays into
-    // __FlekLibrary and therefore use the exact same dlopen/TweakLoader path.
+    // Vibe-style per-app selections. Each projection resolves back to the
+    // canonical __FlekLibrary copy inside *this* staged Tweaks tree.
     BOOL perAppIsDirectory = NO;
     if ([NSFileManager.defaultManager fileExistsAtPath:perAppFolder.path isDirectory:&perAppIsDirectory] && perAppIsDirectory) {
         NSLog(@"Loading Vibe per-app tweak overlay for %@", bundleIdentifier);
-        loadTweaksRecursively(perAppFolder, errors);
+        loadTweaksRecursively(perAppFolder, globalFolderURL, errors);
     }
 
     if (errors.count > 0) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            NSString *error = [errors componentsJoinedByString:@"\n"];
-            showDlerrAlert(error);
+            showDlerrAlert([errors componentsJoinedByString:@"\n"]);
         });
     }
 }
