@@ -52,16 +52,13 @@ struct FlekGamePad: Identifiable, Equatable {
     }
 }
 
-/// FlekDeck-native port of VibeContainers' ControllerHub.
-/// Hardware discovery/input stays independent from the app/runtime model so the
-/// dashboard can drive FlekDeck's existing launch path rather than introducing
-/// a second package or guest runtime.
+/// FlekDeck port of VibeContainers' controller hardware/input layer.
+/// It owns controller I/O only; app enumeration and launch remain FlekDeck's.
 @MainActor
 final class FlekControllerHub: ObservableObject {
     static let shared = FlekControllerHub()
 
     @Published private(set) var pads: [FlekGamePad] = []
-
     var isConnected: Bool { !pads.isEmpty }
     var hasPlayStationPad: Bool { pads.contains { $0.kind.isPlayStation } }
 
@@ -85,14 +82,8 @@ final class FlekControllerHub: ObservableObject {
             guard let controller = note.object as? GCController else { return }
             Task { @MainActor in self?.drop(controller) }
         })
-
         GCController.controllers().forEach(adopt)
         GCController.startWirelessControllerDiscovery()
-    }
-
-    deinit {
-        observers.forEach(NotificationCenter.default.removeObserver)
-        cancelAllRepeats()
     }
 
     private static func key(_ controller: GCController) -> Int {
@@ -301,7 +292,7 @@ struct FlekControllerSettingsView: View {
             }
             Text(hub.isConnected ? "Controller connected" : "Controller ready")
                 .font(.title2.bold())
-            Text("The VibeContainers controller dashboard is adapted to FlekDeck's installed apps and launch runtime. D-pad/thumbstick navigation, PlayStation face buttons, shoulders, battery, light bar and rumble are handled here without replacing FlekDeck's normal home screen.")
+            Text("VibeContainers' controller mode is routed through FlekDeck's installed-app model and launch runtime. D-pad/thumbstick navigation, face buttons, shoulders, battery, light bar and rumble remain available without replacing the normal home screen.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -438,7 +429,7 @@ struct FlekControllerDashboardView: View {
                     Spacer(minLength: 18)
                     touchControls
                 }
-                .padding(.horizontal, max(24, geo.safeAreaInsets.left + 16))
+                .padding(.horizontal, max(24, geo.safeAreaInsets.leading + 16))
                 .padding(.vertical, 18)
             }
         }
@@ -452,18 +443,26 @@ struct FlekControllerDashboardView: View {
             if let app = selectedApp {
                 NavigationView {
                     Form {
-                        Section("Application") {
-                            LabeledContent("Name", value: app.displayName)
-                            LabeledContent("Bundle ID", value: app.bundleIdentifier)
-                            LabeledContent("Version", value: app.version)
-                            LabeledContent("Tweaks", value: app.uiTweakFolder ?? "None")
-                            LabeledContent("Launch", value: app.shouldLaunchInMultitaskMode ? "Parallel" : "Single")
+                        Section(header: Text("Application")) {
+                            infoRow("Name", app.displayName)
+                            infoRow("Bundle ID", app.bundleIdentifier)
+                            infoRow("Version", app.version)
+                            infoRow("Tweaks", app.uiTweakFolder ?? "None")
+                            infoRow("Launch", app.shouldLaunchInMultitaskMode ? "Parallel" : "Single")
                         }
                     }
                     .navigationTitle(app.displayName)
-                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showInfo = false } } }
+                    .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { showInfo = false } } }
                 }
             }
+        }
+    }
+
+    private func infoRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
         }
     }
 
@@ -611,12 +610,10 @@ struct FlekControllerDashboardView: View {
             selected = min(apps.count - 1, selected + 5)
         case .cross:
             launchSelected()
-        case .triangle:
+        case .triangle, .square:
             showInfo = true
         case .circle, .home:
             dismiss()
-        case .square:
-            showInfo = true
         case .options, .share:
             break
         }
