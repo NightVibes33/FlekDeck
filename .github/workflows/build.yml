@@ -21,6 +21,12 @@ on:
       - 'MultitaskSupport/PiPManager.m'
       - 'MultitaskSupport/MultitaskDockView.swift'
       - 'LiveContainer/LCBootstrap.m'
+      - 'LiveContainerSwiftUI/FlekDeck/Controller/FlekControllerMode.swift'
+      - 'LiveContainerSwiftUI/FlekDeck/HTTP/FlekHTTPServer.swift'
+      - 'LiveContainerSwiftUI/FlekDeck/Settings/FlekCustomizationView.swift'
+      - 'LiveContainerSwiftUI/Views/LCTweaksView.swift'
+      - 'LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift'
+      - 'LiveContainer/Info.plist'
 
 jobs:
   build:
@@ -59,8 +65,6 @@ jobs:
           grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
           grep -q 'self.usesMediaCrop = NO;' MultitaskSupport/PiPManager.m
           grep -q 'preferredContentSize = self.sourceContentSize' MultitaskSupport/PiPManager.m
-          # Preserve the exact pre-PiP/main bottom-swipe implementation. The prior
-          # temp gesture rewrite was the regression and must not be compiled.
           grep -q 'private func installSwipeZone' MultitaskSupport/MultitaskDockView.swift
           grep -q 'self?.showAppSwitcher()' MultitaskSupport/MultitaskDockView.swift
           if grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift; then
