@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# One-shot temp-branch source patch trigger for the Parallel guest layout experiment.
 from pathlib import Path
 
 path = Path("MultitaskSupport/DecoratedAppSceneViewController.m")
