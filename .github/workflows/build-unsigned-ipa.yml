@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - experiment/multitask-control-jit-diagnosis
+      - experiment/parallel-guest-layout-safearea
     paths:
       - '.github/trigger-unsigned-ipa'
 
@@ -138,6 +139,7 @@ jobs:
           python3 Tools/patch_vibecontainers_shell_compat.py
           python3 Tools/patch_vibecontainers_project_compat.py
           python3 Tools/patch_free_sidestore_support.py
+          python3 Tools/patch_parallel_tiktok_viewport.py
 
       - name: Select Xcode 26.6
         uses: maxim-lobanov/setup-xcode@v1
@@ -149,6 +151,8 @@ jobs:
           set -euo pipefail
           python3 -m py_compile Tools/patch_free_sidestore_support.py
           python3 -m py_compile Tools/patch_livecontainer_multitask_stikdebug.py
+          python3 -m py_compile Tools/patch_parallel_tiktok_viewport.py
+          grep -Fq 'lcParallelTikTok_bounds' TweakLoader/UIKit+GuestHooks.m
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
