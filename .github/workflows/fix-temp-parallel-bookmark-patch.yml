@@ -1,0 +1,61 @@
+name: Fix temp Parallel bookmark patch and dispatch IPA
+
+on:
+  push:
+    branches:
+      - experiment/parallel-guest-layout-safearea
+    paths:
+      - '.github/trigger-fix-parallel-bookmark-patch'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  fix-and-dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v4
+        with:
+          ref: experiment/parallel-guest-layout-safearea
+          fetch-depth: 1
+
+      - name: Scope bookmark rewrite to AppSceneViewController initializer
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Tools/patch_livecontainer_multitask_stikdebug.py')
+          s = p.read_text()
+          old = '''start = s.index(resource_start_marker)
+end = s.index(resource_end_marker, start)
+'''
+          new = '''init_start = s.index("- (instancetype)initWithBundleId:")
+start = s.index(resource_start_marker, init_start)
+end = s.index(resource_end_marker, start)
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one unscoped resource search, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          python3 -m py_compile Tools/patch_livecontainer_multitask_stikdebug.py
+          git diff --check
+
+      - name: Commit temp build patch correction
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Tools/patch_livecontainer_multitask_stikdebug.py
+          git commit -m 'Scope Parallel bookmark rewrite to guest initializer'
+          git push origin HEAD:experiment/parallel-guest-layout-safearea
+
+      - name: Dispatch signer-compatible IPA build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run build-unsigned-ipa.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref experiment/parallel-guest-layout-safearea
