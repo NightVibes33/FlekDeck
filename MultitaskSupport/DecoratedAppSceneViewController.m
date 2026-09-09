@@ -759,7 +759,13 @@ static UIInterfaceOrientation LCWindowOrientation(UIView *view, UIMutableApplica
     if(_isMaximized) {
         __weak typeof(self) weakSelf = self;
         self.appSceneVC.nextUpdateSettingsBlock = ^(UIMutableApplicationSceneSettings *settings) {
-            [weakSelf updateMaximizedFrameWithSettings:settings];
+            // The pending resize runs after AppSceneViewController has already
+            // sampled its current frame. Resizing only the outer window here can
+            // therefore leave the guest drawable at the old, taller size and clip
+            // fixed bottom UI (TikTok is a reliable reproducer). Re-run the full
+            // geometry transaction so the drawable is measured from the final
+            // maximized bounds.
+            [weakSelf applyMaximizedGeometryToSettings:settings];
         };
     }
     
