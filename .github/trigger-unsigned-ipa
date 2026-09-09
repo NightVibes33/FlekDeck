@@ -1,2 +1,2 @@
 trigger: 2026-09-08T16:26:00-05:00
-reason: verify main switcher including host-window adapter and synchronize initial hosted view geometry
+reason: restore existing certificate configuration handoff to Parallel child process

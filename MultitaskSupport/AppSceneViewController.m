@@ -373,6 +373,13 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
         @"bookmarks": bookmarks,
         @"lcHomePath": NSHomeDirectory(),
     }.mutableCopy;
+
+    // LiveProcess has its own defaults domain. Forward the existing signing
+    // configuration to its receiver instead of making it infer host defaults.
+    NSString *certificatePassword = LCSharedUtils.certificatePassword;
+    if(certificatePassword.length) {
+        userInfo[@"certificatePassword"] = certificatePassword;
+    }
     
     NSString* launchAppUrlScheme = [NSUserDefaults.standardUserDefaults stringForKey:@"launchAppUrlScheme"];
     [NSUserDefaults.lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
