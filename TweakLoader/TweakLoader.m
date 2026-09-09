@@ -53,7 +53,7 @@ static NSString *loadTweakAtURL(NSURL *url) {
     }
 }
 
-static void loadTweaksRecursively(NSURL *folderURL, NSURL *globalRoot, NSMutableArray *errors) {
+static void loadTweaksRecursively(NSURL *folderURL, NSURL *globalRoot, NSMutableArray *errors, NSSet<NSString *> *blockedNames) {
     NSArray<NSURL *> *items = [NSFileManager.defaultManager contentsOfDirectoryAtURL:folderURL
         includingPropertiesForKeys:@[NSURLIsDirectoryKey, NSURLIsSymbolicLinkKey]
         options:0 error:nil] ?: @[];
@@ -63,13 +63,17 @@ static void loadTweaksRecursively(NSURL *folderURL, NSURL *globalRoot, NSMutable
             NSLog(@"Skipping disabled tweak %@", name);
             continue;
         }
+        if ([blockedNames containsObject:name]) {
+            NSLog(@"Skipping blocked tweak %@", name);
+            continue;
+        }
 
         NSURL *fileURL = FlekCanonicalScopedURL(globalRoot, rawURL);
         NSNumber *isDirectory = nil;
         [fileURL getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
         // A .framework is a directory but loads as one tweak.
         if (isDirectory.boolValue && ![name hasSuffix:@".framework"] && ![fileURL.path hasSuffix:@".framework"]) {
-            loadTweaksRecursively(fileURL, globalRoot, errors);
+            loadTweaksRecursively(fileURL, globalRoot, errors, blockedNames);
         } else {
             NSString *error = loadTweakAtURL(fileURL);
             if (error) [errors addObject:error];
@@ -199,7 +203,7 @@ static void TweakLoaderConstructor() {
         NSString *profilePath = profile.standardizedURL.path;
         // Defensive containment check: app metadata cannot escape Tweaks.
         if ([profilePath isEqualToString:rootPath] || [profilePath hasPrefix:[rootPath stringByAppendingString:@"/"]]) {
-            loadTweaksRecursively(profile, globalFolderURL, errors);
+            loadTweaksRecursively(profile, globalFolderURL, errors, blockedNames);
         }
     }
 
@@ -208,7 +212,7 @@ static void TweakLoaderConstructor() {
     BOOL perAppIsDirectory = NO;
     if ([NSFileManager.defaultManager fileExistsAtPath:perAppFolder.path isDirectory:&perAppIsDirectory] && perAppIsDirectory) {
         NSLog(@"Loading Vibe per-app tweak overlay for %@", bundleIdentifier);
-        loadTweaksRecursively(perAppFolder, globalFolderURL, errors);
+        loadTweaksRecursively(perAppFolder, globalFolderURL, errors, blockedNames);
     }
 
     if (errors.count > 0) {

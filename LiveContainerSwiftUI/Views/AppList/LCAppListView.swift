@@ -106,6 +106,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State private var installerPreselectRepoURL: String?
     @AppStorage("darkModeIcon", store: LCUtils.appGroupUserDefault) var darkModeIcon = false
     @AppStorage(FlekDeckKeys.homeLayout, store: LCUtils.appGroupUserDefault) var homeLayout: String = FlekHomeLayout.grid.rawValue
+    @AppStorage(FlekDeckKeys.accentChoice, store: LCUtils.appGroupUserDefault) private var flekAccentChoice = FlekAccentChoice.blue.rawValue
+    @AppStorage(FlekDeckKeys.hideDockBackground, store: LCUtils.appGroupUserDefault) private var hideHomeDockBackground = false
 
 
     @State private var homeSaveIconExporterShow = false
@@ -171,6 +173,35 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     // type. The runtime resolves that type before it ever runs the availability
     // check, so on iOS 17.x the lookup fails and the Swift runtime traps.
     private var homeBottomBar: AnyView {
+        if hideHomeDockBackground {
+            return AnyView(
+                HStack(spacing: 18) {
+                    if #available(iOS 16.0, *), showMultitaskDock {
+                        Button {
+                            MultitaskDockManager.shared.showAppSwitcher()
+                        } label: {
+                            Image(systemName: "rectangle.stack.fill")
+                                .font(.system(size: FlekTheme.bottomBarGlyphSize, weight: .regular))
+                                .foregroundStyle(Color.primary.opacity(0.72))
+                                .frame(width: FlekTheme.bottomBarControlSize, height: FlekTheme.bottomBarControlSize)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Button {
+                        showSearch = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: FlekTheme.bottomBarGlyphSize, weight: .regular))
+                            .foregroundStyle(Color.primary.opacity(0.72))
+                            .frame(width: FlekTheme.bottomBarControlSize, height: FlekTheme.bottomBarControlSize)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .animation(dockEntranceAnimation, value: showMultitaskDock)
+            )
+        }
         if #available(iOS 26.0, *) {
             return AnyView(
                 GlassEffectContainer(spacing: 10) {
@@ -288,6 +319,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             ZStack {
                 FlekWallpaperView()
                 FlekBlurredWallpaperOverlay(radius: 30)
+                FlekAtmosphereOverlay()
 
                 homeContentView
                 .id(homeRefreshToggle)
@@ -366,7 +398,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.25), value: showSearch)
+        .animation(FlekAppearanceStore.reduceMotion ? .linear(duration: 0.01) : .easeOut(duration: 0.25), value: showSearch)
+        .tint(FlekAccentChoice.resolved(flekAccentChoice).color)
+        .onReceive(NotificationCenter.default.publisher(for: .flekAppearanceChanged)) { _ in
+            homeRefreshToggle.toggle()
+        }
         .onAppear {
             homeBottomSafeInset = LCDeviceSafeArea.bottomInset()
             if !didAppear { onAppear() }

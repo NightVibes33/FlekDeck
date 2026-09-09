@@ -306,8 +306,10 @@ final class LCSpringboardIconCell: UICollectionViewCell {
         // room left over falls equally above the icon and below the title.
         let iconS = Self.iconSize
         let labelS = Self.labelSize
-        let labelGap = Self.labelTopSpacing
-        let contentHeight = iconS + labelGap + labelS.height
+        let showLabel = FlekAppearanceStore.showLabels
+        nameLabel.isHidden = !showLabel
+        let labelGap = showLabel ? Self.labelTopSpacing : 0
+        let contentHeight = iconS + labelGap + (showLabel ? labelS.height : 0)
         let contentY = ((bounds.height - contentHeight) / 2).rounded()
 
         let iconX = ((bounds.width - iconS) / 2).rounded()

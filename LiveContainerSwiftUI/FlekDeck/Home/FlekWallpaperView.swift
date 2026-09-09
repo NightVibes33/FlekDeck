@@ -45,6 +45,8 @@ enum FlekWallpaper: Identifiable, Equatable {
         .asset("wallpaper12"),
         .asset("wallpaper13"),
         .asset("wallpaper14"),
+        .gradient("vibe", [Color(red: 0.035, green: 0.08, blue: 0.16), Color(red: 0.08, green: 0.32, blue: 0.46), Color(red: 0.01, green: 0.02, blue: 0.06)]),
+        .gradient("aurora", [Color(red: 0.15, green: 0.10, blue: 0.34), Color(red: 0.09, green: 0.52, blue: 0.48), Color(red: 0.03, green: 0.08, blue: 0.16)]),
         .gradient("sunset", [Color(red: 1.0, green: 0.45, blue: 0.45), Color(red: 0.6, green: 0.2, blue: 0.6)]),
         .gradient("ocean", [Color(red: 0.20, green: 0.55, blue: 0.95), Color(red: 0.05, green: 0.20, blue: 0.45)]),
         .gradient("mint", [Color(red: 0.35, green: 0.85, blue: 0.70), Color(red: 0.10, green: 0.45, blue: 0.55)]),

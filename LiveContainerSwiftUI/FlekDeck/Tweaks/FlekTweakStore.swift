@@ -250,7 +250,8 @@ final class FlekTweakStore: ObservableObject {
     }
 
     func isEffective(_ tweak: FlekManagedTweak, for app: LCAppModel) -> Bool {
-        if isGlobal(tweak) && !isBlocked(tweak, for: app) { return true }
+        if isBlocked(tweak, for: app) { return false }
+        if isGlobal(tweak) { return true }
         if fm.fileExists(atPath: perAppURL(tweak, app: app).path) { return true }
         return profileTweaks(for: app).contains { $0.name.caseInsensitiveCompare(tweak.name) == .orderedSame }
     }
@@ -269,7 +270,7 @@ final class FlekTweakStore: ObservableObject {
             let global = root.appendingPathComponent(tweak.name)
             if enabled {
                 if !fm.fileExists(atPath: global.path) {
-                    try fm.createSymbolicLink(at: global, withDestinationURL: canonicalSource(for: tweak))
+                    try createRelativeLink(at: global, to: canonicalSource(for: tweak))
                 }
             } else if fm.fileExists(atPath: global.path) {
                 if isSymlink(global) {
@@ -288,27 +289,30 @@ final class FlekTweakStore: ObservableObject {
         }
     }
 
-    /// Mirrors Vibe's per-app toggle. For a global tweak this writes an opt-out
-    /// marker; for a non-global tweak it adds/removes a symlink in the app overlay.
+    /// Mirrors Vibe's per-app toggle, but makes the result authoritative
+    /// across global scope, the per-app overlay, and the existing profile.
     func setEnabled(_ enabled: Bool, tweak: FlekManagedTweak, for app: LCAppModel) {
         do {
             try ensureDirectories()
-            if isGlobal(tweak) {
-                let marker = blockURL(tweak, app: app)
-                try fm.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if enabled {
-                    if fm.fileExists(atPath: marker.path) { try fm.removeItem(at: marker) }
-                } else if !fm.fileExists(atPath: marker.path) {
-                    fm.createFile(atPath: marker.path, contents: Data(), attributes: nil)
+            let marker = blockURL(tweak, app: app)
+            let overlay = perAppURL(tweak, app: app)
+            try fm.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.createDirectory(at: overlay.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+            if enabled {
+                if fm.fileExists(atPath: marker.path) { try fm.removeItem(at: marker) }
+                let providedByProfile = profileTweaks(for: app).contains {
+                    $0.name.caseInsensitiveCompare(tweak.name) == .orderedSame
+                }
+                if !isGlobal(tweak) && !providedByProfile && !fm.fileExists(atPath: overlay.path) {
+                    try createRelativeLink(at: overlay, to: canonicalSource(for: tweak))
                 }
             } else {
-                let overlay = perAppURL(tweak, app: app)
-                try fm.createDirectory(at: overlay.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if enabled {
-                    if fm.fileExists(atPath: overlay.path) { try fm.removeItem(at: overlay) }
-                    try fm.createSymbolicLink(at: overlay, withDestinationURL: canonicalSource(for: tweak))
-                } else if fm.fileExists(atPath: overlay.path) {
-                    try fm.removeItem(at: overlay)
+                if !fm.fileExists(atPath: marker.path) {
+                    fm.createFile(atPath: marker.path, contents: Data(), attributes: nil)
+                }
+                if fm.fileExists(atPath: overlay.path) || isSymlink(overlay) {
+                    try? fm.removeItem(at: overlay)
                 }
             }
             lastNotice = enabled ? "Enabled \(tweak.name) for \(app.displayName)." : "Disabled \(tweak.name) for \(app.displayName)."
@@ -393,7 +397,7 @@ final class FlekTweakStore: ObservableObject {
                     let target = canonicalSource(for: tweak)
                     if link.resolvingSymlinksInPath().standardizedFileURL != target.resolvingSymlinksInPath().standardizedFileURL {
                         try fm.removeItem(at: link)
-                        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+                        try createRelativeLink(at: link, to: target)
                     }
                 }
             }
@@ -436,8 +440,8 @@ final class FlekTweakStore: ObservableObject {
     func effectiveTweaks(for app: LCAppModel) -> [FlekManagedTweak] {
         var map: [String: FlekManagedTweak] = [:]
         for tweak in library where isGlobal(tweak) && !isBlocked(tweak, for: app) { map[tweak.id] = tweak }
-        for tweak in overlayTweaks(for: app) { map[tweak.id] = tweak }
-        for tweak in profileTweaks(for: app) { map[tweak.id] = tweak }
+        for tweak in overlayTweaks(for: app) where !isBlocked(tweak, for: app) { map[tweak.id] = tweak }
+        for tweak in profileTweaks(for: app) where !isBlocked(tweak, for: app) { map[tweak.id] = tweak }
         return map.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
@@ -596,8 +600,18 @@ final class FlekTweakStore: ObservableObject {
             let link = appDirectory.appendingPathComponent(name)
             guard fm.fileExists(atPath: link.path) || isSymlink(link) else { continue }
             try? fm.removeItem(at: link)
-            try fm.createSymbolicLink(at: link, withDestinationURL: destination)
+            try createRelativeLink(at: link, to: destination)
         }
+    }
+
+    private func createRelativeLink(at link: URL, to target: URL) throws {
+        let from = link.deletingLastPathComponent().standardizedFileURL.pathComponents
+        let to = target.standardizedFileURL.pathComponents
+        var common = 0
+        while common < from.count && common < to.count && from[common] == to[common] { common += 1 }
+        let components = Array(repeating: "..", count: from.count - common) + Array(to.dropFirst(common))
+        let relative = components.isEmpty ? "." : components.joined(separator: "/")
+        try fm.createSymbolicLink(atPath: link.path, withDestinationPath: relative)
     }
 
     private func removeNamedItem(_ name: String, below root: URL) throws {

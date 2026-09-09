@@ -65,6 +65,12 @@ final class LCSpringboardViewController: UIViewController {
     // MARK: - Layout config
 
     private(set) var itemsPerPage: Int = 15
+    private var lastAppearanceColumnToken = LCSpringboardViewController.appearanceColumnToken()
+
+    private static func appearanceColumnToken() -> String {
+        if FlekAppearanceStore.defaults.object(forKey: FlekDeckKeys.gridColumns) == nil { return "system" }
+        return "custom:\(FlekAppearanceStore.gridColumns)"
+    }
 
     // MARK: - Lifecycle
 
@@ -76,9 +82,11 @@ final class LCSpringboardViewController: UIViewController {
         setupOuterCollectionView()
         setupPageControl()
         setupDragManager()
+        NotificationCenter.default.addObserver(self, selector: #selector(flekAppearanceChanged), name: .flekAppearanceChanged, object: nil)
     }
 
     deinit {
+        NotificationCenter.default.removeObserver(self)
         if Self.current === self { Self.current = nil }
     }
 
@@ -205,6 +213,34 @@ final class LCSpringboardViewController: UIViewController {
         longPressGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPressGesture.minimumPressDuration = 0.3
         view.addGestureRecognizer(longPressGesture)
+    }
+
+    @objc private func flekAppearanceChanged() {
+        let token = Self.appearanceColumnToken()
+        let columnsChanged = token != lastAppearanceColumnToken
+        lastAppearanceColumnToken = token
+
+        if columnsChanged {
+            // Stored page sizes were calculated with the previous capacity.
+            // Rebuilding them is required so drag/reorder and paging stay in sync.
+            LCUtils.appGroupUserDefault.removeObject(forKey: FlekDeckKeys.homeScreenPageSizes)
+            recalculateItemsPerPage()
+            _ = paginateFromFlatItems()
+            currentPage = min(max(currentPage, 0), max(0, pages.count - 1))
+            outerCollectionView.reloadData()
+            pageControl.numberOfPages = pages.count
+            pageControl.currentPage = currentPage
+            DispatchQueue.main.async { [weak self] in self?.syncPagesToSwiftUI() }
+        } else {
+            outerCollectionView.collectionViewLayout.invalidateLayout()
+            for case let pageCell as LCSpringboardPageCell in outerCollectionView.visibleCells {
+                pageCell.collectionView.collectionViewLayout.invalidateLayout()
+                pageCell.setNeedsLayout()
+            }
+        }
+
+        view.setNeedsLayout()
+        refreshVisibleItems()
     }
 
     // MARK: - Data update
@@ -743,10 +779,29 @@ extension LCSpringboardViewController: UIScrollViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard scrollView.frame.width > 0 else { return }
-        let page = Int(round(scrollView.contentOffset.x / scrollView.frame.width))
+        let fractionalPage = scrollView.contentOffset.x / scrollView.frame.width
+        let page = Int(round(fractionalPage))
         if page != currentPage && page >= 0 && page < pages.count {
             currentPage = page
             pageControl.currentPage = page
+        }
+
+        let transition = FlekAppearanceStore.reduceMotion ? FlekPageTransition.slide : FlekAppearanceStore.pageTransition
+        for cell in outerCollectionView.visibleCells {
+            guard let indexPath = outerCollectionView.indexPath(for: cell) else { continue }
+            let distance = min(abs(CGFloat(indexPath.item) - fractionalPage), 1)
+            switch transition {
+            case .slide:
+                cell.alpha = 1
+                cell.transform = .identity
+            case .fade:
+                cell.alpha = 1 - distance * 0.72
+                cell.transform = .identity
+            case .scale:
+                cell.alpha = 1 - distance * 0.25
+                let scale = 1 - distance * 0.10
+                cell.transform = CGAffineTransform(scaleX: scale, y: scale)
+            }
         }
     }
 }

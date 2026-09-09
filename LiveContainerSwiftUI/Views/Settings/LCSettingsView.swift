@@ -388,7 +388,7 @@ struct LCSettingsView: View {
                     NavigationLink { signingPage } label: {
                         categoryRow("lc.flek.cat.signing".loc, "signature", .mint, iconSize: 15)
                     }
-                    NavigationLink { LCTweaksView() } label: {
+                    NavigationLink { FlekVibeTweaksView() } label: {
                         categoryRow("Tweaks", "wrench.and.screwdriver.fill", .orange, iconSize: 17)
                     }
                 }
