@@ -68,7 +68,7 @@
 		</dict>
 	</array>
 	<key>GCSupportsControllerUserInteraction</key>
-	<true/>
+	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.education</string>
 	<key>LSApplicationQueriesSchemes</key>
@@ -172,7 +172,7 @@
 	<key>NSIdentityUsageDescription</key>
 	<string>The guest app is requesting for this permission.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>The guest app is requesting for this permission.</string>
+	<string>FlekDeck uses the local network for guest-app services and its optional HTTP server.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>The guest app is requesting for this permission.</string>
 	<key>NSLocationDefaultAccuracyReduced</key>

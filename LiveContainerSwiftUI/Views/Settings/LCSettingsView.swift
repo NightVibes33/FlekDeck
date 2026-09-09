@@ -226,8 +226,6 @@ struct LCSettingsView: View {
         return !publishedEncryptedUdid.isEmpty && hostIdentityUdid != publishedEncryptedUdid
     }
 
-    
-    
     /// Name of the step the haptics slider currently sits on, shown beside it —
     /// a strength is easier to recognise by name than by a bare number, and the
     /// left end being "Off" is the part worth being explicit about.
@@ -262,16 +260,10 @@ struct LCSettingsView: View {
         NavigationView {
             Form {
                 Section {
-
                     // Developer-only. This is a diagnostic — it exists to compare what the
                     // guest's identity check actually saw against what the app holds — and it
                     // means nothing to anyone not chasing that particular mismatch.
                     if sharedModel.developerMode {
-                        // MARK: - Multitask identity
-                        // What reached the last app launched in parallel. A guest reads
-                        // the identifier from the host process' bundle, which is the
-                        // extension rather than the app, so this is the value the check
-                        // actually saw — not the one the app holds.
                         HStack(spacing: 12) {
                             Image(systemName: "square.on.square")
                                 .font(.system(size: 20))
@@ -318,8 +310,6 @@ struct LCSettingsView: View {
                         .padding(.vertical, 6)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            // Copied as well as shown: the point of this row is usually to
-                            // send it to someone comparing another device.
                             UIPasteboard.general.string = multitaskIdentityReport
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             showIdentityReport = true
@@ -330,9 +320,7 @@ struct LCSettingsView: View {
                             Text("\(multitaskIdentityReport)\n\nCopied to clipboard.")
                         }
                     }
-
                 }
-                // Vibe certificate controls, exposed once in the Flek settings shell.
                 if sharedModel.multiLCStatus != 2 {
                     Section{
                         if !certificateDataFound {
@@ -374,8 +362,14 @@ struct LCSettingsView: View {
                 }
                 // MARK: - Categories
                 Section {
-                    NavigationLink { FlekPersonalizationView() } label: {
-                        categoryRow("lc.flek.personalization".loc, "paintbrush.fill", .purple)
+                    NavigationLink { FlekCustomizationView() } label: {
+                        categoryRow("Customization", "paintbrush.pointed.fill", .purple)
+                    }
+                    NavigationLink { FlekControllerSettingsView() } label: {
+                        categoryRow("Controller Mode", "gamecontroller.fill", .indigo, iconSize: 16)
+                    }
+                    NavigationLink { FlekHTTPServerView() } label: {
+                        categoryRow("HTTP Server", "network", .green, iconSize: 16)
                     }
                     NavigationLink { launchBehaviorPage } label: {
                         categoryRow("lc.flek.cat.launch".loc, FlekSymbol.appGrid, .blue, iconSize: 22)
@@ -410,9 +404,6 @@ struct LCSettingsView: View {
                 VStack(alignment: .leading, spacing: 2){
                     Text(LCUtils.getVersionInfo())
                         .foregroundStyle(.gray)
-                        // The branch and hash make this long enough to wrap in the
-                        // width the padding below leaves it. Two lines to wrap into,
-                        // and shrinking only once that is not enough either.
                         .lineLimit(2)
                         .minimumScaleFactor(0.5)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -424,35 +415,20 @@ struct LCSettingsView: View {
                     HStack(spacing:0){
                         Text("Build: ")
                             .foregroundStyle(.gray)
-                        // A Link here would take over the whole Form row and swallow
-                        // the version tap above it, so open the URL by hand instead.
                         Text("FlekSt0re")
                             .foregroundStyle(.blue)
                             .contentShape(Rectangle())
                             .onTapGesture(perform: openFlekstore)
                     }
-                    // Centred on its own, against a version line that fills the width
-                    // to sit leading. The stack's own alignment cannot do both.
                     .frame(maxWidth: .infinity)
-                    // The size this line has always been. Only the version below the
-                    // footer was meant to match it, and a font set here is nearer the
-                    // text than the one on the stack, so it is the one that lands.
                     .font(.body)
                     
                 }
                 .font(.footnote)
-                // Line up with the footer above rather than with the cards: a row is
-                // kept 20pt clear of each window edge, and a section footer a further
-                // 20pt inside that. Leading, for the same reason — a matching margin
-                // reads as one only if both start at the same edge. The padding sits
-                // within the frame so the background still covers the whole row —
-                // inset the row itself and the cell's own card colour shows along
-                // both edges.
                 .padding(.horizontal, 20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .background(Color(UIColor.systemGroupedBackground))
                 .listRowInsets(EdgeInsets())
-
 
                 if sharedModel.developerMode {
                     Section {
@@ -461,10 +437,6 @@ struct LCSettingsView: View {
                                 Text("lc.settings.rotationOverlay".loc)
                             }
                             .onChange(of: showRotationPanel) { on in
-                                // The overlay always runs; this only draws it. If
-                                // the panel is being taken away, drop any manual
-                                // lock with it, so a lock cannot outlive the only
-                                // control that releases it.
                                 if !on { LCRotationLock.isManual = false }
                                 LCRotationLockOverlay.setPanelVisible(on)
                             }
@@ -590,7 +562,6 @@ struct LCSettingsView: View {
             )
         }
         .onAppear {
-            // Refresh persisted certificate state whenever Settings is shown.
             certificateDataFound = LCUtils.certificateData() != nil && LCSharedUtils.certificatePassword() != nil
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .settings, let link = sharedModel.deepLink else { return }
@@ -613,16 +584,8 @@ struct LCSettingsView: View {
         return lastChar.isLowercase
     }
 
-    /// An external-link row. The artwork is already a full-bleed tile, so it's sized
-    /// and clipped to the same 30pt rounded square as the category icons rather than
-    /// drawn at its native size, which is far larger than a row.
     @ViewBuilder
     private func linkRow(_ imageName: String, _ title: String, action: @escaping () -> Void) -> some View {
-        // These open URLs rather than pushing a view, so there's no NavigationLink to
-        // supply a disclosure indicator — it's drawn by hand to match the category
-        // rows above. `.plain` keeps the title in the label colour like those rows
-        // (a bare Button would tint it), and the content shape makes the whole row
-        // tappable rather than just the text.
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(imageName)
@@ -641,17 +604,9 @@ struct LCSettingsView: View {
         .buttonStyle(.plain)
     }
 
-    /// `iconSize` is per-symbol on purpose. Point size sets the em, not the drawn
-    /// shape, and how much of that em a symbol inks varies by design — an enclosed
-    /// glyph like `j.circle` or a thin one like `app.grid` reads far smaller than a
-    /// `.fill` symbol at the same size. The default suits most of the set; the
-    /// densest symbols pass a smaller value rather than everything sharing one size
-    /// and half the rows looking undersized.
     @ViewBuilder
     private func categoryRow(_ title: String, _ systemImage: String, _ color: Color,
                              iconSize: CGFloat = 17) -> some View {
-        // Laid out by hand rather than with `Label`: its icon-to-title gap is fixed
-        // and too wide for a tile this size, and it can't be tightened otherwise.
         let tile = RoundedRectangle(cornerRadius: 7, style: .continuous)
         HStack(spacing: 10) {
             Image(systemName: systemImage)
@@ -660,10 +615,6 @@ struct LCSettingsView: View {
                 .frame(width: 30, height: 30)
                 .background(
                     tile.fill(color)
-                        // Sheen over the colour, brightest at the top and gone by the
-                        // bottom. Drawn in the same shape as the fill so it needs no
-                        // clipping, and it sits in the background so the white glyph
-                        // stays on top of it.
                         .overlay(
                             tile.fill(
                                 LinearGradient(
@@ -749,9 +700,6 @@ struct LCSettingsView: View {
                                         .foregroundColor(.secondary)
                                         .font(.caption)
                                 }
-                                // Four stops, off at the left end. Every stop plays
-                                // its own feedback as it is reached, so the strength
-                                // is chosen by feel rather than by name.
                                 Slider(value: multitaskHapticsBinding,
                                        in: 0...3, step: 1) {
                                     Text("lc.flek.switcherHaptics".loc)
@@ -779,8 +727,6 @@ struct LCSettingsView: View {
                                         .foregroundColor(.secondary)
                                         .font(.caption)
                                 }
-                                // 0% = flat bar, 100% = fully rounded concave corners,
-                                // in 10% steps.
                                 Slider(value: $barLedgeAmount, in: 0...100, step: 10) {
                                     Text("lc.flek.roundedSwitcherBar".loc)
                                 }
@@ -925,7 +871,6 @@ struct LCSettingsView: View {
         .toolbar { ToolbarItem(placement: .principal) { Text("lc.flek.cat.signing".loc).font(.headline) } }
     }
 
-    
     func openFleksign() {
         UIApplication.shared.open(URL(string: "https://fleksign.com")!)
     }
@@ -1004,8 +949,6 @@ struct LCSettingsView: View {
         }
     }
 
-    // Match the exact Vibe Objective-C reader, including its Unknown fallback.
-    // The Swift appGroupUserDefault property otherwise creates an "Unknown" suite.
     private var flekCertificateDefaults: UserDefaults {
         let group = LCSharedUtils.appGroupID() ?? ""
         if group.isEmpty || group == "Unknown" { return .standard }
@@ -1023,7 +966,6 @@ struct LCSettingsView: View {
         defaults.set(data, forKey: "LCCertificateData")
         defaults.set(password, forKey: "LCCertificatePassword")
         defaults.set(Date(), forKey: "LCCertificateUpdateDate")
-        // Vibe's bootstrap prefers the host password over its shared domain.
         UserDefaults.standard.set(password, forKey: "LCCertificatePassword")
         defaults.synchronize()
         UserDefaults.standard.synchronize()
@@ -1060,17 +1002,12 @@ struct LCSettingsView: View {
         do {
             let certificateData = try Data(contentsOf: certificateURL)
             let certificatePassword = fsPassword
-            
-            // Validate using existing util (same check used in importCertificate())
             guard let _ = LCUtils.getCertTeamId(withKeyData: certificateData, password: certificatePassword) else {
                 errorInfo = "lc.settings.invalidCertError".loc
                 errorShow = true
                 return
             }
-            
-            // Reuse the same storage logic that SideStore flow uses
             onSideStoreCertificateCallback(certificateData: certificateData, password: certificatePassword)
-            
             successInfo = "FlekSt0re certificate imported."
             successShow = true
         } catch {
@@ -1111,7 +1048,6 @@ struct LCSettingsView: View {
                     return
                 }
                 onSideStoreCertificateCallback(certificateData: data, password: "")
-                
                 return
             }
         }
@@ -1193,9 +1129,7 @@ struct LCSettingsView: View {
                 }
                 
                 onSideStoreCertificateCallback(certificateData: certData, password: password)
-                
             }
         }
     }
-    
 }
