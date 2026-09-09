@@ -265,8 +265,8 @@ static void LCUnstageAppFromAppGroup(NSString *bundleId, NSString *dataUUID, BOO
         }
     }
 
-    // The bundle is shared between every window running that app, so it only
-    // goes once the last window has exited.
+    // The bundle is shared between every window running this app, so it only
+    // goes once the last of them has exited.
     if(wasLastUser) {
         NSURL *stagedBundle = [appGroupLC URLByAppendingPathComponent:[NSString stringWithFormat:@"Applications/%@", bundleId]];
         LCDiscardTree(stagedBundle, appGroupLC);
@@ -346,6 +346,7 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
     self.dataUUID = dataUUID;
     self.bundleId = bundleId;
     self.scaleRatio = 1.0;
+    self.settings = [UIMutableApplicationSceneSettings new];
     self.isAppTerminationCleanUpCalled = false;
     self.isNativeWindow = [NSUserDefaults.lcSharedDefaults integerForKey:@"LCMultitaskMode" ] == 1;
     
@@ -372,18 +373,6 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
         @"bookmarks": bookmarks,
         @"lcHomePath": NSHomeDirectory(),
     }.mutableCopy;
-
-    // The host has already selected and validated the signing identity before
-    // Run Parallel reaches this boundary. LiveProcess has its own defaults
-    // domain, so it cannot infer that identity from the host process. Carry the
-    // same password across the extension request; LiveProcess/main.m restores it
-    // as LCCertificatePassword before entering LiveContainerMain. Without this,
-    // iOS 26+ bootstrap mistakes an otherwise JIT-less signed guest for a
-    // no-certificate launch and unconditionally asks the child process for JIT.
-    NSString *certificatePassword = LCSharedUtils.certificatePassword;
-    if(certificatePassword.length) {
-        userInfo[@"certificatePassword"] = certificatePassword;
-    }
     
     NSString* launchAppUrlScheme = [NSUserDefaults.standardUserDefaults stringForKey:@"launchAppUrlScheme"];
     [NSUserDefaults.lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
@@ -515,6 +504,16 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
         // lay out for a screen it is not in.
         if([self.delegate respondsToSelector:@selector(appSceneVC:willPresentSceneWithSettings:)]) {
             [self.delegate appSceneVC:self willPresentSceneWithSettings:settings];
+        }
+        // The hosting view must agree with the initial scene settings before
+        // activation. Otherwise its default bounds can immediately supersede
+        // the correctly configured guest frame on the first hosting update.
+        if(self.usesHostingControllerAPI && self.contentView) {
+            CGSize size = settings.frame.size;
+            if(UIInterfaceOrientationIsLandscape(settings.interfaceOrientation)) {
+                size = CGSizeMake(size.height, size.width);
+            }
+            self.contentView.frame = (CGRect){CGPointZero, size};
         }
     };
     void (^updateSceneClientSettings)(id) = ^void(UIMutableApplicationSceneClientSettings *clientSettings) {
@@ -699,7 +698,7 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
                 // Only ever written with a real answer; unknown leaves it as it is.
                 if(guestDevice != UIDeviceOrientationUnknown) settings.deviceOrientation = guestDevice;
             }
-            CGRect frame = self.view.frame;
+            CGRect frame = self.view.bounds;
             if(!self.usesHostingControllerAPI) {
                 frame.size.width /= self.scaleRatio;
                 frame.size.height /= self.scaleRatio;
