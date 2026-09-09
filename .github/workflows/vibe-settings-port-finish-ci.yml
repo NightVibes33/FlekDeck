@@ -31,6 +31,7 @@ jobs:
       - name: Apply remaining Vibe port
         run: |
           set -euo pipefail
+          python3 Tools/repair_finish_vibe_patch.py
           python3 Tools/finish_vibe_settings_port.py
           git diff --check
 
@@ -54,14 +55,10 @@ jobs:
       - name: Materialize corrected source tree
         run: |
           set -euo pipefail
-          # The first attempt rewrote LCTweaksView even though the corrected
-          # Settings route now uses FlekVibeTweaksView. Restore the established
-          # FlekDeck implementation so no dead duplicate manager ships.
           git checkout 542c15fe209501d2ea9de7725601f598e29e64d4 -- LiveContainerSwiftUI/Views/LCTweaksView.swift
-
-          # Do not ship one-shot assembly machinery.
           rm -f Tools/apply_vibe_port_rebuild.py
           rm -f Tools/finish_vibe_settings_port.py
+          rm -f Tools/repair_finish_vibe_patch.py
           rm -f .github/workflows/vibe-settings-port-finish-ci.yml
 
           git add -A
