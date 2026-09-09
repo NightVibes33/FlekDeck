@@ -6,7 +6,7 @@ marker = "# --------------------------------------------------------------------
 if marker not in text:
     raise SystemExit("TweakLoader finish-patch section not found")
 head = text.split(marker, 1)[0]
-tail = r'''# ---------------------------------------------------------------------------
+tail = r"""# ---------------------------------------------------------------------------
 # TweakLoader: blacklist applies to recursive legacy profiles and per-app
 # overlays too, while preserving the rebuild's staging-safe globalRoot resolver.
 # ---------------------------------------------------------------------------
@@ -45,6 +45,6 @@ replace_all(loader, "loadTweaksRecursively(perAppFolder, globalFolderURL, errors
 print("finish_vibe_settings_port changed:")
 for path in sorted(set(changed)):
     print(" -", path)
-'''
+"""
 p.write_text(head + tail)
 print("Rebased finish patch onto staging-safe TweakLoader")
