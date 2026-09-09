@@ -51,6 +51,16 @@ jobs:
           python3 Tools/patch_guest_native_pip_bridge.py
           python3 Tools/patch_youtube_native_pip_render.py
           python3 Tools/patch_pip_state_separation.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('LiveContainerSwiftUI/Views/LCTweaksView.swift')
+          s = p.read_text()
+          old = '.foregroundStyle(apps[index].uiTweakFolder == nil ? .secondary : .orange)'
+          new = '.foregroundStyle(apps[index].uiTweakFolder == nil ? Color(UIColor.secondaryLabel) : Color.orange)'
+          if old not in s:
+              raise SystemExit('expected final Tweaks style line not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
