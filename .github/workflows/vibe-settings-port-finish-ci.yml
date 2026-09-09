@@ -1,0 +1,119 @@
+name: Finish Vibe Settings Port
+
+on:
+  push:
+    branches:
+      - temp/vibe-settings-port-finish-ci
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vibe-settings-port-finish
+  cancel-in-progress: false
+
+jobs:
+  apply-and-build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout finish branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Apply remaining Vibe port
+        run: |
+          set -euo pipefail
+          python3 Tools/finish_vibe_settings_port.py
+          git diff --check
+
+      - name: Parse corrected Swift boundary
+        run: |
+          set -euo pipefail
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Controller/FlekControllerMode.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Controller/FlekXMBRootView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Design/FlekAppearance.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Home/FlekWallpaperView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Settings/FlekCustomizationView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardIconCell.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardPageCell.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Tweaks/FlekTweakStore.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Tweaks/FlekVibeTweaksView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/HTTP/FlekHTTPServer.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+
+      - name: Materialize corrected source tree
+        run: |
+          set -euo pipefail
+          # The first attempt rewrote LCTweaksView even though the corrected
+          # Settings route now uses FlekVibeTweaksView. Restore the established
+          # FlekDeck implementation so no dead duplicate manager ships.
+          git checkout 542c15fe209501d2ea9de7725601f598e29e64d4 -- LiveContainerSwiftUI/Views/LCTweaksView.swift
+
+          # Do not ship one-shot assembly machinery.
+          rm -f Tools/apply_vibe_port_rebuild.py
+          rm -f Tools/finish_vibe_settings_port.py
+          rm -f .github/workflows/vibe-settings-port-finish-ci.yml
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes to materialize"
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git commit -m "Finish Vibe settings feature port [skip ci]"
+            git push origin HEAD:temp/vibe-settings-port-finish-ci
+          fi
+
+      - name: Build unsigned real-device archive
+        run: |
+          set -uo pipefail
+          mkdir -p build
+          set +e
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck-VibeSettings.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/xcodebuild.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- compiler/linker errors ---'
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -300 || true
+            exit "$status"
+          fi
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP="$(find "$PWD/build/FlekDeck-VibeSettings.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build
+          zip -qry FlekDeck-VibeSettings-Port.ipa Payload
+          unzip -t FlekDeck-VibeSettings-Port.ipa >/dev/null
+          test -s FlekDeck-VibeSettings-Port.ipa
+          shasum -a 256 FlekDeck-VibeSettings-Port.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-VibeSettings-Port
+          path: build/FlekDeck-VibeSettings-Port.ipa
+          if-no-files-found: error
