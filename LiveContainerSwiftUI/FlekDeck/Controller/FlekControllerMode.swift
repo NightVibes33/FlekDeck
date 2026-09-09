@@ -52,16 +52,20 @@ struct FlekGamePad: Identifiable, Equatable {
     }
 }
 
-/// FlekDeck port of VibeContainers' controller hardware/input layer.
-/// It owns controller I/O only; app enumeration and launch remain FlekDeck's.
+/// FlekDeck adaptation of VibeContainers' controller hardware layer. It owns
+/// GameController discovery/input only; navigation and guest launch remain on
+/// FlekDeck's XMB adapter and LCAppModel runtime.
 @MainActor
 final class FlekControllerHub: ObservableObject {
     static let shared = FlekControllerHub()
 
     @Published private(set) var pads: [FlekGamePad] = []
+    @Published private(set) var controllerUITestMode = false
+
     var isConnected: Bool { !pads.isEmpty }
     var hasPlayStationPad: Bool { pads.contains { $0.kind.isPlayStation } }
 
+    /// The active controller surface installs these while it is on-screen.
     var sink: ((FlekControllerInput) -> Void)?
     var onHome: (() -> Void)?
 
@@ -82,8 +86,23 @@ final class FlekControllerHub: ObservableObject {
             guard let controller = note.object as? GCController else { return }
             Task { @MainActor in self?.drop(controller) }
         })
+
         GCController.controllers().forEach(adopt)
         GCController.startWirelessControllerDiscovery()
+    }
+
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
+        cancelAllRepeats()
+        haptics.values.forEach { $0.stop() }
+    }
+
+    func enterControllerUITestMode() {
+        controllerUITestMode = true
+    }
+
+    func leaveControllerUITestMode() {
+        controllerUITestMode = false
     }
 
     private static func key(_ controller: GCController) -> Int {
@@ -146,12 +165,14 @@ final class FlekControllerHub: ObservableObject {
         pad.dpad.left.pressedChangedHandler = repeatHandler(.left)
         pad.dpad.right.pressedChangedHandler = repeatHandler(.right)
 
+        // Apple's generic A/B/X/Y profile maps exactly to Vibe's face-button
+        // vocabulary: Cross/Circle/Square/Triangle.
         pad.buttonA.pressedChangedHandler = tapHandler(.cross)
         pad.buttonB.pressedChangedHandler = tapHandler(.circle)
         pad.buttonX.pressedChangedHandler = tapHandler(.square)
         pad.buttonY.pressedChangedHandler = tapHandler(.triangle)
-        pad.leftShoulder.pressedChangedHandler = repeatHandler(.l1)
-        pad.rightShoulder.pressedChangedHandler = repeatHandler(.r1)
+        pad.leftShoulder.pressedChangedHandler = tapHandler(.l1)
+        pad.rightShoulder.pressedChangedHandler = tapHandler(.r1)
         pad.buttonMenu.pressedChangedHandler = tapHandler(.options)
         pad.buttonOptions?.pressedChangedHandler = tapHandler(.share)
         pad.buttonHome?.pressedChangedHandler = { [weak self] _, _, pressed in
@@ -191,6 +212,7 @@ final class FlekControllerHub: ObservableObject {
         }
 
         let current = stickDirection[key] ?? nil
+        // Hysteresis: do not disarm until the stick is well inside its deadzone.
         if armed == nil && max(abs(x), abs(y)) > 0.35 { return }
         guard armed != current else { return }
         if let current { endRepeating(current) }
@@ -229,7 +251,9 @@ final class FlekControllerHub: ObservableObject {
         haptics[Self.key(controller)] = engine
     }
 
-    func rumble(intensity: Float = 0.60, sharpness: Float = 0.55, duration: TimeInterval = 0.07) {
+    func rumble(intensity: Float = 0.60,
+                sharpness: Float = 0.55,
+                duration: TimeInterval = 0.07) {
         for engine in haptics.values {
             let event = CHHapticEvent(
                 eventType: .hapticContinuous,
@@ -260,6 +284,8 @@ final class FlekControllerHub: ObservableObject {
     }
 }
 
+/// Settings front-end for Vibe's controller feature. Entry is always explicit:
+/// discovering a controller never changes FlekDeck's startup UI.
 struct FlekControllerSettingsView: View {
     @StateObject private var hub = FlekControllerHub.shared
     @State private var dashboardPresented = false
@@ -276,23 +302,34 @@ struct FlekControllerSettingsView: View {
         }
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .principal) { Text("Controller Mode").font(.headline) } }
-        .fullScreenCover(isPresented: $dashboardPresented) {
-            FlekControllerDashboardView()
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Controller Mode").font(.headline)
+            }
+        }
+        .fullScreenCover(isPresented: $dashboardPresented, onDismiss: {
+            hub.leaveControllerUITestMode()
+        }) {
+            // This is the actual Vibe XMB state machine adapted to FlekDeck's
+            // app/runtime stores. The old one-card carousel was intentionally
+            // removed; it never represented Controller Mode correctly.
+            FlekXMBRootView()
         }
     }
 
     private var hero: some View {
         VStack(spacing: 12) {
             ZStack {
-                Circle().fill(Color.blue.opacity(0.14)).frame(width: 86, height: 86)
+                Circle()
+                    .fill(FlekAppearanceStore.accent.color.opacity(0.14))
+                    .frame(width: 86, height: 86)
                 Image(systemName: "gamecontroller.fill")
                     .font(.system(size: 36, weight: .semibold))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(FlekAppearanceStore.accent.color)
             }
             Text(hub.isConnected ? "Controller connected" : "Controller ready")
                 .font(.title2.bold())
-            Text("VibeContainers' controller mode is routed through FlekDeck's installed-app model and launch runtime. D-pad/thumbstick navigation, face buttons, shoulders, battery, light bar and rumble remain available without replacing the normal home screen.")
+            Text("Open FlekDeck's Vibe-style XMB dashboard. D-pad and left-stick navigation, face buttons, L1/R1, PS/Home exit, battery state, light bar and controller haptics are routed through the existing FlekDeck app runtime.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -307,11 +344,13 @@ struct FlekControllerSettingsView: View {
             Text("Controllers").font(.headline).padding(.bottom, 12)
             if hub.pads.isEmpty {
                 HStack(spacing: 12) {
-                    Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(.blue)
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .foregroundStyle(FlekAppearanceStore.accent.color)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("No physical controller")
-                        Text("Touch controls remain available in the dashboard.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Touch test controls are available in Controller Mode.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Spacer()
                 }
@@ -325,7 +364,8 @@ struct FlekControllerSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(pad.kind.title).font(.body.weight(.medium))
                             Text("\(pad.vendorName) · \(pad.batteryText)")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         Spacer()
                     }
@@ -345,7 +385,9 @@ struct FlekControllerSettingsView: View {
             Text("Capabilities").font(.headline)
             capability("Navigation", value: "D-pad + left stick")
             capability("Face buttons", value: "✕ ○ □ △")
-            capability("Shoulders", value: "L1 / R1 category jump")
+            capability("Shoulders", value: "L1 / R1")
+            capability("Options / Share", value: "Mapped")
+            capability("PS / Home", value: "Exit dashboard")
             capability("Rumble", value: pad?.hasHaptics == true ? "Available" : "Controller dependent")
             capability("Light bar", value: pad?.hasLightBar == true ? "Available" : "Controller dependent")
             capability("Adaptive triggers", value: pad?.hasAdaptiveTriggers == true ? "Detected" : "Controller dependent")
@@ -356,31 +398,52 @@ struct FlekControllerSettingsView: View {
     }
 
     private var launchCard: some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            dashboardPresented = true
-        } label: {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.blue.opacity(0.13))
-                    Image(systemName: "rectangle.landscape.rotate")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(.blue)
+        VStack(spacing: 10) {
+            Button {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                // Vibe's test mode is intentionally session-only. It gives a
+                // complete touch control layer while testing without a pad.
+                hub.enterControllerUITestMode()
+                dashboardPresented = true
+            } label: {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(FlekAppearanceStore.accent.color.opacity(0.13))
+                        Image(systemName: "rectangle.landscape.rotate")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(FlekAppearanceStore.accent.color)
+                    }
+                    .frame(width: 54, height: 54)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Open Controller Mode").font(.headline)
+                        Text("Full XMB dashboard · landscape · touch test controls")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.forward").foregroundStyle(.secondary)
                 }
-                .frame(width: 54, height: 54)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Open Controller Mode").font(.headline)
-                    Text("Landscape dashboard with controller and touch navigation")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.forward").foregroundStyle(.secondary)
+                .padding(18)
+                .contentShape(Rectangle())
             }
-            .padding(18)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if hub.isConnected {
+                Divider().padding(.horizontal, 18)
+                Button {
+                    hub.leaveControllerUITestMode()
+                    dashboardPresented = true
+                } label: {
+                    Label("Open with physical controls only", systemImage: "gamecontroller")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 16)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
         .flekGlassCard(cornerRadius: 24, tint: 0.10)
     }
 
@@ -391,239 +454,5 @@ struct FlekControllerSettingsView: View {
             Text(value).foregroundStyle(.secondary)
         }
         .font(.subheadline)
-    }
-}
-
-struct FlekControllerDashboardView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var sharedModel: SharedModel
-    @StateObject private var hub = FlekControllerHub.shared
-    @State private var selected = 0
-    @State private var launchError: String?
-    @State private var showInfo = false
-
-    private var apps: [LCAppModel] {
-        sharedModel.apps.filter { !$0.uiIsHidden }
-    }
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                LinearGradient(colors: [
-                    Color(red: 0.025, green: 0.055, blue: 0.11),
-                    Color(red: 0.035, green: 0.16, blue: 0.24),
-                    Color(red: 0.02, green: 0.03, blue: 0.07)
-                ], startPoint: .topLeading, endPoint: .bottomTrailing)
-                .ignoresSafeArea()
-
-                Circle()
-                    .fill(Color.cyan.opacity(0.12))
-                    .frame(width: geo.size.width * 0.55)
-                    .blur(radius: 60)
-                    .offset(x: geo.size.width * 0.25, y: -geo.size.height * 0.18)
-
-                VStack(spacing: 0) {
-                    topBar
-                    Spacer(minLength: 18)
-                    dashboardContent
-                    Spacer(minLength: 18)
-                    touchControls
-                }
-                .padding(.horizontal, max(24, geo.safeAreaInsets.leading + 16))
-                .padding(.vertical, 18)
-            }
-        }
-        .preferredColorScheme(.dark)
-        .onAppear(perform: enter)
-        .onDisappear(perform: leave)
-        .alert("Launch failed", isPresented: Binding(get: { launchError != nil }, set: { if !$0 { launchError = nil } })) {
-            Button("OK", role: .cancel) { launchError = nil }
-        } message: { Text(launchError ?? "") }
-        .sheet(isPresented: $showInfo) {
-            if let app = selectedApp {
-                NavigationView {
-                    Form {
-                        Section(header: Text("Application")) {
-                            infoRow("Name", app.displayName)
-                            infoRow("Bundle ID", app.bundleIdentifier)
-                            infoRow("Version", app.version)
-                            infoRow("Tweaks", app.uiTweakFolder ?? "None")
-                            infoRow("Launch", app.shouldLaunchInMultitaskMode ? "Parallel" : "Single")
-                        }
-                    }
-                    .navigationTitle(app.displayName)
-                    .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { showInfo = false } } }
-                }
-            }
-        }
-    }
-
-    private func infoRow(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
-        }
-    }
-
-    private var selectedApp: LCAppModel? {
-        guard apps.indices.contains(selected) else { return nil }
-        return apps[selected]
-    }
-
-    private var topBar: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("FlekDeck").font(.title2.bold())
-                Text("CONTROLLER MODE").font(.caption.bold()).tracking(1.5).foregroundStyle(.cyan)
-            }
-            Spacer()
-            if let pad = hub.pads.first {
-                HStack(spacing: 8) {
-                    Image(systemName: pad.kind.symbol)
-                    Text(pad.kind.shortTitle)
-                    Text(pad.batteryText).foregroundStyle(.secondary)
-                }
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(.thinMaterial, in: Capsule())
-            }
-            Button { dismiss() } label: {
-                Label("Exit", systemImage: "xmark.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(.thinMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    @ViewBuilder
-    private var dashboardContent: some View {
-        if apps.isEmpty {
-            VStack(spacing: 14) {
-                Image(systemName: "square.stack.3d.up.slash").font(.system(size: 46))
-                Text("No apps installed").font(.title3.bold())
-                Text("Install an app in FlekDeck and it will appear here automatically.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            VStack(spacing: 22) {
-                Text("APPS").font(.caption.bold()).tracking(1.4).foregroundStyle(.secondary)
-                HStack(spacing: 24) {
-                    controllerButton("chevron.left", input: .left)
-                    if let app = selectedApp {
-                        VStack(spacing: 14) {
-                            Image(uiImage: app.appInfo.iconIsDarkIcon(false))
-                                .resizable().scaledToFill()
-                                .frame(width: 112, height: 112)
-                                .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
-                                .shadow(color: .cyan.opacity(0.25), radius: 24)
-                            Text(app.displayName).font(.title.bold()).lineLimit(1)
-                            Text(app.bundleIdentifier)
-                                .font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                            HStack(spacing: 10) {
-                                Label("✕ Launch", systemImage: "play.fill")
-                                Label("△ Info", systemImage: "info.circle")
-                                Label("○ Exit", systemImage: "xmark")
-                            }
-                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: 420)
-                        .padding(.vertical, 26).padding(.horizontal, 36)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 32, style: .continuous).stroke(Color.cyan.opacity(0.28), lineWidth: 1))
-                    }
-                    controllerButton("chevron.right", input: .right)
-                }
-                Text("\(selected + 1) / \(apps.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var touchControls: some View {
-        HStack(spacing: 12) {
-            touchButton("L1", .l1)
-            touchButton("◀", .left)
-            touchButton("▶", .right)
-            touchButton("R1", .r1)
-            Spacer()
-            touchButton("△", .triangle)
-            touchButton("□", .square)
-            touchButton("○", .circle)
-            touchButton("✕", .cross, prominent: true)
-        }
-    }
-
-    private func controllerButton(_ symbol: String, input: FlekControllerInput) -> some View {
-        Button { handle(input) } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 22, weight: .bold))
-                .frame(width: 52, height: 52)
-                .background(.thinMaterial, in: Circle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func touchButton(_ title: String, _ input: FlekControllerInput, prominent: Bool = false) -> some View {
-        Button { handle(input) } label: {
-            Text(title).font(.headline)
-                .frame(minWidth: 44, minHeight: 42)
-                .padding(.horizontal, title.count > 1 ? 7 : 0)
-                .background(prominent ? Color.cyan.opacity(0.28) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.10), lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func enter() {
-        AppDelegate.orientationLock = .landscape
-        _ = AppDelegate.applyOrientationLock()
-        hub.paintAll()
-        hub.sink = { input in handle(input) }
-        hub.onHome = { dismiss() }
-    }
-
-    private func leave() {
-        hub.sink = nil
-        hub.onHome = nil
-        AppDelegate.orientationLock = .portrait
-        _ = AppDelegate.applyOrientationLock()
-    }
-
-    private func handle(_ input: FlekControllerInput) {
-        UISelectionFeedbackGenerator().selectionChanged()
-        hub.rumble(intensity: 0.35, sharpness: 0.6, duration: 0.045)
-        guard !apps.isEmpty else {
-            if input == .circle || input == .home { dismiss() }
-            return
-        }
-        switch input {
-        case .left, .up:
-            selected = (selected - 1 + apps.count) % apps.count
-        case .right, .down:
-            selected = (selected + 1) % apps.count
-        case .l1:
-            selected = max(0, selected - 5)
-        case .r1:
-            selected = min(apps.count - 1, selected + 5)
-        case .cross:
-            launchSelected()
-        case .triangle, .square:
-            showInfo = true
-        case .circle, .home:
-            dismiss()
-        case .options, .share:
-            break
-        }
-    }
-
-    private func launchSelected() {
-        guard let app = selectedApp else { return }
-        Task {
-            do { try await app.runApp() }
-            catch { launchError = error.localizedDescription }
-        }
     }
 }
