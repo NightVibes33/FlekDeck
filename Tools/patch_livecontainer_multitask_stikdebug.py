@@ -13,7 +13,8 @@ s = p.read_text()
 
 resource_start_marker = '''    NSURL *docURL = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].lastObject;\n'''
 resource_end_marker = '''    item.userInfo = userInfo;\n'''
-start = s.index(resource_start_marker)
+init_start = s.index("- (instancetype)initWithBundleId:")
+start = s.index(resource_start_marker, init_start)
 end = s.index(resource_end_marker, start)
 
 resource_block = r'''    NSURL *docURL = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].lastObject;
