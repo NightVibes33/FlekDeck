@@ -1,8 +1,25 @@
 name: iOS Device Unsigned IPA
 
 # Legacy build: main uses build-unsigned-ipa.yml.
+# Temp multitask branch self-validates this exact workflow and its direct-build
+# compatibility patches without triggering the other IPA workflows.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - experiment/multitask-control-jit-diagnosis
+    paths:
+      - '.github/workflows/build.yml'
+      - 'Tools/patch_direct_multitask_host_bridge.py'
+      - 'Tools/patch_stikdebug_pid_verification.py'
+      - 'Tools/patch_guest_native_pip_bridge.py'
+      - 'Tools/patch_youtube_native_pip_render.py'
+      - 'Tools/patch_pip_state_separation.py'
+      - 'LiveContainerSwiftUI/Utilities/LCUtils.h'
+      - 'MultitaskSupport/AppSceneViewController.m'
+      - 'MultitaskSupport/PiPManager.m'
+      - 'MultitaskSupport/MultitaskDockView.swift'
+      - 'LiveContainer/LCBootstrap.m'
 
 jobs:
   build:
@@ -19,9 +36,47 @@ jobs:
         with:
           xcode-version: "26.6"
 
+      - name: Apply direct-build multitask compatibility
+        run: |
+          set -euo pipefail
+          python3 Tools/patch_direct_multitask_host_bridge.py
+          python3 Tools/patch_stikdebug_pid_verification.py
+          python3 Tools/patch_guest_native_pip_bridge.py
+          python3 Tools/patch_youtube_native_pip_render.py
+          python3 Tools/patch_pip_state_separation.py
+          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
+          grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
+          grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
+          grep -q 'com.flekdeck.nativepip.%@.%d' LiveContainer/LCBootstrap.m
+          grep -q 'LCYouTubePiPRefreshSource' LiveContainer/LCBootstrap.m
+          grep -q 'newContentSource' LiveContainer/LCBootstrap.m
+          grep -q 'contentSourceNeedsRefresh' LiveContainer/LCBootstrap.m
+          grep -q 'YouTube source bound=' LiveContainer/LCBootstrap.m
+          grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m
+          grep -q 'LCNativePiPDoesNotOwnWindowLifecycle' MultitaskSupport/PiPManager.m
+          grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
+          grep -q 'self.usesMediaCrop = NO;' MultitaskSupport/PiPManager.m
+          grep -q 'preferredContentSize = self.sourceContentSize' MultitaskSupport/PiPManager.m
+          # Preserve the exact pre-PiP/main bottom-swipe implementation. The prior
+          # temp gesture rewrite was the regression and must not be compiled.
+          grep -q 'private func installSwipeZone' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'self?.showAppSwitcher()' MultitaskSupport/MultitaskDockView.swift
+          if grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift; then
+            echo 'Temp persistent swipe rewrite is still compiled'
+            exit 1
+          fi
+          if grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift; then
+            echo 'Temp lower-window swipe rewrite is still compiled'
+            exit 1
+          fi
+          grep -q 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+
       - name: Build real-device unsigned archive
         run: |
-          set -o pipefail
+          set -uo pipefail
+          mkdir -p build
+          set +e
           xcodebuild clean archive \
             -project "LiveContainer.xcodeproj" \
             -scheme "LiveContainer" \
@@ -31,7 +86,28 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            | xcpretty
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- compiler/linker errors ---'
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -250 || true
+            exit "$status"
+          fi
+
+      - name: Normalize unsigned archive
+        run: |
+          set -euo pipefail
+          APP="build/FlekDeck.xcarchive/Products/Applications/FlekDeck.app"
+          test -d "$APP"
+          echo "Removing residual signing material from unsigned archive:"
+          find "$APP" \( -type d -name '_CodeSignature' -o -type f -name 'embedded.mobileprovision' \) -print || true
+          find "$APP" -type d -name '_CodeSignature' -prune -exec rm -rf {} +
+          find "$APP" -type f -name 'embedded.mobileprovision' -delete
+          if find "$APP" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit | grep -q .; then
+            echo "Residual signing material remains after normalization"
+            exit 1
+          fi
 
       - name: Validate device build
         run: |
@@ -44,7 +120,7 @@ jobs:
           file "$APP/$EXECUTABLE"
           xcrun vtool -show-build "$APP/$EXECUTABLE" | tee build/device-build.txt
           grep -Eiq 'platform[[:space:]]+(IOS|2)' build/device-build.txt
-          if find "$APP" -name '_CodeSignature' -o -name 'embedded.mobileprovision' | grep -q .; then
+          if find "$APP" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit | grep -q .; then
             echo "Unexpected signing material found"
             exit 1
           fi

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - experiment/multitask-control-jit-diagnosis
     paths:
       - '.github/trigger-unsigned-ipa'
 
@@ -147,6 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m py_compile Tools/patch_free_sidestore_support.py
+          python3 -m py_compile Tools/patch_livecontainer_multitask_stikdebug.py
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
@@ -154,6 +156,9 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
           grep -q 'com.fs.flekdeck' SideStoreSupport/SideStoreHooks.m
           grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
+          grep -q 'stikdebug://enable-jit' LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+          grep -q 'stikdebug://enable-jit' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'bookmarkDataWithOptions' MultitaskSupport/AppSceneViewController.m
           ! grep -q 'FlekHostHasDevelopmentSigning' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'FlekHostDevelopmentSigningError' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'FlekDeck host does not have get-task-allow' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift

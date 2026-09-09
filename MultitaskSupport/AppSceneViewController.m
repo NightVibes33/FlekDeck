@@ -265,8 +265,8 @@ static void LCUnstageAppFromAppGroup(NSString *bundleId, NSString *dataUUID, BOO
         }
     }
 
-    // The bundle is shared between every window running this app, so it only
-    // goes once the last of them has exited.
+    // The bundle is shared between every window running that app, so it only
+    // goes once the last window has exited.
     if(wasLastUser) {
         NSURL *stagedBundle = [appGroupLC URLByAppendingPathComponent:[NSString stringWithFormat:@"Applications/%@", bundleId]];
         LCDiscardTree(stagedBundle, appGroupLC);
@@ -372,6 +372,18 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
         @"bookmarks": bookmarks,
         @"lcHomePath": NSHomeDirectory(),
     }.mutableCopy;
+
+    // The host has already selected and validated the signing identity before
+    // Run Parallel reaches this boundary. LiveProcess has its own defaults
+    // domain, so it cannot infer that identity from the host process. Carry the
+    // same password across the extension request; LiveProcess/main.m restores it
+    // as LCCertificatePassword before entering LiveContainerMain. Without this,
+    // iOS 26+ bootstrap mistakes an otherwise JIT-less signed guest for a
+    // no-certificate launch and unconditionally asks the child process for JIT.
+    NSString *certificatePassword = LCSharedUtils.certificatePassword;
+    if(certificatePassword.length) {
+        userInfo[@"certificatePassword"] = certificatePassword;
+    }
     
     NSString* launchAppUrlScheme = [NSUserDefaults.standardUserDefaults stringForKey:@"launchAppUrlScheme"];
     [NSUserDefaults.lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
