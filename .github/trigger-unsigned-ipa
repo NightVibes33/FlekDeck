@@ -1,2 +1,2 @@
-trigger: 2026-09-08T13:20:00-05:00
-reason: run only build-unsigned-ipa.yml for multitask LiveContainer/StikDebug temp-branch validation
+trigger: 2026-09-10T14:25:00Z
+reason: rebuild fresh-main Parallel branch with TikTok-only post-presentation geometry refresh

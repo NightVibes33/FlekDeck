@@ -166,6 +166,20 @@ static UIInterfaceOrientation LCWindowOrientation(UIView *view, UIMutableApplica
     return windowIsLandscape ? UIInterfaceOrientationLandscapeRight : UIInterfaceOrientationPortrait;
 }
 
+static BOOL LCIsTikTokParallelGuest(NSString *bundleIdentifier) {
+    if(bundleIdentifier.length == 0) return NO;
+    static NSSet<NSString *> *identifiers;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        identifiers = [NSSet setWithArray:@[
+            @"com.zhiliaoapp.musically",
+            @"com.ss.iphone.ugc.Ame",
+            @"com.ss.iphone.ugc.trill"
+        ]];
+    });
+    return [identifiers containsObject:bundleIdentifier];
+}
+
 @implementation DecoratedAppSceneViewController {
     /// The last orientation this guest was known to be in while the phone was
     /// actually being held. The hard lock's memory.
@@ -571,6 +585,24 @@ static UIInterfaceOrientation LCWindowOrientation(UIView *view, UIMutableApplica
 }
 
 - (void)appSceneVCDidPresentScene:(AppSceneViewController*)vc {
+    // TikTok commits its feed viewport from the first scene frame and does not
+    // reliably react when the Parallel control strip finishes laying out a moment
+    // later. Responsive guests such as YouTube update themselves, which is why
+    // only TikTok exposes the stale full-height frame. Re-send the existing
+    // maximized geometry after the host layout settles. This is guest-scene
+    // geometry only; app-switcher and PiP code are deliberately untouched.
+    if(LCIsTikTokParallelGuest(vc.bundleId)) {
+        for(NSNumber *delay in @[@0.0, @0.08, @0.20, @0.45]) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                           (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                if(self.isMaximized && self.appSceneVC == vc && vc.presenter.scene) {
+                    [self applyMaximizedLayout];
+                }
+            });
+        }
+    }
+
     // The guest's scene is on screen now and it is drawing into it. Give that
     // first frame a moment to land, then let go of the launch screen this window
     // opened with. This is the cue that fires for every guest; the settings

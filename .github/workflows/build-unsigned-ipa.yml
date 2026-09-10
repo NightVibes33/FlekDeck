@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - experiment/multitask-control-jit-diagnosis
+      - experiment/parallel-guest-layout-safearea
     paths:
       - '.github/trigger-unsigned-ipa'
 
