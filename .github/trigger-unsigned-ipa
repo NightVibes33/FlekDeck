@@ -1,2 +1,2 @@
-trigger: 2026-09-11T14:09:00Z
-reason: fix Single guest app-switcher swipe and nudge TikTok Parallel bottom layout upward 20pt
+trigger: 2026-09-11T14:23:00Z
+reason: verify Vibe overlay cannot erase switcher fixes; build Single gesture and TikTok 20pt Parallel nudge
