@@ -1,64 +1,86 @@
 #!/usr/bin/env python3
-"""Run #65 compatibility, then refine Single switcher + TikTok Parallel vertical fit."""
+# Run the proven #65 compatibility, then add Single swipe + TikTok bounds pan.
 from pathlib import Path
 import runpy
 
 runpy.run_path("Tools/patch_parallel_guest_viewport_base.py", run_name="__main__")
 
-# TikTok Parallel: preserve the exact hosted viewport size and aspect ratio. The
-# residual bug is positional, not dimensional: TikTok's own hierarchy sits a little
-# too low. Translate it upward 20pt without changing width/height/scale.
+# TikTok Parallel: keep the #65 hosted viewport exactly as-is. Do NOT change the
+# seed origin or size. TikTok is already very close there; the residual problem is
+# that its own hierarchy sits slightly too low. Pan the root coordinate space after
+# TikTok has completed layout. A bounds-origin pan moves every child (including the
+# bottom tab bar) without changing width, height, scale, aspect ratio, or host scene
+# geometry.
 tweak_path = Path("TweakLoader/UIKit+GuestHooks.m")
 tweak = tweak_path.read_text()
-compat_anchor = r'''static BOOL LCTikTokParallelCompatEnabled(void) {
-    return !CGRectIsNull(LCParallelSeededViewportBounds());
+
+if "LCTikTokParallelBoundsPan" not in tweak:
+    static_anchor = (
+        "static IMP LCTikTokOriginalTabControllerWillLayout = NULL;\n"
+        "static IMP LCTikTokOriginalTabBarLayout = NULL;\n"
+    )
+    if static_anchor not in tweak:
+        raise SystemExit("TikTok compat IMP anchor missing after base patch")
+    tweak = tweak.replace(
+        static_anchor,
+        (
+            "static IMP LCTikTokOriginalTabControllerWillLayout = NULL;\n"
+            "static IMP LCTikTokOriginalTabControllerDidLayout = NULL;\n"
+            "static IMP LCTikTokOriginalTabBarLayout = NULL;\n"
+        ),
+        1,
+    )
+
+    function_anchor = "static void LCTikTokTabControllerWillLayout(id object, SEL selector) {\n"
+    if function_anchor not in tweak:
+        raise SystemExit("TikTok will-layout hook missing after base patch")
+
+    bounds_pan = r"""// LCTikTokParallelBoundsPan
+// LCTikTokParallelBottomNudge -- legacy CI marker; this no longer resizes anything.
+static const CGFloat LCTikTokParallelVerticalPan = 20.0;
+
+static void LCTikTokApplyParallelBoundsPan(id object) {
+    if(!LCTikTokParallelCompatEnabled() || ![object isKindOfClass:UIViewController.class]) return;
+    UIViewController *controller = (UIViewController *)object;
+    UIView *view = controller.view;
+    if(!view || !view.window) return;
+
+    CGRect bounds = view.bounds;
+    if(ABS(bounds.origin.y - LCTikTokParallelVerticalPan) <= 0.5) return;
+    bounds.origin.y = LCTikTokParallelVerticalPan;
+    view.bounds = bounds;
 }
-'''
-if "LCTikTokParallelBottomNudge" not in tweak:
-    if compat_anchor not in tweak:
-        raise SystemExit("TikTok compat enable anchor missing after base patch")
-    tweak = tweak.replace(compat_anchor, compat_anchor + r'''
-// LCTikTokParallelBottomNudge
-static CGRect LCTikTokAdjustedParallelViewportBounds(void) {
-    CGRect seed = LCParallelSeededViewportBounds();
-    if(CGRectIsNull(seed)) return seed;
-    const CGFloat verticalShift = 20.0;
-    seed.origin.y -= verticalShift;
-    return seed;
+
+static void LCTikTokTabControllerDidLayout(id object, SEL selector) {
+    if(LCTikTokOriginalTabControllerDidLayout) {
+        ((void (*)(id, SEL))LCTikTokOriginalTabControllerDidLayout)(object, selector);
+    }
+    // Apply after TikTok/Auto Layout is finished so the app cannot immediately
+    // re-frame itself back down. Size stays untouched; only bounds.origin moves.
+    LCTikTokApplyParallelBoundsPan(object);
 }
-''', 1)
 
-    old = "    CGRect seed = LCParallelSeededViewportBounds();\n"
-    new = "    CGRect seed = LCTikTokAdjustedParallelViewportBounds();\n"
-    for function_name in ("static void LCTikTokClampRootController", "static void LCTikTokAnchorTabBar"):
-        start = tweak.index(function_name)
-        end = tweak.index("\n}\n", start) + 3
-        block = tweak[start:end]
-        if old not in block:
-            raise SystemExit(f"TikTok layout seed missing in {function_name}")
-        block = block.replace(old, new, 1)
+"""
+    tweak = tweak.replace(function_anchor, bounds_pan + function_anchor, 1)
 
-        if function_name == "static void LCTikTokClampRootController":
-            old_logic = '''    if(ABS(frame.size.width - seed.size.width) <= 0.5 &&
-       ABS(frame.size.height - seed.size.height) <= 0.5) return;
+    install_anchor = r"""    if(!LCTikTokOriginalTabBarLayout) {
+        Class tabBar = NSClassFromString(@"AWETabBar");
+"""
+    if install_anchor not in tweak:
+        raise SystemExit("TikTok tab-bar install anchor missing after base patch")
 
-    frame.size = seed.size;
-    view.frame = frame;
-'''
-            new_logic = '''    BOOL sizeMatches = ABS(frame.size.width - seed.size.width) <= 0.5 &&
-                       ABS(frame.size.height - seed.size.height) <= 0.5;
-    BOOL originMatches = ABS(frame.origin.y - seed.origin.y) <= 0.5;
-    if(sizeMatches && originMatches) return;
+    did_layout_install = r"""    if(!LCTikTokOriginalTabControllerDidLayout) {
+        Class tabController = NSClassFromString(@"AWETabBarController");
+        if(tabController) {
+            LCTikTokOriginalTabControllerDidLayout =
+                LCInstallInstanceOverride(tabController,
+                                          @selector(viewDidLayoutSubviews),
+                                          (IMP)LCTikTokTabControllerDidLayout);
+        }
+    }
 
-    frame.origin.y = seed.origin.y;
-    frame.size = seed.size;
-    view.frame = frame;
-'''
-            if old_logic not in block:
-                raise SystemExit("TikTok root clamp logic missing")
-            block = block.replace(old_logic, new_logic, 1)
-
-        tweak = tweak[:start] + block + tweak[end:]
+"""
+    tweak = tweak.replace(install_anchor, did_layout_install + install_anchor, 1)
 
 # Single mode: install the gesture inside the actual in-process guest window and
 # post back to FlekDeck's existing switcher manager. Parallel never installs this.
@@ -66,7 +88,7 @@ if "LCSingleGuestSwitcherGestureBridge" not in tweak:
     constructor_anchor = "__attribute__((constructor))\nstatic void UIKitGuestHooksInit() {\n"
     if constructor_anchor not in tweak:
         raise SystemExit("UIKit guest constructor anchor missing")
-    single_bridge = r'''// LCSingleGuestSwitcherGestureBridge
+    single_bridge = r"""// LCSingleGuestSwitcherGestureBridge
 @interface LCSingleGuestSwitcherPanBridge : NSObject <UIGestureRecognizerDelegate>
 @property(nonatomic, strong) NSMapTable<UIWindow *, UIPanGestureRecognizer *> *recognizers;
 @end
@@ -127,15 +149,15 @@ if "LCSingleGuestSwitcherGestureBridge" not in tweak:
 }
 @end
 
-'''
+"""
     tweak = tweak.replace(constructor_anchor, single_bridge + constructor_anchor, 1)
     init_anchor = "static void UIKitGuestHooksInit() {\n    if(!NSUserDefaults.lcGuestAppId) return;\n"
     if init_anchor not in tweak:
         raise SystemExit("UIKit guest init anchor missing")
-    tweak = tweak.replace(init_anchor, init_anchor + r'''    if(!NSUserDefaults.isLiveProcess) {
+    tweak = tweak.replace(init_anchor, init_anchor + r"""    if(!NSUserDefaults.isLiveProcess) {
         [[LCSingleGuestSwitcherPanBridge shared] start];
     }
-''', 1)
+""", 1)
 
 tweak_path.write_text(tweak)
 
@@ -144,26 +166,27 @@ tweak_path.write_text(tweak)
 dock_path = Path("MultitaskSupport/MultitaskDockView.swift")
 dock = dock_path.read_text()
 if "FlekSingleGuestSwitcherGestureRequested" not in dock:
-    observer_anchor = r'''        NotificationCenter.default.addObserver(
+    observer_anchor = r"""        NotificationCenter.default.addObserver(
             self,
             selector: #selector(homeSingleKeyWindowChanged(_:)),
             name: UIWindow.didBecomeKeyNotification,
             object: nil
         )
-'''
+"""
     if observer_anchor not in dock:
         raise SystemExit("Home/Single key-window observer missing after base patch")
-    dock = dock.replace(observer_anchor, observer_anchor + r'''        NotificationCenter.default.addObserver(
+    dock = dock.replace(observer_anchor, observer_anchor + r"""        NotificationCenter.default.addObserver(
             self,
             selector: #selector(singleGuestSwitcherGestureRequested),
             name: Notification.Name("FlekSingleGuestSwitcherGestureRequested"),
             object: nil
         )
-''', 1)
+""", 1)
+
     handler_anchor = "    @objc private func homeSingleKeyWindowChanged(_ notification: Notification) {\n"
     if handler_anchor not in dock:
         raise SystemExit("Home/Single key-window handler missing after base patch")
-    handler = r'''    @objc private func singleGuestSwitcherGestureRequested() {
+    handler = r"""    @objc private func singleGuestSwitcherGestureRequested() {
         guard isSwipeZoneEnabled,
               !isAppSwitcherOpen,
               !isOpeningAppSwitcher,
@@ -172,15 +195,38 @@ if "FlekSingleGuestSwitcherGestureRequested" not in dock:
         showAppSwitcher()
     }
 
-'''
+"""
     dock = dock.replace(handler_anchor, handler + handler_anchor, 1)
 
 dock_path.write_text(dock)
 
 final_tweak = tweak_path.read_text()
 final_dock = dock_path.read_text()
-for required in ("LCParallelGuestViewportBridge", "LCTikTokParallelLayoutCompat", "LCTikTokParallelBottomNudge", "LCSingleGuestSwitcherGestureBridge"):
-    if required not in final_tweak: raise SystemExit(f"missing marker: {required}")
-for required in ("FlekHomeSingleSwitcherGestureBridge", "FlekSingleGuestSwitcherGestureRequested", "!hasForegroundAppWindow()"):
-    if required not in final_dock: raise SystemExit(f"missing marker: {required}")
-print("Applied: Single guest switcher bridge + TikTok Parallel 20pt pure upward translation")
+for required in (
+    "LCParallelGuestViewportBridge",
+    "LCTikTokParallelLayoutCompat",
+    "LCTikTokParallelBoundsPan",
+    "LCTikTokParallelBottomNudge",
+    "LCSingleGuestSwitcherGestureBridge",
+):
+    if required not in final_tweak:
+        raise SystemExit(f"missing marker: {required}")
+
+# Fail closed against accidentally reintroducing the two broken attempts.
+for forbidden in (
+    "seed.size.height -= bottomNudge",
+    "seed.origin.y -= verticalShift",
+    "LCTikTokAdjustedParallelViewportBounds",
+):
+    if forbidden in final_tweak:
+        raise SystemExit(f"forbidden TikTok resize/frame-shift logic survived: {forbidden}")
+
+for required in (
+    "FlekHomeSingleSwitcherGestureBridge",
+    "FlekSingleGuestSwitcherGestureRequested",
+    "!hasForegroundAppWindow()",
+):
+    if required not in final_dock:
+        raise SystemExit(f"missing marker: {required}")
+
+print("Applied: Single guest switcher bridge + TikTok Parallel post-layout bounds pan (no resize)")

@@ -1,2 +1,2 @@
-trigger: 2026-09-11T14:36:00Z
-reason: preserve Single switcher fix and translate TikTok Parallel upward 20pt without resizing
+trigger: 2026-09-11T15:31:00Z
+reason: preserve Home Parallel and Single switcher fixes; pan TikTok Parallel root bounds upward 20pt without resizing
