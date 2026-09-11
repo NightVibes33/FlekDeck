@@ -237,37 +237,8 @@ if "[FlekDeckDiag] launch bundle=" not in s:
     s = s[:do_index] + log_block + s[do_index:]
 p.write_text(s)
 
-# ---------------------------------------------------------------------------
-# Restore a host-owned bottom recognizer over actual multitask windows. Vibe 3.8
-# did this at UIWindow level; Flek's newer small swipe zone only exists after the
-# main switcher bar has been hidden, which is why the control appears/disappears
-# depending on UI state.
-# ---------------------------------------------------------------------------
-p = Path("MultitaskSupport/MultitaskDockView.swift")
-s = p.read_text()
-show_dock_anchor = '''    @objc public func showDock() {
-        guard isDockEnabled() else { return }
-        guard !isVisible, let hostingController = hostingController else { return }
-        guard let keyWindow = self.keyWindow else { return }
-        
-        DispatchQueue.main.async {
-'''
-show_dock_replacement = '''    @objc public func showDock() {
-        guard isDockEnabled() else { return }
-        guard !isVisible, let hostingController = hostingController else { return }
-        guard let keyWindow = self.keyWindow else { return }
+# Parallel layout experiment deliberately leaves the app-switcher gesture path
+# untouched. The retired host-gesture diagnostic is unrelated to guest scene
+# geometry and must not be injected by this branch.
 
-        // Experiment: restore Vibe's host-owned bottom gesture boundary. The
-        // recognizer is inert on FlekDeck's SpringBoard and only begins while a
-        // virtual guest/internal page is visibly hosted.
-        FlekGuestBottomGestureBridge.shared.install(on: keyWindow)
-        
-        DispatchQueue.main.async {
-'''
-if "FlekGuestBottomGestureBridge.shared.install(on: keyWindow)" not in s:
-    if show_dock_anchor not in s:
-        raise SystemExit("MultitaskDockView.showDock shape changed")
-    s = s.replace(show_dock_anchor, show_dock_replacement, 1)
-p.write_text(s)
-
-print("Applied FlekDeck multitask/JIT-less experiment diagnostics and host gesture bridge.")
+print("Applied FlekDeck multitask/JIT-less experiment diagnostics.")
