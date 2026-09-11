@@ -1,2 +1,2 @@
-trigger: 2026-09-11T05:36:30Z
-reason: build post-launch guest drawable final-bounds fix
+trigger: 2026-09-11T05:45:00Z
+reason: restore PiP compatibility stack after Vibe core copy
