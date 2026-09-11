@@ -1,2 +1,2 @@
-trigger: 2026-09-11T05:45:00Z
-reason: restore PiP compatibility stack after Vibe core copy
+trigger: 2026-09-11T05:58:00Z
+reason: preserve authored Parallel safe-area geometry after FBScene updates
