@@ -1,0 +1,176 @@
+name: Repair Parallel first frame and switcher
+
+on:
+  push:
+    branches:
+      - experiment/parallel-guest-layout-safearea
+    paths:
+      - '.github/workflows/repair-parallel-first-frame-and-switcher.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/parallel-guest-layout-safearea
+          fetch-depth: 0
+
+      - name: Repair first-frame guest geometry
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('MultitaskSupport/DecoratedAppSceneViewController.m')
+          s = p.read_text()
+
+          helper = r'''
+/// Window geometry source for a guest before its decorated view itself has been
+/// attached to a UIWindow. Run Parallel creates/presents the guest scene during
+/// that interval, so `self.view.window == nil` is not a reason to skip the first
+/// frame: apps such as TikTok can commit that incorrect full-height viewport and
+/// ignore the later resize. The multitask host is already attached to the real
+/// app window at that point, so use it as the authoritative fallback.
+static UIWindow *LCGeometryWindow(UIView *view) {
+    UIWindow *window = view.window;
+    if(!window) {
+        window = MultitaskDockManager.shared.windowHostingView.window;
+    }
+    if(!window) {
+        for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if(![scene isKindOfClass:UIWindowScene.class]) continue;
+            for(UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+                if(candidate.isKeyWindow) {
+                    window = candidate;
+                    break;
+                }
+            }
+            if(window) break;
+        }
+    }
+    return window;
+}
+
+'''
+          anchor = 'static UIInterfaceOrientation LCWindowOrientation(UIView *view, UIMutableApplicationSceneSettings *settings) {'
+          if 'static UIWindow *LCGeometryWindow(UIView *view)' not in s:
+              idx = s.find(anchor)
+              if idx < 0:
+                  raise SystemExit('LCWindowOrientation anchor missing')
+              s = s[:idx] + helper + s[idx:]
+
+          old = '    CGSize size = view.window.bounds.size;\n'
+          new = '    UIWindow *window = LCGeometryWindow(view);\n    CGSize size = window ? window.bounds.size : CGSizeZero;\n'
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('LCWindowOrientation window-size anchor missing')
+
+          old = '    if(!self.view.window) return;\n'
+          new = '    if(!LCGeometryWindow(self.view)) return;\n'
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('applyMaximizedGeometry window guard anchor missing')
+
+          safe_start = s.find('- (UIEdgeInsets)updateMaximizedSafeAreaWithSettings:')
+          safe_end = s.find('- (void)updateMaximizedFrameWithSettings:', safe_start)
+          if safe_start < 0 or safe_end < 0:
+              raise SystemExit('maximized safe-area method scope missing')
+          safe = s[safe_start:safe_end]
+          old = '    UIEdgeInsets safeAreaInsets = self.view.window.safeAreaInsets;\n'
+          new = '    UIWindow *geometryWindow = LCGeometryWindow(self.view);\n    if(!geometryWindow) return UIEdgeInsetsZero;\n    UIEdgeInsets safeAreaInsets = geometryWindow.safeAreaInsets;\n'
+          if old in safe:
+              safe = safe.replace(old, new, 1)
+          elif new not in safe:
+              raise SystemExit('safe-area window anchor missing')
+          safe = safe.replace('    CGSize windowSize = self.view.window.bounds.size;\n',
+                              '    CGSize windowSize = geometryWindow.bounds.size;\n', 1)
+          s = s[:safe_start] + safe + s[safe_end:]
+
+          frame_start = s.find('- (void)updateMaximizedFrameWithSettings:')
+          frame_end = s.find('- (void)setWindowFrame:', frame_start)
+          if frame_start < 0 or frame_end < 0:
+              raise SystemExit('maximized frame method scope missing')
+          frame = s[frame_start:frame_end]
+          old = '    CGRect maxFrame = UIEdgeInsetsInsetRect(self.view.window.bounds, [self updateMaximizedSafeAreaWithSettings:settings]);\n'
+          new = '    UIWindow *geometryWindow = LCGeometryWindow(self.view);\n    if(!geometryWindow) return;\n    CGRect maxFrame = UIEdgeInsetsInsetRect(geometryWindow.bounds, [self updateMaximizedSafeAreaWithSettings:settings]);\n'
+          if old in frame:
+              frame = frame.replace(old, new, 1)
+          elif new not in frame:
+              raise SystemExit('maximized frame bounds anchor missing')
+          frame = frame.replace('    CGSize windowSize = self.view.window.bounds.size;\n',
+                                '    CGSize windowSize = geometryWindow.bounds.size;\n', 1)
+          frame = frame.replace('            CGFloat housing = self.view.window.safeAreaInsets.left;\n',
+                                '            CGFloat housing = geometryWindow.safeAreaInsets.left;\n', 1)
+          s = s[:frame_start] + frame + s[frame_end:]
+
+          for required in [
+              'static UIWindow *LCGeometryWindow(UIView *view)',
+              'UIWindow *window = LCGeometryWindow(view);',
+              'if(!LCGeometryWindow(self.view)) return;',
+              'UIWindow *geometryWindow = LCGeometryWindow(self.view);',
+          ]:
+              if required not in s:
+                  raise SystemExit(f'missing first-frame geometry marker: {required}')
+
+          p.write_text(s)
+          PY
+          git diff --check
+
+      - name: Restore exact main app-switcher gesture path
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Tools/patch_free_sidestore_support.py')
+          s = p.read_text()
+          old = '''gesture_bridge = Path("Tools/patch_guest_gesture_bridge.py")
+          if gesture_bridge.exists():
+              exec(compile(gesture_bridge.read_text(), str(gesture_bridge), "exec"), {})
+          '''
+          new = '''# Keep the exact main/pre-PiP bottom-swipe implementation. The temporary
+          # persistent swipe rewrite replaced that path and is the app-switcher regression.
+          # The file stays in the branch for history, but signer-compatible builds must
+          # not execute it.
+          gesture_bridge = Path("Tools/patch_guest_gesture_bridge.py")
+          if gesture_bridge.exists():
+              print("Skipping obsolete persistent switcher-swipe rewrite; preserving main gesture path.")
+          '''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif 'Skipping obsolete persistent switcher-swipe rewrite' not in s:
+              raise SystemExit('gesture bridge execution anchor missing')
+          p.write_text(s)
+          PY
+          git diff --check
+
+      - name: Harden signer build switcher invariant
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/build-unsigned-ipa.yml')
+          s = p.read_text()
+          anchor = "          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift\n"
+          insert = anchor + "          grep -q 'private func installSwipeZone' MultitaskSupport/MultitaskDockView.swift\n          grep -q 'self?.showAppSwitcher()' MultitaskSupport/MultitaskDockView.swift\n          if grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift; then echo 'Obsolete persistent swipe rewrite compiled'; exit 1; fi\n"
+          if "Obsolete persistent swipe rewrite compiled" not in s:
+              if anchor not in s:
+                  raise SystemExit('parse-boundary anchor missing')
+              s = s.replace(anchor, insert, 1)
+          p.write_text(s)
+          PY
+
+      - name: Commit repair and trigger signer build
+        shell: bash
+        run: |
+          printf 'trigger: 2026-09-11T04:58:00Z\nreason: true first-frame geometry plus restored main switcher gesture path\n' > .github/trigger-unsigned-ipa
+          rm .github/workflows/repair-parallel-first-frame-and-switcher.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add MultitaskSupport/DecoratedAppSceneViewController.m Tools/patch_free_sidestore_support.py .github/workflows/build-unsigned-ipa.yml .github/trigger-unsigned-ipa .github/workflows/repair-parallel-first-frame-and-switcher.yml
+          git commit -m 'Fix Parallel first-frame geometry and restore switcher gesture path'
+          git push origin HEAD:experiment/parallel-guest-layout-safearea
