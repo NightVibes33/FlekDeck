@@ -1,2 +1,2 @@
-trigger: 2026-09-11T03:49:00Z
-reason: rebuild Parallel branch with generic pre-presentation guest geometry reservation
+trigger: 2026-09-11T03:54:00Z
+reason: rebuild generic Parallel first-frame geometry after removing unrelated stale switcher gesture diagnostic
