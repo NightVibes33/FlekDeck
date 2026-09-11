@@ -1,2 +1,2 @@
-trigger: 2026-09-11T15:31:00Z
-reason: preserve Home Parallel and Single switcher fixes; pan TikTok Parallel root bounds upward 20pt without resizing
+trigger: 2026-09-11T16:45:00Z
+reason: target TikTok 46.x current TTKTabBarController hierarchy in Parallel without resizing; preserve Home Parallel Single switchers and PiP
