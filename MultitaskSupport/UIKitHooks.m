@@ -47,28 +47,6 @@ void hook_FBScene_performUpdateWithoutActivation(FBScene* self, SEL _cmd, void (
     _UISceneHostingView *view = controller.sceneView;
     id wrappedBlock = ^(UIMutableApplicationSceneSettings *settings, FBSSceneTransitionContext *context) {
         updateBlock(settings, context);
-
-        // Parallel's decorated window explicitly authors peripheryInsets from the
-        // real hosted rectangle (status/sensor clearance minus the switcher-bar
-        // reservation). That value is authoritative. Replacing it immediately
-        // afterwards with sceneView.superview.safeAreaInsets reintroduces the
-        // physical full-screen safe area after the guest is already visible.
-        // Apps that cache their viewport/safe-area during startup (notably TikTok)
-        // visibly snap from the correct first frame into a taller, clipped layout.
-        // Responsive apps such as YouTube simply relayout and hide the bug.
-        //
-        // Keep this generic: any hosted scene that already carries explicit
-        // periphery geometry keeps it. Windowed scenes that intentionally publish
-        // zero periphery continue through the original scaling fallback below.
-        UIEdgeInsets authoredPeriphery = settings.peripheryInsets;
-        if(!UIEdgeInsetsEqualToEdgeInsets(authoredPeriphery, UIEdgeInsetsZero)) {
-            if(@available(iOS 19.0, *)) {
-                settings.safeAreaEdgeInsets = authoredPeriphery;
-                settings.safeAreaInsetsPortrait = LCUIEdgeInsetsRotateToOrientation(authoredPeriphery, settings.interfaceOrientation);
-            }
-            return;
-        }
-
         CGAffineTransform transform = view.transform;
         UIEdgeInsets orig = view.superview.safeAreaInsets;
         if(LCHasRemoteSheetProviderSelector && UIInterfaceOrientationIsLandscape(settings.interfaceOrientation)) {
