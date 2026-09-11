@@ -43,6 +43,16 @@ jobs:
         run: |
           set -euo pipefail
           V="$VIBE_ROOT"
+
+          # These files own the Home/Parallel switcher behavior that is already
+          # verified on-device. The Vibe overlay must never mutate them silently.
+          protected_switcher_files=(
+            MultitaskSupport/MultitaskDockView.swift
+            MultitaskSupport/DecoratedAppSceneViewController.m
+            MultitaskSupport/MultitaskAppWindow.swift
+          )
+          shasum -a 256 "${protected_switcher_files[@]}" > /tmp/flek-switcher-before.sha256
+
           files=(
             LiveContainer/LCBootstrap.m
             LiveContainer/LCMachOUtils.h
@@ -78,6 +88,11 @@ jobs:
             entitlements.catalyst.xml
           )
           for p in "${files[@]}"; do cp "$V/$p" "$p"; done
+
+          shasum -a 256 "${protected_switcher_files[@]}" > /tmp/flek-switcher-after.sha256
+          diff -u /tmp/flek-switcher-before.sha256 /tmp/flek-switcher-after.sha256
+          echo "FlekDeck-owned Home/Parallel switcher sources survived Vibe overlay unchanged."
+
           mkdir -p SideStore
           cp "$V/SideStore/XPCServer.h" SideStore/XPCServer.h
           rm -rf TestJITLess ZSign litehook
@@ -134,8 +149,8 @@ jobs:
           echo "Exact Vibe signing/JIT parity proven."
 
       # Vibe intentionally overwrites several guest/runtime files above. Every
-      # Flek-specific switcher/PiP/viewport layer MUST be reconstructed after that
-      # overlay and verified before Xcode is allowed to package an IPA.
+      # Flek-specific Single switcher/PiP/viewport layer MUST be reconstructed after
+      # that overlay and verified before Xcode is allowed to package an IPA.
       - name: Reapply Flek compatibility layers after Vibe overlay
         run: |
           set -euo pipefail
@@ -147,18 +162,20 @@ jobs:
       - name: Fail if Vibe overlay erased Flek UI fixes
         run: |
           set -euo pipefail
-          # Home + Parallel switcher paths that are already verified on-device.
+          # Home + Parallel switcher paths already verified on-device.
           grep -q 'FlekHomeSingleSwitcherGestureBridge' MultitaskSupport/MultitaskDockView.swift
           grep -q 'MultitaskSwipeZone' MultitaskSupport/MultitaskDockView.swift
-          # Single-mode guest bridge added after the Vibe UIKit hook replacement.
+          # Single-mode guest bridge reconstructed after Vibe replaces UIKit hooks.
           grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
           grep -q 'FlekSingleGuestSwitcherGestureRequested' MultitaskSupport/MultitaskDockView.swift
-          # TikTok Parallel compatibility must also survive the same replacement.
+          # TikTok Parallel compatibility reconstructed after the same replacement.
           grep -q 'LCParallelGuestViewportBridge' TweakLoader/UIKit+GuestHooks.m
           grep -q 'LCTikTokParallelLayoutCompat' TweakLoader/UIKit+GuestHooks.m
           grep -q 'LCTikTokParallelBottomNudge' TweakLoader/UIKit+GuestHooks.m
-          # Existing PiP compatibility stack must remain present as well.
-          grep -q 'FlekNativePiP' LiveContainer/LCBootstrap.m
+          # Real PiP markers used by the current compatibility stack.
+          grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
+          grep -q 'com.flekdeck.nativepip.%@.%d' LiveContainer/LCBootstrap.m
+          grep -q 'LCYouTubePiPRefreshSource' LiveContainer/LCBootstrap.m
           echo 'Flek switcher/TikTok/PiP layers survived Vibe overlay.'
 
       - name: Select Xcode 26.6
@@ -188,6 +205,8 @@ jobs:
           grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
           grep -q 'FlekSingleGuestSwitcherGestureRequested' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCTikTokParallelBottomNudge' TweakLoader/UIKit+GuestHooks.m
+          grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
+          grep -q 'LCYouTubePiPRefreshSource' LiveContainer/LCBootstrap.m
           ! grep -q 'FlekHostHasDevelopmentSigning' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'FlekHostDevelopmentSigningError' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'FlekDeck host does not have get-task-allow' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
