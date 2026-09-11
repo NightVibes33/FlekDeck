@@ -1,2 +1,2 @@
-trigger: measured-tiktok-layout-v72
-reason: remove fixed TikTok 20pt pan; align current TTKTabBarController from measured tab-bar overflow while preserving Home Parallel Single switchers and PiP
+trigger: tiktok-hosted-insets-v73
+reason: stop translating TikTok root; align native TTK tab bar to hosted viewport and propagate bottom safe area while preserving Home Parallel Single switchers and PiP
