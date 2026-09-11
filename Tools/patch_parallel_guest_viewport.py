@@ -7,11 +7,11 @@ import runpy
 runpy.run_path("Tools/patch_parallel_guest_viewport_base.py", run_name="__main__")
 
 # TikTok 46.x Parallel: the uploaded BHTikTokPlus IPA uses TTKTabBarController /
-# TTKTabBar, not the legacy AWETabBarController / AWETabBar classes. Do not use a
-# guessed pixel offset. Measure where TikTok actually placed its visible tab bar
-# relative to the seeded Parallel viewport and shift the root coordinate space by
-# exactly that measured overflow. Width, height, scale and host scene geometry stay
-# untouched.
+# TTKTabBar, not the legacy AWETabBarController / AWETabBar classes. Do not move
+# the controller root view: that is what created the large black top band and made
+# TikTok's feed overlays disagree with its navigation bar. Keep the feed surface in
+# place, align TikTok's own tab-bar views to the hosted viewport, then propagate the
+# resulting bottom exclusion into the selected child controller's safe area.
 tweak_path = Path("TweakLoader/UIKit+GuestHooks.m")
 tweak = tweak_path.read_text()
 
@@ -21,13 +21,14 @@ if "LCTikTok462TabHierarchyCompat" not in tweak:
         raise SystemExit("TikTok base compat installer anchor missing after base patch")
 
     ttk_compat = r'''// LCTikTok462TabHierarchyCompat
-// LCTikTokParallelBottomNudge -- legacy workflow marker only. The current fix has
-// no fixed nudge: it derives the correction from TTKTabBarController's live layout.
+// LCTikTokParallelBottomNudge -- legacy workflow marker only. There is no fixed
+// nudge and the root view is never translated by this compatibility layer.
+// LCTikTok462HostedInsetsContract
 // Verified against the uploaded TikTok 46.2.0 / BHTikTokPlus build. That build's
 // live tab hierarchy is TTKTabBarController + TTKTabBar/TTKFakeTabBar.
 static IMP LCTikTok462OriginalControllerDidLayout = NULL;
-static const void *LCTikTok462AlignmentLogKey = &LCTikTok462AlignmentLogKey;
-static const void *LCTikTok462AlignmentPendingKey = &LCTikTok462AlignmentPendingKey;
+static const void *LCTikTok462LayoutLogKey = &LCTikTok462LayoutLogKey;
+static const void *LCTikTok462LayoutPendingKey = &LCTikTok462LayoutPendingKey;
 
 static UIView *LCTikTok462ViewReturnedBySelector(id object, NSString *selectorName) {
     SEL selector = NSSelectorFromString(selectorName);
@@ -39,36 +40,48 @@ static UIView *LCTikTok462ViewReturnedBySelector(id object, NSString *selectorNa
     return [value isKindOfClass:UIView.class] ? value : nil;
 }
 
-static UIView *LCTikTok462VisibleTabBar(UITabBarController *controller) {
+static NSArray<UIView *> *LCTikTok462AttachedTabBars(UITabBarController *controller) {
     UIWindow *window = controller.view.window;
-    if(!window) return nil;
+    if(!window) return @[];
 
-    // Current TikTok exposes these on TTKTabBarController. Prefer the visual/main
-    // bars when present, then fall back to UITabBarController.tabBar.
-    NSArray<NSString *> *selectors = @[@"visualTabBar", @"mainTabBar", @"fakeTabBar"];
-    for(NSString *selectorName in selectors) {
+    NSMutableArray<UIView *> *bars = [NSMutableArray array];
+    for(NSString *selectorName in @[@"visualTabBar", @"mainTabBar", @"fakeTabBar"]) {
         UIView *candidate = LCTikTok462ViewReturnedBySelector(controller, selectorName);
-        if(candidate && candidate.window == window && !candidate.hidden &&
-           candidate.alpha > 0.01 && candidate.bounds.size.height > 1.0) {
-            return candidate;
+        if(candidate && candidate.window == window && ![bars containsObject:candidate]) {
+            [bars addObject:candidate];
         }
     }
 
-    UIView *tabBar = controller.tabBar;
-    if(tabBar && tabBar.window == window && !tabBar.hidden &&
-       tabBar.alpha > 0.01 && tabBar.bounds.size.height > 1.0) {
-        return tabBar;
+    UIView *standardTabBar = controller.tabBar;
+    if(standardTabBar && standardTabBar.window == window && ![bars containsObject:standardTabBar]) {
+        [bars addObject:standardTabBar];
+    }
+    return bars;
+}
+
+static UIView *LCTikTok462VisibleTabBar(UITabBarController *controller) {
+    for(UIView *candidate in LCTikTok462AttachedTabBars(controller)) {
+        if(!candidate.hidden && candidate.alpha > 0.01 && candidate.bounds.size.height > 1.0) {
+            return candidate;
+        }
     }
     return nil;
 }
 
-// LCTikTok462MeasuredAlignment
-// TikTok declares itself full-screen-only and can lay the tab hierarchy out against
-// the physical display even though FlekDeck's hosted Parallel viewport is shorter.
-// Correct only the resulting coordinate-space mismatch: measure the actual bottom
-// of TikTok's visible tab bar in window coordinates and align it to the exact bottom
-// of LCParallelSeededViewportBounds(). No guessed points are involved.
-static void LCTikTok462AlignRootToHostedViewport(id object) {
+static void LCTikTok462MoveViewByWindowDeltaY(UIView *view, UIWindow *window, CGFloat deltaY) {
+    if(!view.superview || ABS(deltaY) <= 0.5) return;
+    CGPoint p0 = [window convertPoint:CGPointZero toView:view.superview];
+    CGPoint p1 = [window convertPoint:CGPointMake(0.0, deltaY) toView:view.superview];
+    CGRect frame = view.frame;
+    frame.origin.y += (p1.y - p0.y);
+    view.frame = frame;
+}
+
+// Keep TikTok's root surface exactly where TikTok put it. The only direct frame
+// correction is applied to TikTok's own tab-bar views. The selected content
+// controller then receives the exact bottom exclusion implied by that native bar,
+// so captions/search/profile content reflow instead of being dragged with the bar.
+static void LCTikTok462ApplyHostedInsetsContract(id object) {
     if(!LCTikTokParallelCompatEnabled() ||
        ![object isKindOfClass:UITabBarController.class]) return;
 
@@ -81,41 +94,64 @@ static void LCTikTok462AlignRootToHostedViewport(id object) {
     if(CGRectIsNull(hostedViewport) ||
        hostedViewport.size.width <= 1.0 || hostedViewport.size.height <= 1.0) return;
 
-    UIView *tabBar = LCTikTok462VisibleTabBar(controller);
-    if(!tabBar) return;
+    UIView *visibleTabBar = LCTikTok462VisibleTabBar(controller);
+    if(!visibleTabBar) return;
 
-    CGRect tabBarInWindow = [tabBar convertRect:tabBar.bounds toView:window];
-    if(CGRectIsNull(tabBarInWindow) || CGRectIsEmpty(tabBarInWindow)) return;
+    CGRect beforeFrame = [visibleTabBar convertRect:visibleTabBar.bounds toView:window];
+    if(CGRectIsNull(beforeFrame) || CGRectIsEmpty(beforeFrame)) return;
 
     CGFloat hostedBottom = CGRectGetMaxY(hostedViewport);
-    CGFloat tabBarBottom = CGRectGetMaxY(tabBarInWindow);
-    CGFloat measuredOverflow = tabBarBottom - hostedBottom;
+    CGFloat tabBarBottom = CGRectGetMaxY(beforeFrame);
+    CGFloat barDeltaY = hostedBottom - tabBarBottom;
 
-    // Already aligned. This also prevents a bounds change from creating a layout loop.
-    if(ABS(measuredOverflow) <= 0.5) return;
+    if(ABS(barDeltaY) > 0.5) {
+        for(UIView *bar in LCTikTok462AttachedTabBars(controller)) {
+            LCTikTok462MoveViewByWindowDeltaY(bar, window, barDeltaY);
+        }
+    }
 
-    CGRect bounds = rootView.bounds;
-    bounds.origin.y += measuredOverflow;
-    rootView.bounds = bounds;
+    // Re-read the visible bar after moving TikTok's bar hierarchy. Do not alter the
+    // video/feed root frame. Instead tell only the selected child how much bottom
+    // space is actually occupied by the now-visible TikTok navigation bar.
+    visibleTabBar = LCTikTok462VisibleTabBar(controller) ?: visibleTabBar;
+    UIViewController *selected = controller.selectedViewController;
+    if(selected && selected.view.window == window) {
+        UIView *childView = selected.view;
+        CGRect barInChild = [visibleTabBar convertRect:visibleTabBar.bounds toView:childView];
+        if(!CGRectIsNull(barInChild) && !CGRectIsEmpty(barInChild)) {
+            CGFloat childBottom = CGRectGetMaxY(childView.bounds);
+            CGFloat desiredTotalBottomInset = MAX(0.0, childBottom - CGRectGetMinY(barInChild));
+            desiredTotalBottomInset = MIN(desiredTotalBottomInset, childView.bounds.size.height * 0.5);
 
-    if(!objc_getAssociatedObject(controller, LCTikTok462AlignmentLogKey)) {
-        objc_setAssociatedObject(controller, LCTikTok462AlignmentLogKey, @YES,
+            UIEdgeInsets additional = selected.additionalSafeAreaInsets;
+            CGFloat systemBottom = MAX(0.0, childView.safeAreaInsets.bottom - additional.bottom);
+            CGFloat desiredAdditionalBottom = MAX(0.0, desiredTotalBottomInset - systemBottom);
+            if(ABS(additional.bottom - desiredAdditionalBottom) > 0.5) {
+                additional.bottom = desiredAdditionalBottom;
+                selected.additionalSafeAreaInsets = additional;
+            }
+        }
+    }
+
+    if(!objc_getAssociatedObject(controller, LCTikTok462LayoutLogKey)) {
+        objc_setAssociatedObject(controller, LCTikTok462LayoutLogKey, @YES,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        NSLog(@"[FlekDeck] TikTok measured Parallel alignment delta=%.2f tabBar=%@ tabFrame=%@ hosted=%@ rootBounds=%@",
-              measuredOverflow, NSStringFromClass(tabBar.class),
-              NSStringFromCGRect(tabBarInWindow), NSStringFromCGRect(hostedViewport),
-              NSStringFromCGRect(rootView.bounds));
+        CGRect afterFrame = [visibleTabBar convertRect:visibleTabBar.bounds toView:window];
+        NSLog(@"[FlekDeck] TikTok hosted insets contract bar=%@ before=%@ after=%@ hosted=%@ child=%@",
+              NSStringFromClass(visibleTabBar.class), NSStringFromCGRect(beforeFrame),
+              NSStringFromCGRect(afterFrame), NSStringFromCGRect(hostedViewport),
+              NSStringFromClass(controller.selectedViewController.class));
     }
 }
 
-static void LCTikTok462ScheduleAlignment(id object) {
-    if(!object || objc_getAssociatedObject(object, LCTikTok462AlignmentPendingKey)) return;
-    objc_setAssociatedObject(object, LCTikTok462AlignmentPendingKey, @YES,
+static void LCTikTok462ScheduleLayoutContract(id object) {
+    if(!object || objc_getAssociatedObject(object, LCTikTok462LayoutPendingKey)) return;
+    objc_setAssociatedObject(object, LCTikTok462LayoutPendingKey, @YES,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     dispatch_async(dispatch_get_main_queue(), ^{
-        objc_setAssociatedObject(object, LCTikTok462AlignmentPendingKey, nil,
+        objc_setAssociatedObject(object, LCTikTok462LayoutPendingKey, nil,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        LCTikTok462AlignRootToHostedViewport(object);
+        LCTikTok462ApplyHostedInsetsContract(object);
     });
 }
 
@@ -124,10 +160,8 @@ static void LCTikTok462ControllerDidLayout(id object, SEL selector) {
         ((void (*)(id, SEL))LCTikTok462OriginalControllerDidLayout)(object, selector);
     }
 
-    // First pass catches normal UIKit ordering; the coalesced next-main-turn pass
-    // catches TikTok's own late tab-bar adjustment without hard-coding any distance.
-    LCTikTok462AlignRootToHostedViewport(object);
-    LCTikTok462ScheduleAlignment(object);
+    LCTikTok462ApplyHostedInsetsContract(object);
+    LCTikTok462ScheduleLayoutContract(object);
 }
 
 static void LCInstallTikTok462TabHierarchyCompat(void) {
@@ -140,7 +174,7 @@ static void LCInstallTikTok462TabHierarchyCompat(void) {
                                   @selector(viewDidLayoutSubviews),
                                   (IMP)LCTikTok462ControllerDidLayout);
     if(LCTikTok462OriginalControllerDidLayout) {
-        NSLog(@"[FlekDeck] installed measured TikTok 46.x Parallel alignment on TTKTabBarController");
+        NSLog(@"[FlekDeck] installed TikTok 46.x hosted-insets contract on TTKTabBarController");
     }
 }
 
@@ -297,7 +331,7 @@ for required in (
     "LCParallelGuestViewportBridge",
     "LCTikTokParallelLayoutCompat",
     "LCTikTok462TabHierarchyCompat",
-    "LCTikTok462MeasuredAlignment",
+    "LCTikTok462HostedInsetsContract",
     'NSClassFromString(@"TTKTabBarController")',
     "LCSingleGuestSwitcherGestureBridge",
 ):
@@ -310,10 +344,11 @@ for forbidden in (
     "LCTikTokAdjustedParallelViewportBounds",
     "LCTikTokParallelBoundsPan",
     "LCTikTok462VerticalPan",
-    "bounds.origin.y = 20.0",
+    "LCTikTok462AlignRootToHostedViewport",
+    "rootView.bounds = bounds",
 ):
     if forbidden in final_tweak:
-        raise SystemExit(f"forbidden obsolete TikTok layout logic survived: {forbidden}")
+        raise SystemExit(f"forbidden obsolete TikTok root/layout logic survived: {forbidden}")
 
 for required in (
     "FlekHomeSingleSwitcherGestureBridge",
@@ -323,4 +358,4 @@ for required in (
     if required not in final_dock:
         raise SystemExit(f"missing marker: {required}")
 
-print("Applied: measured TTKTabBarController Parallel alignment + Single guest switcher bridge")
+print("Applied: TTKTabBarController hosted-insets contract + Single guest switcher bridge")
