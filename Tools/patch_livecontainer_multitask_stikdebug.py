@@ -11,9 +11,15 @@ from pathlib import Path
 p = Path("MultitaskSupport/AppSceneViewController.m")
 s = p.read_text()
 
+# This file also has document-directory lookups in its staging helpers. Scope all
+# replacement anchors to the guest initializer; searching from byte zero used to
+# eat the tail of LCStageAppToAppGroup and leave the Objective-C implementation
+# syntactically broken during CI.
+init_marker = '''- (instancetype)initWithBundleId:(NSString*)bundleId dataUUID:(NSString*)dataUUID delegate:(id<AppSceneViewControllerDelegate>)delegate {\n'''
+init_start = s.index(init_marker)
 resource_start_marker = '''    NSURL *docURL = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].lastObject;\n'''
 resource_end_marker = '''    item.userInfo = userInfo;\n'''
-start = s.index(resource_start_marker)
+start = s.index(resource_start_marker, init_start)
 end = s.index(resource_end_marker, start)
 
 resource_block = r'''    NSURL *docURL = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].lastObject;
@@ -63,7 +69,7 @@ resource_block = r'''    NSURL *docURL = [NSFileManager.defaultManager URLsForDi
 s = s[:start] + resource_block + s[end:]
 
 stage_marker = '''    // Local app files are staged into the app group so the extension can reach\n'''
-stage_start = s.index(stage_marker)
+stage_start = s.index(stage_marker, init_start)
 return_marker = '''    return self;\n}\n'''
 stage_end = s.index(return_marker, stage_start)
 launch_block = r'''    // Follow upstream LiveContainer's multitask launch boundary. The security
