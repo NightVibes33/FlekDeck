@@ -1,2 +1,2 @@
-trigger: 2026-09-11T16:45:00Z
-reason: target TikTok 46.x current TTKTabBarController hierarchy in Parallel without resizing; preserve Home Parallel Single switchers and PiP
+trigger: measured-tiktok-layout-v72
+reason: remove fixed TikTok 20pt pan; align current TTKTabBarController from measured tab-bar overflow while preserving Home Parallel Single switchers and PiP
