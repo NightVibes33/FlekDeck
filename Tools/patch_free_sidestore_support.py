@@ -73,6 +73,40 @@ experiment = Path("Tools/patch_multitask_jit_diagnosis.py")
 if experiment.exists():
     exec(compile(experiment.read_text(), str(experiment), "exec"), {})
 
+# The signer-compatible workflow copies the pinned Vibe LCBootstrap over the
+# repository version before this adapter runs. PiP's native guest bridge and
+# YouTube sample-buffer binding are build-time compatibility layers, so they must
+# be re-applied here after that copy. Keep the same order as the known-good
+# direct multitask build. These scripts do not rewrite the app-switcher gesture.
+for pip_patch_name in (
+    "patch_guest_native_pip_bridge.py",
+    "patch_youtube_native_pip_render.py",
+    "patch_pip_state_separation.py",
+):
+    pip_patch = Path("Tools") / pip_patch_name
+    if not pip_patch.exists():
+        raise SystemExit(f"Required PiP compatibility patch missing: {pip_patch}")
+    exec(compile(pip_patch.read_text(), str(pip_patch), "exec"), {})
+
+# Fail closed if the Vibe core copy ever drops the PiP layer again.
+bootstrap = Path("LiveContainer/LCBootstrap.m").read_text()
+pip_manager = Path("MultitaskSupport/PiPManager.m").read_text()
+for marker in (
+    "LCGuestNativePiPBridge",
+    "sampleBufferDisplayLayer",
+    "LCYouTubePiPRefreshSource",
+    "newContentSource",
+):
+    if marker not in bootstrap:
+        raise SystemExit(f"PiP bootstrap marker missing after compatibility patches: {marker}")
+for marker in (
+    "startWindowPiPWithVC",
+    "LCNativePiPDoesNotOwnWindowLifecycle",
+    "LCNativePiPAutoWindowFallback",
+):
+    if marker not in pip_manager:
+        raise SystemExit(f"PiP manager marker missing after compatibility patches: {marker}")
+
 # Preserve the exact main/pre-PiP bottom-swipe implementation. The temporary
 # persistent swipe rewrite replaced that path and is the app-switcher regression.
 # Keep the historical patch file in the branch, but do not compile it.
@@ -80,4 +114,4 @@ gesture_bridge = Path("Tools/patch_guest_gesture_bridge.py")
 if gesture_bridge.exists():
     print("Skipping obsolete persistent switcher-swipe rewrite; preserving main gesture path.")
 
-print("Applied signer-compatible SideStore integration and removed the false development-certificate launch alert")
+print("Applied signer-compatible SideStore integration, PiP compatibility stack, and removed the false development-certificate launch alert")
