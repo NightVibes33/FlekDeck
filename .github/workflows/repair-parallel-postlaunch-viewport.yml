@@ -1,0 +1,120 @@
+name: Repair Parallel post-launch viewport snap
+
+on:
+  push:
+    branches:
+      - experiment/parallel-guest-layout-safearea
+    paths:
+      - '.github/workflows/repair-parallel-postlaunch-viewport.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/parallel-guest-layout-safearea
+          fetch-depth: 0
+
+      - name: Fix stale post-layout guest frame ordering
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('MultitaskSupport/AppSceneViewController.m')
+          s = p.read_text()
+
+          old = '''            CGRect frame = self.view.frame;
+            if(!self.usesHostingControllerAPI) {
+                frame.size.width /= self.scaleRatio;
+                frame.size.height /= self.scaleRatio;
+            }
+            if(UIInterfaceOrientationIsLandscape(settings.interfaceOrientation)) {
+                CGSize size = frame.size;
+                frame.size.width = size.height;
+                frame.size.height = size.width;
+            }
+            settings.frame = frame;
+            if(block) {
+                block(settings);
+            }
+'''
+
+          new = '''            // LCParallelPostLayoutViewportInvariant
+            // A pending decorated-window geometry block can resize the maximized
+            // container (most notably when the switcher bar becomes physically
+            // laid out). It MUST run before we sample the guest drawable. The old
+            // order sampled the pre-resize frame, then shrank the outer container,
+            // so 50ms after launch the remote scene kept the old tall drawable and
+            // was clipped by the new shorter window. Apps that cache viewport
+            // geometry, such as TikTok builds, visibly snapped from correct to
+            // cropped while more adaptive apps hid the bug by re-laying out later.
+            if(block) {
+                block(settings);
+            }
+
+            // Propagate the outer bounds change through the constraints before
+            // measuring the hosted scene. `frame` is also undefined while the
+            // launch animation carries a transform; bounds is the actual drawable
+            // size and always starts at zero in the guest's coordinate space.
+            [self.view.superview setNeedsLayout];
+            [self.view.superview layoutIfNeeded];
+            [self.view setNeedsLayout];
+            [self.view layoutIfNeeded];
+
+            CGRect frame = self.view.bounds;
+            frame.origin = CGPointZero;
+            if(!self.usesHostingControllerAPI) {
+                frame.size.width /= self.scaleRatio;
+                frame.size.height /= self.scaleRatio;
+            }
+            if(UIInterfaceOrientationIsLandscape(settings.interfaceOrientation)) {
+                CGSize size = frame.size;
+                frame.size.width = size.height;
+                frame.size.height = size.width;
+            }
+            settings.frame = frame;
+'''
+
+          if old not in s:
+              if 'LCParallelPostLayoutViewportInvariant' in s:
+                  print('post-layout viewport repair already present')
+              else:
+                  raise SystemExit('updateFrameWithSettingsBlock stale-order anchor missing')
+          else:
+              s = s.replace(old, new, 1)
+
+          if s.count('LCParallelPostLayoutViewportInvariant') != 1:
+              raise SystemExit('unexpected post-layout viewport marker count')
+
+          # The correctness boundary is ordering: the geometry callback must occur
+          # before self.view.bounds is sampled in updateFrameWithSettingsBlock.
+          fn_start = s.find('- (void)updateFrameWithSettingsBlock:')
+          fn_end = s.find('- (void)updateSettingsWithBlock:', fn_start)
+          if fn_start < 0 or fn_end < 0:
+              raise SystemExit('updateFrameWithSettingsBlock scope missing')
+          fn = s[fn_start:fn_end]
+          block_pos = fn.find('if(block) {\n                block(settings);')
+          bounds_pos = fn.find('CGRect frame = self.view.bounds;')
+          if block_pos < 0 or bounds_pos < 0 or block_pos >= bounds_pos:
+              raise SystemExit('geometry callback does not precede final bounds sample')
+          if 'CGRect frame = self.view.frame;' in fn:
+              raise SystemExit('stale transformed frame sampling remains')
+
+          p.write_text(s)
+          PY
+          git diff --check
+
+      - name: Commit repair and trigger signer build
+        shell: bash
+        run: |
+          printf 'trigger: 2026-09-11T05:25:00Z\nreason: fix post-launch stale guest viewport snap\n' > .github/trigger-unsigned-ipa
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add MultitaskSupport/AppSceneViewController.m .github/trigger-unsigned-ipa
+          git commit -m 'Fix Parallel post-launch viewport snap'
+          git push origin HEAD:experiment/parallel-guest-layout-safearea
