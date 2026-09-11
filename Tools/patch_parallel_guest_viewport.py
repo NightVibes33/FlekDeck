@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Run #65 compatibility, then refine Single switcher + TikTok Parallel bottom fit."""
+"""Run #65 compatibility, then refine Single switcher + TikTok Parallel vertical fit."""
 from pathlib import Path
 import runpy
 
 runpy.run_path("Tools/patch_parallel_guest_viewport_base.py", run_name="__main__")
 
-# TikTok Parallel: #65 is now on the right hosted viewport. Current TikTok still
-# leaves its own tab hierarchy slightly too low, so shorten only TikTok's internal
-# layout viewport by 20pt. Host scene/switcher/PiP geometry is untouched.
+# TikTok Parallel: preserve the exact hosted viewport size and aspect ratio. The
+# residual bug is positional, not dimensional: TikTok's own hierarchy sits a little
+# too low. Translate it upward 20pt without changing width/height/scale.
 tweak_path = Path("TweakLoader/UIKit+GuestHooks.m")
 tweak = tweak_path.read_text()
 compat_anchor = r'''static BOOL LCTikTokParallelCompatEnabled(void) {
@@ -22,8 +22,8 @@ if "LCTikTokParallelBottomNudge" not in tweak:
 static CGRect LCTikTokAdjustedParallelViewportBounds(void) {
     CGRect seed = LCParallelSeededViewportBounds();
     if(CGRectIsNull(seed)) return seed;
-    const CGFloat bottomNudge = 20.0;
-    if(seed.size.height > bottomNudge + 1.0) seed.size.height -= bottomNudge;
+    const CGFloat verticalShift = 20.0;
+    seed.origin.y -= verticalShift;
     return seed;
 }
 ''', 1)
@@ -37,6 +37,27 @@ static CGRect LCTikTokAdjustedParallelViewportBounds(void) {
         if old not in block:
             raise SystemExit(f"TikTok layout seed missing in {function_name}")
         block = block.replace(old, new, 1)
+
+        if function_name == "static void LCTikTokClampRootController":
+            old_logic = '''    if(ABS(frame.size.width - seed.size.width) <= 0.5 &&
+       ABS(frame.size.height - seed.size.height) <= 0.5) return;
+
+    frame.size = seed.size;
+    view.frame = frame;
+'''
+            new_logic = '''    BOOL sizeMatches = ABS(frame.size.width - seed.size.width) <= 0.5 &&
+                       ABS(frame.size.height - seed.size.height) <= 0.5;
+    BOOL originMatches = ABS(frame.origin.y - seed.origin.y) <= 0.5;
+    if(sizeMatches && originMatches) return;
+
+    frame.origin.y = seed.origin.y;
+    frame.size = seed.size;
+    view.frame = frame;
+'''
+            if old_logic not in block:
+                raise SystemExit("TikTok root clamp logic missing")
+            block = block.replace(old_logic, new_logic, 1)
+
         tweak = tweak[:start] + block + tweak[end:]
 
 # Single mode: install the gesture inside the actual in-process guest window and
@@ -162,4 +183,4 @@ for required in ("LCParallelGuestViewportBridge", "LCTikTokParallelLayoutCompat"
     if required not in final_tweak: raise SystemExit(f"missing marker: {required}")
 for required in ("FlekHomeSingleSwitcherGestureBridge", "FlekSingleGuestSwitcherGestureRequested", "!hasForegroundAppWindow()"):
     if required not in final_dock: raise SystemExit(f"missing marker: {required}")
-print("Applied #66: Single guest switcher bridge + TikTok Parallel 20pt bottom nudge")
+print("Applied: Single guest switcher bridge + TikTok Parallel 20pt pure upward translation")
