@@ -699,7 +699,25 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
                 // Only ever written with a real answer; unknown leaves it as it is.
                 if(guestDevice != UIDeviceOrientationUnknown) settings.deviceOrientation = guestDevice;
             }
-            CGRect frame = self.view.frame;
+            // LCParallelPostLayoutViewportInvariant
+            // A pending decorated-window geometry block can resize the maximized
+            // container. Run it before sampling the guest drawable; the previous
+            // order sampled the pre-resize frame, then shrank the outer window,
+            // leaving the remote scene tall and visibly clipping it milliseconds
+            // after launch in apps that cache their vewport.
+            if(block) {
+                block(settings);
+            }
+
+            // Propagate the outer size through Auto Layout before measuring the
+            // hosted scene. Bounds is transform-safe during the launch animation.
+            [self.view.superview setNeedsLayout];
+            [self.view.superview layoutIfNeeded];
+            [self.view setNeedsLayout];
+            [self.view layoutIfNeeded];
+
+            CGRect frame = self.view.bounds;
+            frame.origin = CGPointZero;
             if(!self.usesHostingControllerAPI) {
                 frame.size.width /= self.scaleRatio;
                 frame.size.height /= self.scaleRatio;
@@ -710,9 +728,6 @@ static UIDeviceOrientation LCDeviceOrientationForInterface(UIInterfaceOrientatio
                 frame.size.height = size.width;
             }
             settings.frame = frame;
-            if(block) {
-                block(settings);
-            }
         }];
     };
     if(_shouldSkipDebounceOnce) {

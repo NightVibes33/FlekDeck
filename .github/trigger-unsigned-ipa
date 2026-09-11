@@ -1,2 +1,2 @@
-trigger: 2026-09-11T05:02:30Z
-reason: build true first-frame geometry plus restored main switcher gesture path
+trigger: 2026-09-11T05:35:00Z
+reason: post-launch guest drawable uses final maximized bounds
