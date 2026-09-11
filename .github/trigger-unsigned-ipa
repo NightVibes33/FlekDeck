@@ -1,2 +1,2 @@
-trigger: 2026-09-11T08:00:00Z
-reason: seed TikTok Parallel viewport before its first UIWindow exists
+trigger: 2026-09-11T13:35:00Z
+reason: separate Home-Single switcher gesture from Parallel and clamp TikTok guest layout
