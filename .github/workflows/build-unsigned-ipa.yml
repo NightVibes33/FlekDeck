@@ -129,17 +129,37 @@ jobs:
           diff -qr TestJITLess "$V/TestJITLess"
           diff -qr ZSign "$V/ZSign"
           diff -qr litehook "$V/litehook"
-          VIBE_OPENSSL="$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/OpenSSL")"
-          test "$(git -C OpenSSL rev-parse HEAD)" = "$VIBE_OPENSSL"
+          VIBE_OPENSSL="$(git -C OpenSSL rev-parse HEAD)"
+          test "$VIBE_OPENSSL" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/OpenSSL")"
           echo "Exact Vibe signing/JIT parity proven."
 
-      - name: Apply Flek compatibility layers
+      # Vibe intentionally overwrites several guest/runtime files above. Every
+      # Flek-specific switcher/PiP/viewport layer MUST be reconstructed after that
+      # overlay and verified before Xcode is allowed to package an IPA.
+      - name: Reapply Flek compatibility layers after Vibe overlay
         run: |
           set -euo pipefail
           python3 Tools/patch_vibecontainers_shell_compat.py
           python3 Tools/patch_vibecontainers_project_compat.py
           python3 Tools/patch_free_sidestore_support.py
           python3 Tools/patch_parallel_guest_viewport.py
+
+      - name: Fail if Vibe overlay erased Flek UI fixes
+        run: |
+          set -euo pipefail
+          # Home + Parallel switcher paths that are already verified on-device.
+          grep -q 'FlekHomeSingleSwitcherGestureBridge' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'MultitaskSwipeZone' MultitaskSupport/MultitaskDockView.swift
+          # Single-mode guest bridge added after the Vibe UIKit hook replacement.
+          grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
+          grep -q 'FlekSingleGuestSwitcherGestureRequested' MultitaskSupport/MultitaskDockView.swift
+          # TikTok Parallel compatibility must also survive the same replacement.
+          grep -q 'LCParallelGuestViewportBridge' TweakLoader/UIKit+GuestHooks.m
+          grep -q 'LCTikTokParallelLayoutCompat' TweakLoader/UIKit+GuestHooks.m
+          grep -q 'LCTikTokParallelBottomNudge' TweakLoader/UIKit+GuestHooks.m
+          # Existing PiP compatibility stack must remain present as well.
+          grep -q 'FlekNativePiP' LiveContainer/LCBootstrap.m
+          echo 'Flek switcher/TikTok/PiP layers survived Vibe overlay.'
 
       - name: Select Xcode 26.6
         uses: maxim-lobanov/setup-xcode@v1
@@ -151,6 +171,7 @@ jobs:
           set -euo pipefail
           python3 -m py_compile Tools/patch_free_sidestore_support.py
           python3 -m py_compile Tools/patch_livecontainer_multitask_stikdebug.py
+          python3 -m py_compile Tools/patch_parallel_guest_viewport_base.py
           python3 -m py_compile Tools/patch_parallel_guest_viewport.py
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
@@ -164,6 +185,9 @@ jobs:
           grep -q 'bookmarkDataWithOptions' MultitaskSupport/AppSceneViewController.m
           grep -q 'LCParallelGuestViewportBridge' TweakLoader/UIKit+GuestHooks.m
           grep -q 'lc_parallelGuest_bounds' TweakLoader/UIKit+GuestHooks.m
+          grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
+          grep -q 'FlekSingleGuestSwitcherGestureRequested' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCTikTokParallelBottomNudge' TweakLoader/UIKit+GuestHooks.m
           ! grep -q 'FlekHostHasDevelopmentSigning' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'FlekHostDevelopmentSigningError' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'FlekDeck host does not have get-task-allow' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift

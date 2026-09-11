@@ -1,2 +1,2 @@
-trigger: 2026-09-11T13:35:00Z
-reason: separate Home-Single switcher gesture from Parallel and clamp TikTok guest layout
+trigger: 2026-09-11T14:09:00Z
+reason: fix Single guest app-switcher swipe and nudge TikTok Parallel bottom layout upward 20pt
