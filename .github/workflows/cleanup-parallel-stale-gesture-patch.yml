@@ -1,0 +1,55 @@
+name: Cleanup Parallel stale gesture patch
+
+on:
+  push:
+    branches:
+      - experiment/parallel-guest-layout-safearea
+    paths:
+      - '.github/workflows/cleanup-parallel-stale-gesture-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/parallel-guest-layout-safearea
+          fetch-depth: 0
+
+      - name: Remove stale FlekGuestBottomGestureBridge injection
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Tools/patch_multitask_jit_diagnosis.py')
+          s = p.read_text()
+          start_marker = '''# ---------------------------------------------------------------------------\n# Restore a host-owned bottom recognizer over actual multitask windows.'''
+          end_marker = '''\nprint("Applied FlekDeck multitask/JIT-less experiment diagnostics and host gesture bridge.")'''
+          start = s.find(start_marker)
+          end = s.find(end_marker)
+          if start < 0 or end < 0 or end <= start:
+              raise SystemExit('stale gesture injection block not found')
+          replacement = '''# Parallel layout experiment deliberately leaves the app-switcher gesture path\n# untouched. The old diagnostic referenced FlekGuestBottomGestureBridge, a type\n# that no longer exists, and was unrelated to guest scene geometry.\n'''
+          s = s[:start] + replacement + s[end:]
+          s = s.replace(
+              'print("Applied FlekDeck multitask/JIT-less experiment diagnostics and host gesture bridge.")',
+              'print("Applied FlekDeck multitask/JIT-less experiment diagnostics.")'
+          )
+          if 'FlekGuestBottomGestureBridge' in s:
+              raise SystemExit('stale bridge reference still present')
+          p.write_text(s)
+          PY
+          git diff --check
+
+      - name: Commit cleanup and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/cleanup-parallel-stale-gesture-patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Tools/patch_multitask_jit_diagnosis.py .github/workflows/cleanup-parallel-stale-gesture-patch.yml
+          git commit -m 'Keep Parallel layout experiment out of switcher gesture path'
+          git push origin HEAD:experiment/parallel-guest-layout-safearea
