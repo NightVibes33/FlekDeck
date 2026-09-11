@@ -1,2 +1,2 @@
-trigger: tiktok-hosted-insets-v73
-reason: stop translating TikTok root; align native TTK tab bar to hosted viewport and propagate bottom safe area while preserving Home Parallel Single switchers and PiP
+trigger: tiktok-native-bar-overlay-v74
+reason: remove TikTok selected-child safe-area reflow and root manipulation; keep feed untouched and visually align only TikTok native TTK tab bar from live hosted geometry
