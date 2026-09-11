@@ -25,67 +25,26 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path('.github/workflows/build-unsigned-ipa.yml')
           s = p.read_text()
-
-          old_apply = '''          python3 Tools/patch_vibecontainers_shell_compat.py
-          python3 Tools/patch_vibecontainers_project_compat.py
-          python3 Tools/patch_free_sidestore_support.py
-'''
-          new_apply = '''          python3 Tools/patch_vibecontainers_shell_compat.py
-          python3 Tools/patch_vibecontainers_project_compat.py
-          python3 Tools/patch_free_sidestore_support.py
-          # Restore the exact PiP compatibility stack used by the working direct
-          # multitask build. The signer workflow copies Vibe's LCBootstrap.m over
-          # FlekDeck's source before building, so these patches must be re-applied
-          # after that copy or native media/YouTube PiP silently disappears.
-          python3 Tools/patch_guest_native_pip_bridge.py
-          python3 Tools/patch_youtube_native_pip_render.py
-          python3 Tools/patch_pip_state_separation.py
-'''
-          if old_apply not in s:
-              if 'python3 Tools/patch_guest_native_pip_bridge.py' not in s:
+          apply_anchor = "          python3 Tools/patch_free_sidestore_support.py\n"
+          pip_apply = apply_anchor + "          # Re-apply the working PiP compatibility stack after the pinned Vibe core copy.\n          python3 Tools/patch_guest_native_pip_bridge.py\n          python3 Tools/patch_youtube_native_pip_render.py\n          python3 Tools/patch_pip_state_separation.py\n"
+          if 'python3 Tools/patch_guest_native_pip_bridge.py' not in s:
+              if apply_anchor not in s:
                   raise SystemExit('compatibility-layer anchor missing')
-          else:
-              s = s.replace(old_apply, new_apply, 1)
-
-          old_verify = '''          grep -q 'bookmarkDataWithOptions' MultitaskSupport/AppSceneViewController.m
-'''
-          new_verify = '''          grep -q 'bookmarkDataWithOptions' MultitaskSupport/AppSceneViewController.m
-          # PiP must survive the Vibe-core copy in this signer-compatible build.
-          grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
-          grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
-          grep -q 'LCYouTubePiPRefreshSource' LiveContainer/LCBootstrap.m
-          grep -q 'newContentSource' LiveContainer/LCBootstrap.m
-          grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m
-          grep -q 'LCNativePiPDoesNotOwnWindowLifecycle' MultitaskSupport/PiPManager.m
-          grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
-'''
-          if old_verify not in s:
-              if "grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m" not in s:
-                  raise SystemExit('verification anchor missing')
-          else:
-              s = s.replace(old_verify, new_verify, 1)
-
-          # Guard the user's now-correct app switcher: this repair is build-pipeline
-          # only and must not compile the obsolete persistent swipe rewrite.
-          verify_anchor = "          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift\n"
-          switcher_guard = '''          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
-          if grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift; then
-            echo 'Refusing to build obsolete switcher swipe rewrite'
-            exit 1
-          fi
-          if grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift; then
-            echo 'Refusing to build obsolete switcher lower-window bridge'
-            exit 1
-          fi
-'''
-          if switcher_guard not in s:
+              s = s.replace(apply_anchor, pip_apply, 1)
+          verify_anchor = "          grep -q 'bookmarkDataWithOptions' MultitaskSupport/AppSceneViewController.m\n"
+          pip_verify = verify_anchor + "          grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m\n          grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m\n          grep -q 'LCYouTubePiPRefreshSource' LiveContainer/LCBootstrap.m\n          grep -q 'newContentSource' LiveContainer/LCBootstrap.m\n          grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m\n          grep -q 'LCNativePiPDoesNotOwnWindowLifecycle' MultitaskSupport/PiPManager.m\n          grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m\n"
+          if "grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m" not in s:
               if verify_anchor not in s:
-                  raise SystemExit('switcher parse anchor missing')
-              s = s.replace(verify_anchor, switcher_guard, 1)
-
+                  raise SystemExit('PiP verification anchor missing')
+              s = s.replace(verify_anchor, pip_verify, 1)
+          switcher_anchor = "          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift\n"
+          switcher_guard = switcher_anchor + "          ! grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift\n          ! grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift\n"
+          if "! grep -q 'LCPersistentSwitcherSwipeInvariant'" not in s:
+              if switcher_anchor not in s:
+                  raise SystemExit('switcher verification anchor missing')
+              s = s.replace(switcher_anchor, switcher_guard, 1)
           p.write_text(s)
           PY
           git diff --check
@@ -94,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          printf 'trigger: 2026-09-11T06:00:00Z\nreason: restore native and YouTube PiP patch stack in signer build\n' > .github/trigger-unsigned-ipa
+          printf 'trigger: 2026-09-11T06:05:00Z\nreason: restore native and YouTube PiP patch stack in signer build\n' > .github/trigger-unsigned-ipa
           git rm .github/workflows/restore-pip-signer-build.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
