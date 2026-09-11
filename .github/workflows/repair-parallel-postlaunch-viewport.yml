@@ -19,100 +19,16 @@ jobs:
           ref: experiment/parallel-guest-layout-safearea
           fetch-depth: 0
 
-      - name: Fix stale post-layout guest frame ordering
+      - name: Patch stale post-launch guest frame
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('MultitaskSupport/AppSceneViewController.m')
-          s = p.read_text()
-
-          old = '''            CGRect frame = self.view.frame;
-            if(!self.usesHostingControllerAPI) {
-                frame.size.width /= self.scaleRatio;
-                frame.size.height /= self.scaleRatio;
-            }
-            if(UIInterfaceOrientationIsLandscape(settings.interfaceOrientation)) {
-                CGSize size = frame.size;
-                frame.size.width = size.height;
-                frame.size.height = size.width;
-            }
-            settings.frame = frame;
-            if(block) {
-                block(settings);
-            }
-'''
-
-          new = '''            // LCParallelPostLayoutViewportInvariant
-            // A pending decorated-window geometry block can resize the maximized
-            // container (most notably when the switcher bar becomes physically
-            // laid out). It MUST run before we sample the guest drawable. The old
-            // order sampled the pre-resize frame, then shrank the outer container,
-            // so 50ms after launch the remote scene kept the old tall drawable and
-            // was clipped by the new shorter window. Apps that cache viewport
-            // geometry, such as TikTok builds, visibly snapped from correct to
-            // cropped while more adaptive apps hid the bug by re-laying out later.
-            if(block) {
-                block(settings);
-            }
-
-            // Propagate the outer bounds change through the constraints before
-            // measuring the hosted scene. `frame` is also undefined while the
-            // launch animation carries a transform; bounds is the actual drawable
-            // size and always starts at zero in the guest's coordinate space.
-            [self.view.superview setNeedsLayout];
-            [self.view.superview layoutIfNeeded];
-            [self.view setNeedsLayout];
-            [self.view layoutIfNeeded];
-
-            CGRect frame = self.view.bounds;
-            frame.origin = CGPointZero;
-            if(!self.usesHostingControllerAPI) {
-                frame.size.width /= self.scaleRatio;
-                frame.size.height /= self.scaleRatio;
-            }
-            if(UIInterfaceOrientationIsLandscape(settings.interfaceOrientation)) {
-                CGSize size = frame.size;
-                frame.size.width = size.height;
-                frame.size.height = size.width;
-            }
-            settings.frame = frame;
-'''
-
-          if old not in s:
-              if 'LCParallelPostLayoutViewportInvariant' in s:
-                  print('post-layout viewport repair already present')
-              else:
-                  raise SystemExit('updateFrameWithSettingsBlock stale-order anchor missing')
-          else:
-              s = s.replace(old, new, 1)
-
-          if s.count('LCParallelPostLayoutViewportInvariant') != 1:
-              raise SystemExit('unexpected post-layout viewport marker count')
-
-          # The correctness boundary is ordering: the geometry callback must occur
-          # before self.view.bounds is sampled in updateFrameWithSettingsBlock.
-          fn_start = s.find('- (void)updateFrameWithSettingsBlock:')
-          fn_end = s.find('- (void)updateSettingsWithBlock:', fn_start)
-          if fn_start < 0 or fn_end < 0:
-              raise SystemExit('updateFrameWithSettingsBlock scope missing')
-          fn = s[fn_start:fn_end]
-          block_pos = fn.find('if(block) {\n                block(settings);')
-          bounds_pos = fn.find('CGRect frame = self.view.bounds;')
-          if block_pos < 0 or bounds_pos < 0 or block_pos >= bounds_pos:
-              raise SystemExit('geometry callback does not precede final bounds sample')
-          if 'CGRect frame = self.view.frame;' in fn:
-              raise SystemExit('stale transformed frame sampling remains')
-
-          p.write_text(s)
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnAgPSBQYXRoKCJNdWx0aXRhc2tTdXBwb3J0L0FwcFNjZW5lVmlld0NvbnRyb2xsZXIubSIpCnMgPSBwLnJlYWRfdGV4dCgpCgpvbGQgPSAiIiIgICAgICAgICAgICBDR1JlY3QgZnJhbWUgPSBzZWxmLnZpZXcuZnJhbWU7CiAgICAgICAgICAgIGlmKCFzZWxmLnVzZXNIb3N0aW5nQ29udHJvbGxlckFQSSkgewogICAgICAgICAgICAgICAgZnJhbWUuc2l6ZS53aWR0aCAvPSBzZWxmLnNjYWxlUmF0aW87CiAgICAgICAgICAgICAgICBmcmFtZS5zaXplLmhlaWdodCAvPSBzZWxmLnNjYWxlUmF0aW87CiAgICAgICAgICAgIH0KICAgICAgICAgICAgaWYoVUlJbnRlcmZhY2VPcmllbnRhdGlvbklzTGFuZHNjYXBlKHNldHRpbmdzLmludGVyZmFjZU9yaWVudGF0aW9uKSkgewogICAgICAgICAgICAgICAgQ0dTaXplIHNpemUgPSBmcmFtZS5zaXplOwogICAgICAgICAgICAgICAgZnJhbWUuc2l6ZS53aWR0aCA9IHNpemUuaGVpZ2h0OwogICAgICAgICAgICAgICAgZnJhbWUuc2l6ZS5oZWlnaHQgPSBzaXplLndpZHRoOwogICAgICAgICAgICB9CiAgICAgICAgICAgIHNldHRpbmdzLmZyYW1lID0gZnJhbWU7CiAgICAgICAgICAgIGlmKGJsb2NrKSB7CiAgICAgICAgICAgICAgICBibG9jayhzZXR0aW5ncyk7CiAgICAgICAgICAgIH0KIiIiCgpuZXcgPSAiIiIgICAgICAgICAgICAvLyBMQ1BhcmFsbGVsUG9zdExheW91dFZpZXdwb3J0SW52YXJpYW50CiAgICAgICAgICAgIC8vIEEgcGVuZGluZyBkZWNvcmF0ZWQtd2luZG93IGdlb21ldHJ5IGJsb2NrIGNhbiByZXNpemUgdGhlIG1heGltaXplZAogICAgICAgICAgICAvLyBjb250YWluZXIuIFJ1biBpdCBiZWZvcmUgc2FtcGxpbmcgdGhlIGd1ZXN0IGRyYXdhYmxlOyB0aGUgcHJldmlvdXMKICAgICAgICAgICAgLy8gb3JkZXIgc2FtcGxlZCB0aGUgcHJlLXJlc2l6ZSBmcmFtZSwgdGhlbiBzaHJhbmsgdGhlIG91dGVyIHdpbmRvdywKICAgICAgICAgICAgLy8gbGVhdmluZyB0aGUgcmVtb3RlIHNjZW5lIHRhbGwgYW5kIHZpc2libHkgY2xpcHBpbmcgaXQgbWlsbGlzZWNvbmRzCiAgICAgICAgICAgIC8vIGFmdGVyIGxhdW5jaCBpbiBhcHBzIHRoYXQgY2FjaGUgdGhlaXIgdmV3cG9ydC4KICAgICAgICAgICAgaWYoYmxvY2spIHsKICAgICAgICAgICAgICAgIGJsb2NrKHNldHRpbmdzKTsKICAgICAgICAgICAgfQoKICAgICAgICAgICAgLy8gUHJvcGFnYXRlIHRoZSBvdXRlciBzaXplIHRocm91Z2ggQXV0byBMYXlvdXQgYmVmb3JlIG1lYXN1cmluZyB0aGUKICAgICAgICAgICAgLy8gaG9zdGVkIHNjZW5lLiBCb3VuZHMgaXMgdHJhbnNmb3JtLXNhZmUgZHVyaW5nIHRoZSBsYXVuY2ggYW5pbWF0aW9uLgogICAgICAgICAgICBbc2VsZi52aWV3LnN1cGVydmlldyBzZXROZWVkc0xheW91dF07CiAgICAgICAgICAgIFtzZWxmLnZpZXcuc3VwZXJ2aWV3IGxheW91dElmTmVlZGVkXTsKICAgICAgICAgICAgW3NlbGYudmlldyBzZXROZWVkc0xheW91dF07CiAgICAgICAgICAgIFtzZWxmLnZpZXcgbGF5b3V0SWZOZWVkZWRdOwoKICAgICAgICAgICAgQ0dSZWN0IGZyYW1lID0gc2VsZi52aWV3LmJvdW5kczsKICAgICAgICAgICAgZnJhbWUub3JpZ2luID0gQ0dQb2ludFplcm87CiAgICAgICAgICAgIGlmKCFzZWxmLnVzZXNIb3N0aW5nQ29udHJvbGxlckFQSSkgewogICAgICAgICAgICAgICAgZnJhbWUuc2l6ZS53aWR0aCAvPSBzZWxmLnNjYWxlUmF0aW87CiAgICAgICAgICAgICAgICBmcmFtZS5zaXplLmhlaWdodCAvPSBzZWxmLnNjYWxlUmF0aW87CiAgICAgICAgICAgIH0KICAgICAgICAgICAgaWYoVUlJbnRlcmZhY2VPcmllbnRhdGlvbklzTGFuZHNjYXBlKHNldHRpbmdzLmludGVyZmFjZU9yaWVudGF0aW9uKSkgewogICAgICAgICAgICAgICAgQ0dTaXplIHNpemUgPSBmcmFtZS5zaXplOwogICAgICAgICAgICAgICAgZnJhbWUuc2l6ZS53aWR0aCA9IHNpemUuaGVpZ2h0OwogICAgICAgICAgICAgICAgZnJhbWUuc2l6ZS5oZWlnaHQgPSBzaXplLndpZHRoOwogICAgICAgICAgICB9CiAgICAgICAgICAgIHNldHRpbmdzLmZyYW1lID0gZnJhbWU7CiIiIgoKaWYgb2xkIGluIHM6CiAgICBzID0gcy5yZXBsYWNlKG9sZCwgbmV3LCAxKQplbGlmICJMQ1BhcmFsbGVsUG9zdExheW91dFZpZXdwb3J0SW52YXJpYW50IiBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoInN0YWxlIGZyYW1lLW9yZGVyIGFuY2hvciBtaXNzaW5nIikKCnN0YXJ0ID0gcy5maW5kKCItICh2b2lkKXVwZGF0ZUZyYW1lV2l0aFNldHRpbmdzQmxvY2s6IikKZW5kID0gcy5maW5kKCItICh2b2lkKXVwZGF0ZVNldHRpbmdzV2l0aEJsb2NrOiIsIHN0YXJ0KQppZiBzdGFydCA8IDAgb3IgZW5kIDwgMDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoInVwZGF0ZUZyYW1lV2l0aFNldHRpbmdzQmxvY2sgc2NvcGUgbWlzc2luZyIpCmZuID0gc1tzdGFydDplbmRdCmlmIGZuLmNvdW50KCJMQ1BhcmFsbGVsUG9zdExheW91dFZpZXdwb3J0SW52YXJpYW50IikgIT0gMToKICAgIHJhaXNlIFN5c3RlbUV4aXQoInZpZXdwb3J0IGludmFyaWFudCBtYXJrZXIgbWlzc2luZyBvciBkdXBsaWNhdGVkIikKaWYgIkNHUmVjdCBmcmFtZSA9IHNlbGYudmlldy5mcmFtZTsiIGluIGZuOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiaXN0YWxlIHRyYW5zZm9ybWVkIGZyYW1lIHNhbXBsZSByZW1haW5zIikKaWYgZm4uZmluZCgiYmxvY2soc2V0dGluZ3MpOyIpID4gZm4uZmluZCgiQ0dSZWN0IGZyYW1lID0gc2VsZi52aWV3LmJvdW5kczsiKToKICAgIHJhaXNlIFN5c3RlbUV4aXQoImdlb21ldHJ5IGNhbGxiYWNrIHN0aWxsIHJ1bnMgYWZ0ZXIgZnJhbWUgc2FtcGxlIikKCnAud3JpdGVfdGV4dChzKQpwcmludCgiUG9zdC1sYXVuY2ggZ3Vlc3QgZHJhd2FibGUgbm93IHNhbXBsZXMgdGhlIGZpbmFsIG1heGltaXplZCBib3VuZHMuIikK' | base64 -d | python3
           git diff --check
 
       - name: Commit repair and trigger signer build
         shell: bash
         run: |
-          printf 'trigger: 2026-09-11T05:25:00Z\nreason: fix post-launch stale guest viewport snap\n' > .github/trigger-unsigned-ipa
+          printf 'trigger: 2026-09-11T05:35:00Z\nreason: post-launch guest drawable uses final maximized bounds\n' > .github/trigger-unsigned-ipa
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add MultitaskSupport/AppSceneViewController.m .github/trigger-unsigned-ipa
