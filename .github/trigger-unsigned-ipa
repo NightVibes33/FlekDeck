@@ -1,2 +1,2 @@
-trigger: 2026-09-11T05:58:00Z
-reason: preserve authored Parallel safe-area geometry after FBScene updates
+trigger: 2026-09-11T06:20:00Z
+reason: apply generic LiveProcess hosted UIScreen viewport bridge for Parallel guests
