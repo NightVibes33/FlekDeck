@@ -1,2 +1,2 @@
-trigger: 2026-09-11T05:35:00Z
-reason: post-launch guest drawable uses final maximized bounds
+trigger: 2026-09-11T05:36:30Z
+reason: build post-launch guest drawable final-bounds fix
