@@ -166,18 +166,42 @@ static UIInterfaceOrientation LCWindowOrientation(UIView *view, UIMutableApplica
     return windowIsLandscape ? UIInterfaceOrientationLandscapeRight : UIInterfaceOrientationPortrait;
 }
 
-static BOOL LCIsTikTokParallelGuest(NSString *bundleIdentifier) {
-    if(bundleIdentifier.length == 0) return NO;
-    static NSSet<NSString *> *identifiers;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        identifiers = [NSSet setWithArray:@[
-            @"com.zhiliaoapp.musically",
-            @"com.ss.iphone.ugc.Ame",
-            @"com.ss.iphone.ugc.trill"
-        ]];
-    });
-    return [identifiers containsObject:bundleIdentifier];
+/// The switcher bar can be logically selected before its overlay view has had
+/// its first layout pass. `barReservedInsets` deliberately returns zero in
+/// that interval because there is no physical strip to measure yet. That is
+/// correct for live re-layout, but not for scene creation: an app that sizes
+/// its root viewport once from the initial scene frame would permanently keep
+/// the pre-bar height.
+///
+/// Use the physical reservation whenever it exists. Before it exists, predict
+/// the same edge and thickness the dock is about to lay out. This is a generic
+/// Parallel invariant, not an app compatibility rule: every guest gets its
+/// final maximized geometry on its first scene frame.
+static UIEdgeInsets LCParallelBarReservedInsets(UIView *view, UIMutableApplicationSceneSettings *settings) {
+    MultitaskDockManager *dock = MultitaskDockManager.shared;
+    UIEdgeInsets reserved = dock.barReservedInsets;
+    if(!UIEdgeInsetsEqualToEdgeInsets(reserved, UIEdgeInsetsZero) || !dock.barVisible) {
+        return reserved;
+    }
+
+    CGFloat thickness = dock.barReservedThickness;
+    if(thickness <= 0) return UIEdgeInsetsZero;
+
+    // iPad keeps the Parallel control strip on the bottom edge in every
+    // orientation. iPhone follows the hardware chin: bottom in portrait,
+    // left/right in the corresponding landscape interface orientation.
+    if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        return UIEdgeInsetsMake(0, 0, thickness, 0);
+    }
+
+    switch(LCWindowOrientation(view, settings)) {
+        case UIInterfaceOrientationLandscapeLeft:
+            return UIEdgeInsetsMake(0, thickness, 0, 0);
+        case UIInterfaceOrientationLandscapeRight:
+            return UIEdgeInsetsMake(0, 0, 0, thickness);
+        default:
+            return UIEdgeInsetsMake(0, 0, thickness, 0);
+    }
 }
 
 @implementation DecoratedAppSceneViewController {
@@ -585,24 +609,11 @@ static BOOL LCIsTikTokParallelGuest(NSString *bundleIdentifier) {
 }
 
 - (void)appSceneVCDidPresentScene:(AppSceneViewController*)vc {
-    // TikTok commits its feed viewport from the first scene frame and does not
-    // reliably react when the Parallel control strip finishes laying out a moment
-    // later. Responsive guests such as YouTube update themselves, which is why
-    // only TikTok exposes the stale full-height frame. Re-send the existing
-    // maximized geometry after the host layout settles. This is guest-scene
-    // geometry only; app-switcher and PiP code are deliberately untouched.
-    if(LCIsTikTokParallelGuest(vc.bundleId)) {
-        for(NSNumber *delay in @[@0.0, @0.08, @0.20, @0.45]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                           (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                if(self.isMaximized && self.appSceneVC == vc && vc.presenter.scene) {
-                    [self applyMaximizedLayout];
-                }
-            });
-        }
-    }
-
+    // No app-specific resize pass here. The generic maximized pipeline now
+    // reserves the Parallel control strip before scene creation, so apps that
+    // commit their viewport on the first frame and apps that support live
+    // resizing both start from the same geometry.
+    //
     // The guest's scene is on screen now and it is drawing into it. Give that
     // first frame a moment to land, then let go of the launch screen this window
     // opened with. This is the cue that fires for every guest; the settings
@@ -824,16 +835,11 @@ static BOOL LCIsTikTokParallelGuest(NSString *bundleIdentifier) {
 /// switcher bar and the orientation as they are now, and gets it to the guest.
 ///
 /// Safe to call before the guest's scene exists, which is most of a window's
-/// opening. A window is built, framed and told the bar has arrived long before
-/// its guest has started, and pushing settings into a scene that is not there yet
-/// is a silent no-op — which is how a freshly opened app came up laid out for the
-/// screen the window was given at construction, from before the bar had been laid
-/// out and so had no strip to reserve. It drew underneath the bar until something
-/// later pushed settings of its own and put the frame right; toggling the bar was
-/// that something, which is why it looked like a repair. With no scene yet the
-/// same answer is written into the settings the scene will be created from, so
-/// the guest is laid out for the window it is really going into from its first
-/// frame.
+/// opening. Before the switcher bar has a physical rectangle to measure, the
+/// reservation helper predicts the same edge and thickness the dock is about to
+/// place. That final maximized geometry is therefore written into the settings
+/// the scene will be created from, so even a guest that never live-resizes starts
+/// at the correct Parallel viewport on its first frame.
 - (void)applyMaximizedLayout {
     if(!_isMaximized) return;
     FBScene *scene = self.appSceneVC.presenter.scene;
@@ -903,7 +909,7 @@ static BOOL LCIsTikTokParallelGuest(NSString *bundleIdentifier) {
             safeAreaInsets.left = 0;
             safeAreaInsets.right = 0;
         }
-        UIEdgeInsets barInsets = MultitaskDockManager.shared.barReservedInsets;
+        UIEdgeInsets barInsets = LCParallelBarReservedInsets(self.view, settings);
         safeAreaInsets.top    = MAX(safeAreaInsets.top    - barInsets.top,    0);
         safeAreaInsets.left   = MAX(safeAreaInsets.left   - barInsets.left,   0);
         safeAreaInsets.bottom = MAX(safeAreaInsets.bottom - barInsets.bottom, 0);
@@ -975,7 +981,7 @@ static BOOL LCIsTikTokParallelGuest(NSString *bundleIdentifier) {
     // this correctly once the layout and the device are not turned the same way;
     // the interface orientation used to be asked instead, and it names an edge the
     // bar may not be on. Zero insets when no bar is up.
-    UIEdgeInsets barInsets = MultitaskDockManager.shared.barReservedInsets;
+    UIEdgeInsets barInsets = LCParallelBarReservedInsets(self.view, settings);
     maxFrame = UIEdgeInsetsInsetRect(maxFrame, barInsets);
 
     // Held off the sensor housing, but only on the side it is really on.
