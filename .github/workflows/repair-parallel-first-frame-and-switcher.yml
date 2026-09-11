@@ -22,152 +22,19 @@ jobs:
       - name: Repair first-frame guest geometry
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('MultitaskSupport/DecoratedAppSceneViewController.m')
-          s = p.read_text()
-
-          helper = r'''
-/// Window geometry source for a guest before its decorated view itself has been
-/// attached to a UIWindow. Run Parallel creates/presents the guest scene during
-/// that interval, so `self.view.window == nil` is not a reason to skip the first
-/// frame: apps such as TikTok can commit that incorrect full-height viewport and
-/// ignore the later resize. The multitask host is already attached to the real
-/// app window at that point, so use it as the authoritative fallback.
-static UIWindow *LCGeometryWindow(UIView *view) {
-    UIWindow *window = view.window;
-    if(!window) {
-        window = MultitaskDockManager.shared.windowHostingView.window;
-    }
-    if(!window) {
-        for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-            if(![scene isKindOfClass:UIWindowScene.class]) continue;
-            for(UIWindow *candidate in ((UIWindowScene *)scene).windows) {
-                if(candidate.isKeyWindow) {
-                    window = candidate;
-                    break;
-                }
-            }
-            if(window) break;
-        }
-    }
-    return window;
-}
-
-'''
-          anchor = 'static UIInterfaceOrientation LCWindowOrientation(UIView *view, UIMutableApplicationSceneSettings *settings) {'
-          if 'static UIWindow *LCGeometryWindow(UIView *view)' not in s:
-              idx = s.find(anchor)
-              if idx < 0:
-                  raise SystemExit('LCWindowOrientation anchor missing')
-              s = s[:idx] + helper + s[idx:]
-
-          old = '    CGSize size = view.window.bounds.size;\n'
-          new = '    UIWindow *window = LCGeometryWindow(view);\n    CGSize size = window ? window.bounds.size : CGSizeZero;\n'
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif new not in s:
-              raise SystemExit('LCWindowOrientation window-size anchor missing')
-
-          old = '    if(!self.view.window) return;\n'
-          new = '    if(!LCGeometryWindow(self.view)) return;\n'
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif new not in s:
-              raise SystemExit('applyMaximizedGeometry window guard anchor missing')
-
-          safe_start = s.find('- (UIEdgeInsets)updateMaximizedSafeAreaWithSettings:')
-          safe_end = s.find('- (void)updateMaximizedFrameWithSettings:', safe_start)
-          if safe_start < 0 or safe_end < 0:
-              raise SystemExit('maximized safe-area method scope missing')
-          safe = s[safe_start:safe_end]
-          old = '    UIEdgeInsets safeAreaInsets = self.view.window.safeAreaInsets;\n'
-          new = '    UIWindow *geometryWindow = LCGeometryWindow(self.view);\n    if(!geometryWindow) return UIEdgeInsetsZero;\n    UIEdgeInsets safeAreaInsets = geometryWindow.safeAreaInsets;\n'
-          if old in safe:
-              safe = safe.replace(old, new, 1)
-          elif new not in safe:
-              raise SystemExit('safe-area window anchor missing')
-          safe = safe.replace('    CGSize windowSize = self.view.window.bounds.size;\n',
-                              '    CGSize windowSize = geometryWindow.bounds.size;\n', 1)
-          s = s[:safe_start] + safe + s[safe_end:]
-
-          frame_start = s.find('- (void)updateMaximizedFrameWithSettings:')
-          frame_end = s.find('- (void)setWindowFrame:', frame_start)
-          if frame_start < 0 or frame_end < 0:
-              raise SystemExit('maximized frame method scope missing')
-          frame = s[frame_start:frame_end]
-          old = '    CGRect maxFrame = UIEdgeInsetsInsetRect(self.view.window.bounds, [self updateMaximizedSafeAreaWithSettings:settings]);\n'
-          new = '    UIWindow *geometryWindow = LCGeometryWindow(self.view);\n    if(!geometryWindow) return;\n    CGRect maxFrame = UIEdgeInsetsInsetRect(geometryWindow.bounds, [self updateMaximizedSafeAreaWithSettings:settings]);\n'
-          if old in frame:
-              frame = frame.replace(old, new, 1)
-          elif new not in frame:
-              raise SystemExit('maximized frame bounds anchor missing')
-          frame = frame.replace('    CGSize windowSize = self.view.window.bounds.size;\n',
-                                '    CGSize windowSize = geometryWindow.bounds.size;\n', 1)
-          frame = frame.replace('            CGFloat housing = self.view.window.safeAreaInsets.left;\n',
-                                '            CGFloat housing = geometryWindow.safeAreaInsets.left;\n', 1)
-          s = s[:frame_start] + frame + s[frame_end:]
-
-          for required in [
-              'static UIWindow *LCGeometryWindow(UIView *view)',
-              'UIWindow *window = LCGeometryWindow(view);',
-              'if(!LCGeometryWindow(self.view)) return;',
-              'UIWindow *geometryWindow = LCGeometryWindow(self.view);',
-          ]:
-              if required not in s:
-                  raise SystemExit(f'missing first-frame geometry marker: {required}')
-
-          p.write_text(s)
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnAgPSBQYXRoKCJNdWx0aXRhc2tTdXBwb3J0L0RlY29yYXRlZEFwcFNjZW5lVmlld0NvbnRyb2xsZXIubSIpCnMgPSBwLnJlYWRfdGV4dCgpCgpoZWxwZXIgPSByJycnLy8vIFdpbmRvdyBnZW9tZXRyeSBzb3VyY2UgZm9yIGEgZ3Vlc3QgYmVmb3JlIGl0cyBkZWNvcmF0ZWQgdmlldyBpdHNlbGYgaGFzIGJlZW4KLy8vIGF0dGFjaGVkIHRvIGEgVUlXaW5kb3cuIFJ1biBQYXJhbGxlbCBjcmVhdGVzL3ByZXNlbnRzIHRoZSBndWVzdCBzY2VuZSBkdXJpbmcKLy8vIHRoYXQgaW50ZXJ2YWwsIHNvIGBzZWxmLnZpZXcud2luZG93ID09IG5pbGAgaXMgbm90IGEgcmVhc29uIHRvIHNraXAgdGhlIGZpcnN0Ci8vLyBmcmFtZTogYXBwcyBzdWNoIGFzIFRpa1RvayBjYW4gY29tbWl0IHRoYXQgaW5jb3JyZWN0IGZ1bGwtaGVpZ2h0IHZpZXdwb3J0IGFuZAovLy8gaWdub3JlIHRoZSBsYXRlciByZXNpemUuIFRoZSBtdWx0aXRhc2sgaG9zdCBpcyBhbHJlYWR5IGF0dGFjaGVkIHRvIHRoZSByZWFsCi8vLyBhcHAgd2luZG93IGF0IHRoYXQgcG9pbnQsIHNvIHVzZSBpdCBhcyB0aGUgYXV0aG9yaXRhdGl2ZSBmYWxsYmFjay4Kc3RhdGljIFVJV2luZG93ICpMQ0dlb21ldHJ5V2luZG93KFVJVmlldyAqdmlldykgewogICAgVUlXaW5kb3cgKndpbmRvdyA9IHZpZXcud2luZG93OwogICAgaWYgKCF3aW5kb3cpIHsKICAgICAgICB3aW5kb3cgPSBNdWx0aXRhc2tEb2NrTWFuYWdlci5zaGFyZWQud2luZG93SG9zdGluZ1ZpZXcud2luZG93OwogICAgfQogICAgaWYoIXdpbmRvdykgewogICAgICAgIGZvcihVSVNjZW5lICpzY2VuZSBpbiBVSUFwcGxpY2F0aW9uLnNoYXJlZEFwcGxpY2F0aW9uLmNvbm5lY3RlZFNjZW5lcykgewogICAgICAgICAgICBpZighW3NjZW5lIGlzS2luZE9mQ2xhc3M6VUlXaW5kb3dTY2VuZS5jbGFzc10pIGNvbnRpbnVlOwogICAgICAgICAgICBmb3IoVUlXaW5kb3cgKmNhbmRpZGF0ZSBpbiAoKFVJV2luZG93U2NlbmUgKilzY2VuZSkud2luZG93cykgewogICAgICAgICAgICAgICAgaWYoY2FuZGlkYXRlLmlzS2V5V2luZG93KSB7CiAgICAgICAgICAgICAgICAgICAgd2luZG93ID0gY2FuZGlkYXRlOwogICAgICAgICAgICAgICAgICAgIGJyZWFrOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICB9CiAgICAgICAgICAgIGlmKHdpbmRvdykgYnJlYWs7CiAgICAgICAgfQogICAgfQogICAgcmV0dXJuIHdpbmRvdzsKfQoKJycnCmFuY2hvciA9ICdzdGF0aWMgVUlJbnRlcmZhY2VPcmllbnRhdGlvbiBMQ1dpbmRvd09yaWVudGF0aW9uKFVJVmlldyAqdmlldyw...REDACTED...==' | base64 -d | python3
           git diff --check
 
-      - name: Restore exact main app-switcher gesture path
+      - name: Restore exact main app-switcher gesture path and CI invariant
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('Tools/patch_free_sidestore_support.py')
-          s = p.read_text()
-          old = '''gesture_bridge = Path("Tools/patch_guest_gesture_bridge.py")
-          if gesture_bridge.exists():
-              exec(compile(gesture_bridge.read_text(), str(gesture_bridge), "exec"), {})
-          '''
-          new = '''# Keep the exact main/pre-PiP bottom-swipe implementation. The temporary
-          # persistent swipe rewrite replaced that path and is the app-switcher regression.
-          # The file stays in the branch for history, but signer-compatible builds must
-          # not execute it.
-          gesture_bridge = Path("Tools/patch_guest_gesture_bridge.py")
-          if gesture_bridge.exists():
-              print("Skipping obsolete persistent switcher-swipe rewrite; preserving main gesture path.")
-          '''
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif 'Skipping obsolete persistent switcher-swipe rewrite' not in s:
-              raise SystemExit('gesture bridge execution anchor missing')
-          p.write_text(s)
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnAgPSBQYXRoKCJUb29scy9wYXRjaF9mcmVlX3NpZGVzdG9yZV9zdXBwb3J0LnB5IikKcyA9IHAucmVhZF90ZXh0KCkKb2xkID0gJycnZ2VzdHVyZV9icmlkZ2UgPSBQYXRoKCJUb29scy9wYXRjaF9ndWVzdF9nZXN0dXJlX2JyaWRnZS5weSIpCmlmIGdlc3R1cmVfYnJpZGdlLmV4aXN0cygpOgogICAgZXhlYyhjb21waWxlKGdlc3R1cmVfYnJpZGdlLnJlYWRfdGV4dCgpLCBzdHIoZ2VzdHVyZV9icmlkZ2UpLCAiZXhlYyIpLCB7fSkKJycnCm5ldyA9ICcnJyMgUHJlc2VydmUgdGhlIGV4YWN0IG1haW4vcHJlLVBpUCBib3R0b20tc3dpcGUgaW1wbGVtZW50YXRpb24uIFRoZSB0ZW1wb3JhcnkKIyBwZXJzaXN0ZW50IHN3aXBlIHJld3JpdGUgcmVwbGFjZWQgdGhhdCBwYXRoIGFuZCBpcyB0aGUgYXBwLXN3aXRjaGVyIHJlZ3Jlc3Npb24uCiMgS2VlcCB0aGUgaGlzdG9yaWNhbCBwYXRjaCBmaWxlIGluIHRoZSBicmFuY2gsIGJ1dCBkbyBub3QgY29tcGlsZSBpdC4KZ2VzdHVyZV9icmlkZ2UgPSBQYXRoKCJUb29scy9wYXRjaF9ndWVzdF9nZXN0dXJlX2JyaWRnZS5weSIpCmlmIGdlc3R1cmVfYnJpZGdlLmV4aXN0cygpOgogICAgcHJpbnQoIlNraXBwaW5nIG9ic29sZXRlIHBlcnNpc3RlbnQgc3dpdGNoZXItc3dpcGUgcmV3cml0ZTsgcHJlc2VydmluZyBtYWluIGdlc3R1cmUgcGF0aC4iKQonJycKaWYgb2xkIGluIHM6CiAgICBzID0gcy5yZXBsYWNlKG9sZCwgbmV3LCAxKQplbGlmICdTa2lwcGluZyBvYnNvbGV0ZSBwZXJzaXN0ZW50IHN3aXRjaGVyLXN3aXBlIHJld3JpdGUnIG5vdCBpbiBzOgogICAgcmFpc2UgU3lzdGVtRXhpdCgnZ2VzdHVyZSBicmlkZ2UgZXhlY3V0aW9uIGFuY2hvciBtaXNzaW5nJykKcC53cml0ZV90ZXh0KHMpCgpwID0gUGF0aCgiLmdpdGh1Yi93b3JrZmxvd3MvYnVpbGQtdW5zaWduZWQtaXBhLnltbCIpCnMgPSBwLnJlYWRfdGV4dCgpCmFuY2hvciA9ICIgICAgICAgICAgeGNydW4gc3dpZnRjIC1mcm9udGVuZCAtcGFyc2UgTXVsdGl0YXNrU3VwcG9ydC9NdWx0aXRhc2tEb2NrVmlldy5zd2lmdFxuIgppbnNlcnQgPSBhbmNob3IgKyAoCiAgICAiICAgICAgICAgIGdyZXAgLXEgJ3ByaXZhdGUgZnVuYyBpbnN0YWxsU3dpcGVab25lJyBNdWx0aXRhc2tTdXBwb3J0L011bHRpdGFza0RvY2tWaWV3LnN3aWZ0XG4iCiAgICAiICAgICAgICAgIGdyZXAgLXEgJ3NlbGY/LnNob3dBcHBTd2l0Y2hlcigpJyBNdWx0aXRhc2tTdXBwb3J0L011bHRpdGFza0RvY2tWaWV3LnN3aWZ0XG4iCiAgICAiICAgICAgICAgIGlmIGdyZXAgLXEgJ0xDUGVyc2lzdGVudFN3aXRjaGVyU3dpcGVJbnZhcmlhbnQnIE11bHRpdGFza1N1cHBvcnQvTXVsdGl0YXNrRG9ja1ZpZXcuc3dpZnQ7IHRoZW4gZWNobyAnT2Jzb2xldGUgcGVyc2lzdGVudCBzd2lwZSByZXdyaXRlIGNvbXBpbGVkJzsgZXhpdCAxOyBmaVxuIikKaWYgIk9ic29sZXRlIHBlcnNpc3RlbnQgc3dpcGUgcmV3cml0ZSBjb21waWxlZCIgbm90IGluIHM6CiAgICBpZiBhbmNob3Igbm90IGluIHM6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgncGFyc2UtYm91bmRhcnkgYW5jaG9yIG1pc3NpbmcnKQogICAgcyA9IHMucmVwbGFjZShhbmNob3IsIGluc2VydCwgMSkKcC53cml0ZV90ZXh0KHMpCg==' | base64 -d | python3
           git diff --check
-
-      - name: Harden signer build switcher invariant
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('.github/workflows/build-unsigned-ipa.yml')
-          s = p.read_text()
-          anchor = "          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift\n"
-          insert = anchor + "          grep -q 'private func installSwipeZone' MultitaskSupport/MultitaskDockView.swift\n          grep -q 'self?.showAppSwitcher()' MultitaskSupport/MultitaskDockView.swift\n          if grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift; then echo 'Obsolete persistent swipe rewrite compiled'; exit 1; fi\n"
-          if "Obsolete persistent swipe rewrite compiled" not in s:
-              if anchor not in s:
-                  raise SystemExit('parse-boundary anchor missing')
-              s = s.replace(anchor, insert, 1)
-          p.write_text(s)
-          PY
 
       - name: Commit repair and trigger signer build
         shell: bash
         run: |
-          printf 'trigger: 2026-09-11T04:58:00Z\nreason: true first-frame geometry plus restored main switcher gesture path\n' > .github/trigger-unsigned-ipa
+          printf 'trigger: 2026-09-11T05:02:00Z\nreason: true first-frame geometry plus restored main switcher gesture path\n' > .github/trigger-unsigned-ipa
           rm .github/workflows/repair-parallel-first-frame-and-switcher.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
