@@ -73,8 +73,11 @@ experiment = Path("Tools/patch_multitask_jit_diagnosis.py")
 if experiment.exists():
     exec(compile(experiment.read_text(), str(experiment), "exec"), {})
 
+# Preserve the exact main/pre-PiP bottom-swipe implementation. The temporary
+# persistent swipe rewrite replaced that path and is the app-switcher regression.
+# Keep the historical patch file in the branch, but do not compile it.
 gesture_bridge = Path("Tools/patch_guest_gesture_bridge.py")
 if gesture_bridge.exists():
-    exec(compile(gesture_bridge.read_text(), str(gesture_bridge), "exec"), {})
+    print("Skipping obsolete persistent switcher-swipe rewrite; preserving main gesture path.")
 
 print("Applied signer-compatible SideStore integration and removed the false development-certificate launch alert")

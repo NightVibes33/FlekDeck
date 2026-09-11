@@ -149,9 +149,36 @@ static NSInteger LCGuestSelfRotationSteps(UIMutableApplicationSceneSettings *set
 /// the window wins, and the device says which of the two landscape directions it
 /// is. Device and interface landscape names are mirror images; see
 /// `restoreOrientationAfterSwitcher`.
+/// Window geometry source for a guest before its decorated view itself has been
+/// attached to a UIWindow. Run Parallel creates/presents the guest scene during
+/// that interval, so `self.view.window == nil` is not a reason to skip the first
+/// frame: apps such as TikTok can commit that incorrect full-height viewport and
+/// ignore the later resize. The multitask host is already attached to the real
+/// app window at that point, so use it as the authoritative fallback.
+static UIWindow *LCGeometryWindow(UIView *view) {
+    UIWindow *window = view.window;
+    if(!window) {
+        window = MultitaskDockManager.shared.windowHostingView.window;
+    }
+    if(!window) {
+        for(UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if(![scene isKindOfClass:UIWindowScene.class]) continue;
+            for(UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+                if(candidate.isKeyWindow) {
+                    window = candidate;
+                    break;
+                }
+            }
+            if(window) break;
+        }
+    }
+    return window;
+}
+
 static UIInterfaceOrientation LCWindowOrientation(UIView *view, UIMutableApplicationSceneSettings *settings) {
     UIInterfaceOrientation reported = LCGuestSceneOrientation(settings);
-    CGSize size = view.window.bounds.size;
+    UIWindow *window = LCGeometryWindow(view);
+    CGSize size = window ? window.bounds.size : CGSizeZero;
     if(size.width <= 0 || size.height <= 0) return reported;
 
     BOOL windowIsLandscape = size.width > size.height;
@@ -861,7 +888,7 @@ static UIEdgeInsets LCParallelBarReservedInsets(UIView *view, UIMutableApplicati
     // nothing to derive while it is not on one. A closed window's controller
     // outlives the view being taken out of the hierarchy, and answering that with
     // zeroes would collapse it rather than leave it be.
-    if(!self.view.window) return;
+    if(!LCGeometryWindow(self.view)) return;
     // HARD LOCK: no geometry is re-derived while the phone is flat.
     //
     // Freezing the orientation alone was not enough, and the reason is that the
@@ -879,7 +906,9 @@ static UIEdgeInsets LCParallelBarReservedInsets(UIView *view, UIMutableApplicati
 
 - (UIEdgeInsets)updateMaximizedSafeAreaWithSettings:(UIMutableApplicationSceneSettings *)settings {
     BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
-    UIEdgeInsets safeAreaInsets = self.view.window.safeAreaInsets;
+    UIWindow *geometryWindow = LCGeometryWindow(self.view);
+    if(!geometryWindow) return UIEdgeInsetsZero;
+    UIEdgeInsets safeAreaInsets = geometryWindow.safeAreaInsets;
     if(self.navigationBar.hidden) {
         // Whatever the bar already covers is not the guest's to keep clear a second
         // time — but the edge it covers is not always the bottom. It is the viewer's
@@ -903,7 +932,7 @@ static UIEdgeInsets LCParallelBarReservedInsets(UIView *view, UIMutableApplicati
         // a sideways phone had its housing clearance taken away and drew under the
         // island. The window's shape cannot be wrong about the window, and it is
         // already what the long edges below are asked of, two lines apart.
-        CGSize windowSize = self.view.window.bounds.size;
+        CGSize windowSize = geometryWindow.bounds.size;
         if(windowSize.width > windowSize.height) {
             safeAreaInsets.top = 0;
             safeAreaInsets.left = 0;
@@ -974,7 +1003,9 @@ static UIEdgeInsets LCParallelBarReservedInsets(UIView *view, UIMutableApplicati
     // a rectangle inside the window. The two agree exactly while the window is full
     // screen, which on a phone it always is — and disagree by the window's origin
     // when it is not, placing the guest off by that much.
-    CGRect maxFrame = UIEdgeInsetsInsetRect(self.view.window.bounds, [self updateMaximizedSafeAreaWithSettings:settings]);
+    UIWindow *geometryWindow = LCGeometryWindow(self.view);
+    if(!geometryWindow) return;
+    CGRect maxFrame = UIEdgeInsetsInsetRect(geometryWindow.bounds, [self updateMaximizedSafeAreaWithSettings:settings]);
     // Reserve exactly the bar's strip thickness so the app sits flush with it — no
     // background gap showing through. The dock reports the strip as insets on the
     // edge the bar is actually drawn along, which is the only thing that answers
@@ -997,11 +1028,11 @@ static UIEdgeInsets LCParallelBarReservedInsets(UIView *view, UIMutableApplicati
     // with the bar, whose strip is already reserved and already covers it, so
     // nothing is held back there — a second reservation would only be a margin the
     // app is pushed in by for no reason.
-    CGSize windowSize = self.view.window.bounds.size;
+    CGSize windowSize = geometryWindow.bounds.size;
     if(windowSize.width > windowSize.height) {
         UIInterfaceOrientation windowOrientation = LCWindowOrientation(self.view, settings);
         if(windowOrientation == UIInterfaceOrientationLandscapeRight && barInsets.left <= 0) {
-            CGFloat housing = self.view.window.safeAreaInsets.left;
+            CGFloat housing = geometryWindow.safeAreaInsets.left;
             maxFrame = UIEdgeInsetsInsetRect(maxFrame, UIEdgeInsetsMake(0, housing, 0, 0));
         }
     }

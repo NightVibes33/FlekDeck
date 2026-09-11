@@ -1,2 +1,2 @@
-trigger: 2026-09-11T03:57:00Z
-reason: rebuild generic Parallel first-frame geometry after scoping bookmark patch to guest initializer
+trigger: 2026-09-11T05:08:00Z
+reason: true first-frame geometry plus restored main switcher gesture path
