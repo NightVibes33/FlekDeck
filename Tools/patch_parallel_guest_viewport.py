@@ -2,9 +2,9 @@
 """Keep LiveProcess guests from seeing the physical screen as their hosted viewport.
 
 The signer-compatible workflow intentionally restores VibeContainers' TweakLoader
-sources before building, so this patch is applied after that copy.  It is generic:
+sources before building, so this patch is applied after that copy. It is generic:
 all LiveProcess guests get the bounds of their actual hosted UIWindow when it is
-smaller/different from UIScreen.mainScreen.bounds; normal in-process launches and
+different from UIScreen.mainScreen.bounds; normal in-process launches and
 full-screen-equivalent guests keep UIKit's original answer.
 """
 from pathlib import Path
@@ -24,14 +24,14 @@ if insert_anchor not in source:
 bridge = r'''// LCParallelGuestViewportBridge
 //
 // A LiveProcess guest is not the physical display: its UIWindowScene is hosted in
-// FlekDeck's Parallel rectangle.  UIKit gives the remote scene the right frame,
-// but UIScreen.mainScreen.bounds still describes the iPhone itself.  Apps that
+// FlekDeck's Parallel rectangle. UIKit gives the remote scene the right frame,
+// but UIScreen.mainScreen.bounds still describes the iPhone itself. Apps that
 // later derive a page/feed viewport from UIScreen can therefore replace a correct
 // first layout with a physical-screen-sized one and get clipped by the host.
 //
-// Use an actual guest UIWindow as the source of truth.  We deliberately do not
+// Use an actual guest UIWindow as the source of truth. We deliberately do not
 // invent a size before a window exists, and we leave full-screen-equivalent
-// windows alone.  That keeps bootstrap behaviour identical and makes this a
+// windows alone. That keeps bootstrap behaviour identical and makes this a
 // generic hosted-scene invariant rather than an app-specific workaround.
 static CGRect LCParallelHostedViewportBounds(CGRect physicalBounds) {
     if(!NSUserDefaults.isLiveProcess) return CGRectNull;
@@ -52,12 +52,12 @@ static CGRect LCParallelHostedViewportBounds(CGRect physicalBounds) {
             if(size.width <= 1 || size.height <= 1) continue;
 
             // The key window is the app's active viewport and is the strongest
-            // answer.  If UIKit has not chosen one yet, retain the largest valid
+            // answer. If UIKit has not chosen one yet, retain the largest valid
             // window; transient panels/alerts cannot then shrink the screen.
             if(window.isKeyWindow) {
                 CGRect hosted = CGRectMake(0, 0, size.width, size.height);
-                if(fabs(hosted.size.width - physicalBounds.size.width) > 0.5 ||
-                   fabs(hosted.size.height - physicalBounds.size.height) > 0.5) {
+                if(ABS(hosted.size.width - physicalBounds.size.width) > 0.5 ||
+                   ABS(hosted.size.height - physicalBounds.size.height) > 0.5) {
                     return hosted;
                 }
                 return CGRectNull;
@@ -72,8 +72,8 @@ static CGRect LCParallelHostedViewportBounds(CGRect physicalBounds) {
     }
 
     if(bestArea <= 0) return CGRectNull;
-    if(fabs(bestSize.width - physicalBounds.size.width) <= 0.5 &&
-       fabs(bestSize.height - physicalBounds.size.height) <= 0.5) {
+    if(ABS(bestSize.width - physicalBounds.size.width) <= 0.5 &&
+       ABS(bestSize.height - physicalBounds.size.height) <= 0.5) {
         return CGRectNull;
     }
     return CGRectMake(0, 0, bestSize.width, bestSize.height);
