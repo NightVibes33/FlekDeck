@@ -1,0 +1,103 @@
+name: Restore PiP patches to signer build
+
+on:
+  push:
+    branches:
+      - experiment/parallel-guest-layout-safearea
+    paths:
+      - '.github/workflows/restore-pip-signer-build.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/parallel-guest-layout-safearea
+          fetch-depth: 0
+
+      - name: Restore PiP compatibility stack to signer build
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('.github/workflows/build-unsigned-ipa.yml')
+          s = p.read_text()
+
+          old_apply = '''          python3 Tools/patch_vibecontainers_shell_compat.py
+          python3 Tools/patch_vibecontainers_project_compat.py
+          python3 Tools/patch_free_sidestore_support.py
+'''
+          new_apply = '''          python3 Tools/patch_vibecontainers_shell_compat.py
+          python3 Tools/patch_vibecontainers_project_compat.py
+          python3 Tools/patch_free_sidestore_support.py
+          # Restore the exact PiP compatibility stack used by the working direct
+          # multitask build. The signer workflow copies Vibe's LCBootstrap.m over
+          # FlekDeck's source before building, so these patches must be re-applied
+          # after that copy or native media/YouTube PiP silently disappears.
+          python3 Tools/patch_guest_native_pip_bridge.py
+          python3 Tools/patch_youtube_native_pip_render.py
+          python3 Tools/patch_pip_state_separation.py
+'''
+          if old_apply not in s:
+              if 'python3 Tools/patch_guest_native_pip_bridge.py' not in s:
+                  raise SystemExit('compatibility-layer anchor missing')
+          else:
+              s = s.replace(old_apply, new_apply, 1)
+
+          old_verify = '''          grep -q 'bookmarkDataWithOptions' MultitaskSupport/AppSceneViewController.m
+'''
+          new_verify = '''          grep -q 'bookmarkDataWithOptions' MultitaskSupport/AppSceneViewController.m
+          # PiP must survive the Vibe-core copy in this signer-compatible build.
+          grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
+          grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
+          grep -q 'LCYouTubePiPRefreshSource' LiveContainer/LCBootstrap.m
+          grep -q 'newContentSource' LiveContainer/LCBootstrap.m
+          grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m
+          grep -q 'LCNativePiPDoesNotOwnWindowLifecycle' MultitaskSupport/PiPManager.m
+          grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
+'''
+          if old_verify not in s:
+              if "grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m" not in s:
+                  raise SystemExit('verification anchor missing')
+          else:
+              s = s.replace(old_verify, new_verify, 1)
+
+          # Guard the user's now-correct app switcher: this repair is build-pipeline
+          # only and must not compile the obsolete persistent swipe rewrite.
+          verify_anchor = "          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift\n"
+          switcher_guard = '''          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
+          if grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift; then
+            echo 'Refusing to build obsolete switcher swipe rewrite'
+            exit 1
+          fi
+          if grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift; then
+            echo 'Refusing to build obsolete switcher lower-window bridge'
+            exit 1
+          fi
+'''
+          if switcher_guard not in s:
+              if verify_anchor not in s:
+                  raise SystemExit('switcher parse anchor missing')
+              s = s.replace(verify_anchor, switcher_guard, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+
+      - name: Commit repair and trigger signer IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'trigger: 2026-09-11T06:00:00Z\nreason: restore native and YouTube PiP patch stack in signer build\n' > .github/trigger-unsigned-ipa
+          git rm .github/workflows/restore-pip-signer-build.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/build-unsigned-ipa.yml .github/trigger-unsigned-ipa
+          git commit -m 'Restore PiP stack in signer-compatible build'
+          git push origin HEAD:experiment/parallel-guest-layout-safearea
