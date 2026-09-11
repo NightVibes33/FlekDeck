@@ -1,43 +1,65 @@
 #!/usr/bin/env python3
-"""Replace the TikTok 46.x post-layout experiment with a bar-only visual correction.
+"""Install the TikTok 46.x Parallel fix without resizing TikTok content.
 
-The previous experiment moved TikTok's tab bar *and* injected a bottom
-additionalSafeAreaInset into the selected child. On TikTok 46.2 that causes the
-feed/video container to recompute against a shorter content area, which is what
-produced the large black top/bottom bands seen on-device.
-
-This patch deliberately does less:
-  * never changes TTKTabBarController/root bounds or frame,
-  * never changes any child safe-area inset,
-  * never resizes the hosted scene,
-  * never uses a fixed point offset,
-  * only translates TikTok's currently visible native TTK tab-bar view so its
-    visual bottom matches the host-provided Parallel viewport bottom.
-
-The correction is derived from live geometry every layout pass. Because it is a
-view transform, TikTok's Auto Layout/feed sizing does not receive a new content
-rectangle and therefore cannot letterbox the video in response.
+TikTok 46.2/BHTikTokPlus uses TTKTabBarController + TTKTabBar/TTKFakeTabBar.
+The feed/root hierarchy is left completely alone. We only translate TikTok's
+currently-visible native tab bar so its visual bottom equals FlekDeck's seeded
+Parallel viewport bottom. The delta is measured live; there is no 20pt or other
+fixed nudge, no additionalSafeAreaInsets, and no root/frame resize.
 """
 from pathlib import Path
-import re
 
 path = Path("TweakLoader/UIKit+GuestHooks.m")
 source = path.read_text()
 
+if "LCParallelGuestViewportBridge" not in source or "LCInstallInstanceOverride" not in source:
+    raise SystemExit("base Parallel viewport patch must run before TikTok 46.x patch")
+
 if "LCTikTok462TabHierarchyCompat" not in source:
-    raise SystemExit("TikTok 46.x compatibility block is missing")
+    install_anchor = "static void LCInstallTikTokParallelLayoutCompat(void) {\n"
+    if install_anchor not in source:
+        raise SystemExit("base TikTok compat installer anchor missing")
 
-start = "static void LCTikTok462ApplyHostedInsetsContract(id object) {"
-end = "static void LCTikTok462ScheduleLayoutContract(id object) {"
-if start not in source or end not in source:
-    raise SystemExit("TikTok hosted-insets function anchors are missing")
+    block = r'''// LCTikTok462TabHierarchyCompat
+// LCTikTokParallelBottomNudge -- legacy workflow marker only; NO fixed nudge exists.
+// LCTikTok462BarOverlayOnly
+// TikTok 46.2's feed/root geometry is never mutated here. Only TikTok's own native
+// visible tab bar receives a presentation transform derived from live geometry.
+static IMP LCTikTok462OriginalControllerDidLayout = NULL;
+static const void *LCTikTok462LayoutLogKey = &LCTikTok462LayoutLogKey;
+static const void *LCTikTok462LayoutPendingKey = &LCTikTok462LayoutPendingKey;
 
-replacement = r'''// LCTikTok462BarOverlayOnly
-// Keep TikTok's feed/root hierarchy exactly as it laid itself out. The only
-// compatibility operation here is a visual translation of TikTok's *own*
-// currently-visible native tab bar. No safe-area, root-bounds, frame-size or
-// fixed-point correction is applied.
-static void LCTikTok462ApplyHostedInsetsContract(id object) {
+static UIView *LCTikTok462ViewReturnedBySelector(id object, NSString *selectorName) {
+    SEL selector = NSSelectorFromString(selectorName);
+    if(!object || ![object respondsToSelector:selector]) return nil;
+    IMP implementation = [object methodForSelector:selector];
+    if(!implementation) return nil;
+    id (*getter)(id, SEL) = (void *)implementation;
+    id value = getter(object, selector);
+    return [value isKindOfClass:UIView.class] ? value : nil;
+}
+
+static UIView *LCTikTok462VisibleTabBar(UITabBarController *controller) {
+    UIWindow *window = controller.view.window;
+    if(!window) return nil;
+
+    for(NSString *selectorName in @[@"visualTabBar", @"mainTabBar", @"fakeTabBar"]) {
+        UIView *candidate = LCTikTok462ViewReturnedBySelector(controller, selectorName);
+        if(candidate && candidate.window == window && !candidate.hidden &&
+           candidate.alpha > 0.01 && candidate.bounds.size.height > 1.0) {
+            return candidate;
+        }
+    }
+
+    UIView *standard = controller.tabBar;
+    if(standard && standard.window == window && !standard.hidden &&
+       standard.alpha > 0.01 && standard.bounds.size.height > 1.0) {
+        return standard;
+    }
+    return nil;
+}
+
+static void LCTikTok462ApplyBarOverlay(id object) {
     if(!LCTikTokParallelCompatEnabled() ||
        ![object isKindOfClass:UITabBarController.class]) return;
 
@@ -50,65 +72,107 @@ static void LCTikTok462ApplyHostedInsetsContract(id object) {
     if(CGRectIsNull(hostedViewport) ||
        hostedViewport.size.width <= 1.0 || hostedViewport.size.height <= 1.0) return;
 
-    UIView *visibleTabBar = LCTikTok462VisibleTabBar(controller);
-    if(!visibleTabBar || !visibleTabBar.superview) return;
+    UIView *bar = LCTikTok462VisibleTabBar(controller);
+    if(!bar || !bar.superview) return;
 
-    CGRect beforeFrame = [visibleTabBar convertRect:visibleTabBar.bounds toView:window];
-    if(CGRectIsNull(beforeFrame) || CGRectIsEmpty(beforeFrame)) return;
+    CGRect before = [bar convertRect:bar.bounds toView:window];
+    if(CGRectIsNull(before) || CGRectIsEmpty(before)) return;
 
-    CGFloat hostedBottom = CGRectGetMaxY(hostedViewport);
-    CGFloat tabBarBottom = CGRectGetMaxY(beforeFrame);
-    CGFloat windowDeltaY = hostedBottom - tabBarBottom;
-
+    CGFloat windowDeltaY = CGRectGetMaxY(hostedViewport) - CGRectGetMaxY(before);
     if(ABS(windowDeltaY) > 0.5) {
-        // Convert the required window-space correction into the tab bar's
-        // superview coordinate system, then compose it into the presentation
-        // transform. This does not mutate frame/bounds and therefore does not
-        // participate in TikTok's own layout calculations.
-        CGPoint local0 = [window convertPoint:CGPointZero toView:visibleTabBar.superview];
+        CGPoint local0 = [window convertPoint:CGPointZero toView:bar.superview];
         CGPoint local1 = [window convertPoint:CGPointMake(0.0, windowDeltaY)
-                                        toView:visibleTabBar.superview];
+                                        toView:bar.superview];
         CGFloat localDeltaY = local1.y - local0.y;
-        visibleTabBar.transform = CGAffineTransformTranslate(visibleTabBar.transform,
-                                                             0.0,
-                                                             localDeltaY);
+        bar.transform = CGAffineTransformTranslate(bar.transform, 0.0, localDeltaY);
     }
 
     if(!objc_getAssociatedObject(controller, LCTikTok462LayoutLogKey)) {
         objc_setAssociatedObject(controller, LCTikTok462LayoutLogKey, @YES,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        CGRect afterFrame = [visibleTabBar convertRect:visibleTabBar.bounds toView:window];
+        CGRect after = [bar convertRect:bar.bounds toView:window];
         NSLog(@"[FlekDeck] TikTok native bar-only Parallel correction bar=%@ before=%@ after=%@ hosted=%@ delta=%.2f",
-              NSStringFromClass(visibleTabBar.class), NSStringFromCGRect(beforeFrame),
-              NSStringFromCGRect(afterFrame), NSStringFromCGRect(hostedViewport),
+              NSStringFromClass(bar.class), NSStringFromCGRect(before),
+              NSStringFromCGRect(after), NSStringFromCGRect(hostedViewport),
               windowDeltaY);
     }
 }
 
+static void LCTikTok462ScheduleBarOverlay(id object) {
+    if(!object || objc_getAssociatedObject(object, LCTikTok462LayoutPendingKey)) return;
+    objc_setAssociatedObject(object, LCTikTok462LayoutPendingKey, @YES,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        objc_setAssociatedObject(object, LCTikTok462LayoutPendingKey, nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        LCTikTok462ApplyBarOverlay(object);
+    });
+}
+
+static void LCTikTok462ControllerDidLayout(id object, SEL selector) {
+    if(LCTikTok462OriginalControllerDidLayout) {
+        ((void (*)(id, SEL))LCTikTok462OriginalControllerDidLayout)(object, selector);
+    }
+    LCTikTok462ApplyBarOverlay(object);
+    LCTikTok462ScheduleBarOverlay(object);
+}
+
+static void LCInstallTikTok462TabHierarchyCompat(void) {
+    if(!LCTikTokParallelCompatEnabled() || LCTikTok462OriginalControllerDidLayout) return;
+    Class tabController = NSClassFromString(@"TTKTabBarController");
+    if(!tabController || ![tabController isSubclassOfClass:UITabBarController.class]) return;
+
+    LCTikTok462OriginalControllerDidLayout =
+        LCInstallInstanceOverride(tabController,
+                                  @selector(viewDidLayoutSubviews),
+                                  (IMP)LCTikTok462ControllerDidLayout);
+    if(LCTikTok462OriginalControllerDidLayout) {
+        NSLog(@"[FlekDeck] installed TikTok 46.x native bar-only Parallel correction");
+    }
+}
+
 '''
+    source = source.replace(install_anchor, block + install_anchor, 1)
 
-pattern = re.compile(
-    re.escape(start) + r".*?(?=" + re.escape(end) + r")",
-    re.S,
-)
-source, count = pattern.subn(replacement, source, count=1)
-if count != 1:
-    raise SystemExit(f"expected to replace one TikTok hosted-insets function, got {count}")
+    base_retry = r'''        LCInstallTikTokParallelLayoutCompat();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            LCInstallTikTokParallelLayoutCompat();
+        });
+'''
+    if base_retry not in source:
+        raise SystemExit("base TikTok init/retry block missing")
 
-# Rename the experiment marker so CI can prove the bad contract is no longer in
-# the compiled source rather than merely assuming a later patch won.
-source = source.replace("// LCTikTok462HostedInsetsContract\n", "")
+    current_retry = base_retry + r'''        LCInstallTikTok462TabHierarchyCompat();
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) {
+            LCInstallTikTok462TabHierarchyCompat();
+        }];
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) {
+            LCInstallTikTok462TabHierarchyCompat();
+        }];
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIWindowDidBecomeKeyNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) {
+            LCInstallTikTok462TabHierarchyCompat();
+        }];
+'''
+    source = source.replace(base_retry, current_retry, 1)
 
-if "LCTikTok462BarOverlayOnly" not in source:
-    raise SystemExit("bar-only TikTok marker was not installed")
-if "LCTikTok462HostedInsetsContract" in source:
-    raise SystemExit("obsolete TikTok hosted-insets marker survived")
-if "selected.additionalSafeAreaInsets" in source:
-    raise SystemExit("obsolete TikTok selected-child safe-area mutation survived")
-if "rootView.bounds =" in source:
-    raise SystemExit("obsolete TikTok root-bounds mutation survived")
-if "LCTikTok462VerticalPan" in source or "bounds.origin.y = 20.0" in source:
-    raise SystemExit("obsolete fixed TikTok pan survived")
+for forbidden in (
+    "LCTikTok462HostedInsetsContract",
+    "selected.additionalSafeAreaInsets",
+    "LCTikTok462VerticalPan",
+    "LCTikTok462AlignRootToHostedViewport",
+    "rootView.bounds =",
+    "bounds.origin.y = 20.0",
+):
+    if forbidden in source:
+        raise SystemExit(f"obsolete TikTok layout mutation survived: {forbidden}")
+
+for required in (
+    "LCTikTok462TabHierarchyCompat",
+    "LCTikTok462BarOverlayOnly",
+    'NSClassFromString(@"TTKTabBarController")',
+):
+    if required not in source:
+        raise SystemExit(f"missing TikTok marker: {required}")
 
 path.write_text(source)
 print("Applied TikTok 46.x native-bar-only Parallel correction; feed/root geometry untouched")
