@@ -8,6 +8,7 @@ on:
       - '.github/workflows/flekdeck-final-ondevice-audit.yml'
       - 'Tools/patch_flekdeck_runtime_guardrails.py'
       - 'Tools/patch_flekdeck_ondevice_regressions.py'
+      - 'Tools/patch_flekdeck_macho_contract.py'
 
 permissions:
   contents: write
@@ -33,7 +34,10 @@ jobs:
       - name: Apply runtime and error guardrails
         run: |
           set -euxo pipefail
-          python3 -m py_compile Tools/patch_flekdeck_runtime_guardrails.py Tools/patch_flekdeck_ondevice_regressions.py
+          python3 -m py_compile \
+            Tools/patch_flekdeck_runtime_guardrails.py \
+            Tools/patch_flekdeck_ondevice_regressions.py \
+            Tools/patch_flekdeck_macho_contract.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
@@ -42,9 +46,13 @@ jobs:
           ! sed -n '/- (void)setClassicMode:/,/- (NSUInteger)defaultClassicMode/p' LiveContainerSwiftUI/Models/LCAppInfo.m | grep -q 'defaultClassicMode]'
           grep -q 'instancesRespondToSelector:modernInit' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
           ! grep -q 'NSCAssert(springBoard' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'LCInspectMachOArchitectures' LiveContainer/LCMachOUtils.h
+          grep -q 'is32bit = !has64bitSlice && has32bitSlice' LiveContainerSwiftUI/Models/LCAppInfo.m
+          grep -q 'Runtime seed failed without blocking app discovery' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
 
       - name: Preserve non-switcher direct-build compatibility
         run: |
@@ -160,9 +168,12 @@ jobs:
             Tools/patch_flekdeck_runtime_guardrails.py \
             Tools/patch_flekdeck_runtime_stability.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
+            Tools/patch_flekdeck_macho_contract.py \
             Tools/patch_flekdeck_error_ui_parity.py \
             LiveContainer/LCSharedUtils.m \
+            LiveContainer/LCMachOUtils.h \
             LiveContainer/LCMachOUtils.m \
+            LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift \
             LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m \
             LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
             LiveContainerSwiftUI/Models/LCAppInfo.m \
