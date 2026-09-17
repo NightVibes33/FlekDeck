@@ -46,7 +46,7 @@ jobs:
           python3 Tools/normalize_flekdeck_relaunch_guard.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           python3 Tools/patch_flekdeck_sidestore_identity.py
-          test "$(grep -Fc 'return @\"com.fs.flekdeck\";' SideStoreSupport/SideStoreHooks.m)" -eq 2
+          test "$(grep -Fc 'return @"com.fs.flekdeck";' SideStoreSupport/SideStoreHooks.m)" -eq 2
           ! grep -q 'com.kdt.livecontainer' SideStoreSupport/SideStoreHooks.m
           ! grep -q 'NSUserDefaults.lcMainBundle.bundleIdentifier' SideStoreSupport/SideStoreHooks.m
           grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
