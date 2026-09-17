@@ -1,6 +1,7 @@
 name: FlekDeck Temp SideStore-Parity IPA
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: [temp/32bit-liveexec-data-folder]
@@ -130,7 +131,6 @@ jobs:
           test -n "$EXECUTABLE"
           test "$BUNDLE_ID" = "com.fs.flekdeck"
 
-          # SideStore uses this to resolve FlekDeck's shared container contract.
           /usr/libexec/PlistBuddy -c 'Delete :ALTAppGroups' "$APP/Info.plist" >/dev/null 2>&1 || true
           /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups array' "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups:0 string group.com.SideStore.SideStore' "$APP/Info.plist"
@@ -163,7 +163,6 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :ALTAppGroups:0' "$APP/Info.plist")" = "group.com.SideStore.SideStore"
           test "$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")" = "com.fs.flekdeck"
 
-          # Embedded extensions must remain in FlekDeck's namespace as well.
           while IFS= read -r PLIST; do
             ID="$(plutil -extract CFBundleIdentifier raw "$PLIST")"
             case "$ID" in
@@ -178,7 +177,6 @@ jobs:
           APP="$(find "$PWD/build/FlekDeck-SideStore-temp.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
           find "$APP" -type d -name _CodeSignature -prune -exec rm -rf {} + || true
           find "$APP" -type f -name embedded.mobileprovision -delete || true
-          # Reapply the host placeholder signature after removing stale nested signatures.
           EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$APP/Info.plist")"
           ldid -S"$PWD/build/FlekDeck-SideStore.entitlements" "$APP/$EXECUTABLE"
           rm -rf build/Payload
