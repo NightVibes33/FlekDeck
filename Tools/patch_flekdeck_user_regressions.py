@@ -38,6 +38,7 @@ drag.write_text(s)
 
 vc = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift")
 s = vc.read_text()
+s = s.replace("        longPressGesture.delegate = dragManager\n", "", 1)
 s = s.replace(
     '''        // Installed-app holds must be rejected by the drag recognizer before
         // recognition so the inner UICollectionView context menu can own them.
