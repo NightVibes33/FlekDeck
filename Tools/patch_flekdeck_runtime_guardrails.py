@@ -4,6 +4,9 @@ import runpy
 
 # Always run the primary stability hardening last.
 runpy.run_path("Tools/patch_flekdeck_runtime_stability.py", run_name="__main__")
+# TXM support used to exist only in transient parity builds. Make it part of the
+# canonical source transform so ARM32 JIT script selection is actually present.
+runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 # Then apply the on-device regression fixes that preserve real guest errors,
 # keep distribution-signing diagnostics non-modal, and repair startup discovery.
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
@@ -127,6 +130,8 @@ if "(void)[self defaultClassicMode]" in final[final.find("- (void)setClassicMode
     raise SystemExit(f"{app_info}: Compatibility Mode toggle still executes the private probe")
 if "LCInspectMachOArchitectures" not in final:
     raise SystemExit(f"{app_info}: safe ARM32 inspection contract missing")
+if "self.is32bit && LCUtils.isTXMScriptRequired" not in final:
+    raise SystemExit(f"{app_info}: ARM32 TXM automatic JIT script selection missing")
 
 shared = Path("LiveContainer/LCSharedUtils.m").read_text()
 classic_region = shared[shared.find("+ (BOOL)launchToGuestAppWithClassicMode"):shared.find("+ (BOOL)launchToGuestAppWithURL")]
