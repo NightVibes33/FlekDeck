@@ -8,6 +8,12 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 drag = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift")
 s = drag.read_text()
+method_start = s.find("    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {")
+if method_start >= 0:
+    method_end = s.find("    func handleLongPress(_ gesture: UILongPressGestureRecognizer) {", method_start)
+    if method_end < 0:
+        raise SystemExit(f"{drag}: gesture arbitration block has no handleLongPress boundary")
+    s = s[:method_start] + s[method_end:]
 s = s.replace(
     "final class LCSpringboardDragManager: NSObject, UIGestureRecognizerDelegate {",
     "final class LCSpringboardDragManager {",
