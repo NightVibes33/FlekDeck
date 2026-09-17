@@ -55,20 +55,12 @@ drag.write_text(s)
 vc = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift")
 s = vc.read_text()
 if "longPressGesture.delegate = dragManager" not in s:
-    # Comments around this setup have changed several times. Bind the delegate
-    # structurally immediately before the recognizer is added to the root view.
     anchor = "        view.addGestureRecognizer(longPressGesture)\n"
     if anchor not in s:
         raise SystemExit(f"{vc}: long-press addGestureRecognizer anchor missing")
-    s = s.replace(
-        anchor,
-        "        longPressGesture.delegate = dragManager\n" + anchor,
-        1,
-    )
+    s = s.replace(anchor, "        longPressGesture.delegate = dragManager\n" + anchor, 1)
 vc.write_text(s)
 
-# Invariants: context-menu arbitration must be present, and it must be scoped to
-# UILongPressGestureRecognizer/installed apps rather than any pan recognizer.
 drag_text = drag.read_text()
 vc_text = vc.read_text()
 for marker in (
@@ -86,9 +78,10 @@ if "UIPanGestureRecognizer" in method:
 
 print("FlekDeck Home hold menu arbitration restored without touching App Switcher pan gestures")
 
-# This script is the final leaf of the canonical runtime guardrail. Run the
-# remaining on-device safety passes here so older parity generators cannot
-# reintroduce them afterward.
+# Final leaf: older parity generators have all finished at this point. Keep every
+# on-device safety repair here so they cannot be silently reintroduced later.
 runpy.run_path("Tools/patch_flekdeck_ios27_classic_safety.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_exec_backup_safety.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_runtime_seed_atomic.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_tweak_signing_failure.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_error_session.py", run_name="__main__")
