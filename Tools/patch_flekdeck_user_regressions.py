@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # 1. Home/App Switcher: preserve main's proven Springboard gesture ownership.
 # Open Data Folder belongs in the app context menu; it must not require a new
@@ -163,7 +162,6 @@ classic_launch = '''+ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicM
                 raise(SIGKILL);
                 return;
             }
-
             // Rejected Classic launch is not a host crash. Fall back to the
             // exact normal relaunch path and keep the real private error in log.
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -182,16 +180,20 @@ s = s[:start] + classic_launch + s[end:]
 shared.write_text(s)
 
 # ---------------------------------------------------------------------------
-# 3. Error authenticity: only present real backend diagnostics. A stale signing
-# marker or empty string must never become one generic error shown for every app.
+# 3. Error authenticity: keep the earlier Bool contract that gives a REAL guest
+# crash priority over host diagnostics, but never synthesize an error from a
+# stale SigningInProgress flag or an empty backend value.
 # ---------------------------------------------------------------------------
 tab = Path("LiveContainerSwiftUI/Views/LCTabView.swift")
 s = tab.read_text()
-start = s.find("    func checkLastLaunchError() {")
+start = s.find("    @discardableResult\n    func checkLastLaunchError() -> Bool {")
+if start < 0:
+    start = s.find("    func checkLastLaunchError() {")
 end = s.find("    func checkTeamId() {", start)
 if start < 0 or end < 0:
     raise SystemExit(f"{tab}: startup error helper markers missing")
-error_helpers = '''    func checkLastLaunchError() {
+error_helpers = '''    @discardableResult
+    func checkLastLaunchError() -> Bool {
         let defaults = UserDefaults.standard
         let signingWasInterrupted = defaults.bool(forKey: "SigningInProgress")
         defaults.removeObject(forKey: "SigningInProgress")
@@ -200,49 +202,38 @@ error_helpers = '''    func checkLastLaunchError() {
             if signingWasInterrupted {
                 print("[FlekDeck/Error] stale SigningInProgress with no backend diagnostic; not showing a synthetic app error")
             }
-            return
+            return false
         }
         defaults.removeObject(forKey: "error")
 
         guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             print("[FlekDeck/Error] backend recorded an empty error; not showing a synthetic app error")
-            return
+            return false
         }
         errorInfo = raw
         crashReportShow = true
+        return true
     }
-
-    func displayErrorInfo(_ value: String) -> String { value }
 
     func copyError() { UIPasteboard.general.string = errorInfo }
 
 
 '''
 s = s[:start] + error_helpers + s[end:]
+s = s.replace("Text(displayErrorInfo(errorInfo))", "Text(errorInfo)")
+s = s.replace("ShareLink(item: displayErrorInfo(errorInfo))", "ShareLink(item: errorInfo)")
 tab.write_text(s)
 
 app_list = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift")
 s = app_list.read_text()
-old_display = '''    func displayErrorInfo(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "An unknown error occurred. No diagnostic text was provided."
-        }
-        return value
-    }
-
-    func copyError() {
-        UIPasteboard.general.string = displayErrorInfo(errorInfo)
-    }'''
-new_display = '''    func displayErrorInfo(_ value: String) -> String { value }
-
-    func copyError() {
-        UIPasteboard.general.string = errorInfo
-    }'''
-if old_display in s:
-    s = s.replace(old_display, new_display, 1)
-elif new_display not in s:
-    raise SystemExit(f"{app_list}: app error display helper anchor missing")
+s = s.replace("Text(displayErrorInfo(errorInfo))", "Text(errorInfo)")
+s = s.replace("UIPasteboard.general.string = displayErrorInfo(errorInfo)", "UIPasteboard.general.string = errorInfo")
+helper_start = s.find("    func displayErrorInfo(_ value: String) -> String {")
+if helper_start >= 0:
+    helper_end = s.find("    func copyError()", helper_start)
+    if helper_end < 0:
+        raise SystemExit(f"{app_list}: displayErrorInfo has no copyError end anchor")
+    s = s[:helper_start] + s[helper_end:]
 app_list.write_text(s)
 
 bootstrap = Path("LiveContainer/LCBootstrap.m")
@@ -277,6 +268,8 @@ if "No diagnostic text was provided" in tab.read_text() or "No diagnostic text w
     raise SystemExit("Synthetic generic error UI remains")
 if 'errorStr = "lc.signer.crashDuringSignErr"' in tab.read_text():
     raise SystemExit("Stale signing marker still fabricates an app error")
+if "let presentedGuestCrash = checkLastLaunchError()" not in tab.read_text():
+    raise SystemExit("Real guest errors no longer suppress host diagnostics during startup")
 if "NSCAssert(" in probe.read_text() or "assert(" in probe.read_text():
     raise SystemExit("Compatibility probe still contains process-fatal assertions")
 if "SBApplication" in probe.read_text() or "SpringBoard.framework" in probe.read_text():
