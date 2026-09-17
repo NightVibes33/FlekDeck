@@ -6,6 +6,7 @@ runpy.run_path("Tools/patch_flekdeck_runtime_stability.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_macho_contract.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_macho_sdk_reader.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_arm32_migration.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_runtime_selection.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_classic_launch_isolation.py", run_name="__main__")
@@ -115,6 +116,8 @@ if "(void)[self defaultClassicMode]" in final[final.find("- (void)setClassicMode
     raise SystemExit(f"{app_info}: Compatibility Mode toggle still executes the private probe")
 if "LCInspectMachOArchitectures" not in final:
     raise SystemExit(f"{app_info}: safe ARM32 inspection contract missing")
+if "LCReadMachOSDKVersion(execPath.UTF8String, self.is32bit, &sdkVersion)" not in final:
+    raise SystemExit(f"{app_info}: architecture-aware linked SDK reader missing")
 if "self.is32bit && LCUtils.isTXMScriptRequired" not in final:
     raise SystemExit(f"{app_info}: ARM32 TXM automatic JIT script selection missing")
 if 'needsArchitectureClassification = (info[@"is32bit"] == nil)' not in final:
