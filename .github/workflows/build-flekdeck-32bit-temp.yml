@@ -8,6 +8,7 @@ on:
       - '.github/workflows/build-flekdeck-32bit-temp.yml'
       - 'Tools/patch_flekdeck_liveexec32.py'
       - 'Tools/patch_flekdeck_liveexec32_appinfo.py'
+      - 'Tools/patch_flekdeck_livecontainer_parity.py'
       - 'LiveContainer/**'
       - 'LiveContainerSwiftUI/**'
       - 'MultitaskSupport/**'
@@ -87,13 +88,17 @@ jobs:
             [ ! -f "$script" ] || python3 "$script"
           done
 
-      - name: Apply FlekDeck ARM32 integration
+      - name: Apply FlekDeck ARM32 and parity integration
         shell: bash
         run: |
           set -euxo pipefail
           python3 Tools/patch_flekdeck_liveexec32.py
           python3 Tools/patch_flekdeck_liveexec32_appinfo.py
-          python3 -m py_compile Tools/patch_flekdeck_liveexec32.py Tools/patch_flekdeck_liveexec32_appinfo.py
+          python3 Tools/patch_flekdeck_livecontainer_parity.py
+          python3 -m py_compile \
+            Tools/patch_flekdeck_liveexec32.py \
+            Tools/patch_flekdeck_liveexec32_appinfo.py \
+            Tools/patch_flekdeck_livecontainer_parity.py
           grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
           grep -q 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
           grep -q 'bool is32bit = self.is32bit' LiveContainerSwiftUI/Models/LCAppInfo.m
@@ -101,11 +106,19 @@ jobs:
           grep -q 'self.spoofSDKVersion = YES' LiveContainerSwiftUI/Models/LCAppInfo.m
           ! grep -q 'self.is32Bit = is32bit' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'seedBundled32BitRuntime' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          grep -q 'arm32EmuApps' LiveContainerSwiftUI/Utilities/Shared.swift
+          grep -q 'uiSelected32BitEmulator' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -q 'Default 32-bit Runtime' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'LCStorageManagementView' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'if model.uiSelectedContainer != nil' LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift
           ! grep -q 'if !model.uiIsShared, model.uiSelectedContainer != nil' LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift
+          grep -q 'LC32BitTranslationLayerLogFile' LiveContainerSwiftUI/Views/LCTabView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
 
       - name: Build FlekDeck with ARM32 guest support
         shell: bash
@@ -160,6 +173,8 @@ jobs:
           grep -q 'emulatorArgv0' LiveContainer/LCBootstrap.m
           grep -q 'bool is32bit = self.is32bit' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'container.filesAppURL' LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift
+          grep -q 'uiSelected32BitEmulator' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -q 'LCStorageManagementView' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           ! find "$APP" \( -name _CodeSignature -o -name embedded.mobileprovision \) -print -quit | grep -q .
 
       - name: Package unsigned FlekDeck IPA
