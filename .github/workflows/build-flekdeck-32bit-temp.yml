@@ -18,15 +18,16 @@ permissions:
 
 jobs:
   build:
-    name: Build FlekDeck + LiveExec32 revision 89
+    name: Build FlekDeck + proven LiveExec32 revision 89
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 45
     env:
       LIVEEXEC_SOURCE_COMMIT: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
       LIVEEXEC_BUILD_REVISION: '89'
-      LIVEEXEC_COMPAT_COMMIT: 44733db43df3a50849abddd31ff52ac021d0fede
       LIVEEXEC_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC_ENTRY_SYMBOL: LC32RunGuest
+      LIVEEXEC_RUNTIME_URL: https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/download/nightly/LiveContainer%2BSideStore.ipa
+      LIVEEXEC_RUNTIME_SHA256: 4184d9a2d1b1d483f4cb90fdbc72e48e107badd3c2f2d4fd2af793342342c956
 
     steps:
       - uses: actions/checkout@v4
@@ -35,153 +36,32 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Select Xcode 26.2 for LiveExec32
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '26.2'
-
-      - name: Checkout pinned LiveExec32 source and compatibility layer
+      - name: Fetch proven LiveExec32 revision 89 runtime
         shell: bash
         run: |
           set -euxo pipefail
-          rm -rf build/LiveExec32 build/liveexec-compat
-          mkdir -p build
-          git clone --filter=blob:none --no-checkout https://github.com/LiveContainer/LiveExec32.git build/LiveExec32
-          git -C build/LiveExec32 fetch --depth 1 origin "$LIVEEXEC_SOURCE_COMMIT"
-          git -C build/LiveExec32 checkout --detach FETCH_HEAD
-          git -C build/LiveExec32 submodule update --init --recursive --depth 1
-          test "$(git -C build/LiveExec32 rev-parse HEAD)" = "$LIVEEXEC_SOURCE_COMMIT"
-          git clone --filter=blob:none --no-checkout https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa.git build/liveexec-compat
-          git -C build/liveexec-compat fetch --depth 1 origin "$LIVEEXEC_COMPAT_COMMIT"
-          git -C build/liveexec-compat checkout --detach FETCH_HEAD
-          test "$(git -C build/liveexec-compat rev-parse HEAD)" = "$LIVEEXEC_COMPAT_COMMIT"
-          test -f build/liveexec-compat/.github/scripts/patch-liveexec32-missing-images.py
-          test -f build/liveexec-compat/.github/scripts/build-guest-libiconv.sh
-
-      - name: Restore LiveExec32 package cache
-        id: liveexec-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build/liveexec-package
-          key: flekdeck-liveexec32-r89-${{ runner.os }}-${{ env.LIVEEXEC_SOURCE_COMMIT }}-${{ env.LIVEEXEC_COMPAT_COMMIT }}
-
-      - name: Restore guest ramdisk cache
-        if: steps.liveexec-cache.outputs.cache-hit != 'true'
-        id: ramdisk-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build/LiveExec32/tmp/ipsw/ramdisk.dmg
-          key: flekdeck-liveexec32-ramdisk-3564d16366b053503107288be6cb335b2283cf14838ab64a88017c17a2a6a1bc
-
-      - name: Install LiveExec32 dependencies
-        if: steps.liveexec-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          brew install make boost ldid
-          THEOS="$RUNNER_TEMP/theos"
-          git init "$THEOS"
-          git -C "$THEOS" remote add origin https://github.com/theos/theos.git
-          git -C "$THEOS" fetch --depth 1 origin 5280bd038207e14f8bd76f5417aa2fe641c03228
-          git -C "$THEOS" checkout --detach FETCH_HEAD
-          git -C "$THEOS" submodule update --init --recursive --depth 1
-          SDK_ARCHIVE="$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
-          curl --fail --location --retry 3 -o "$SDK_ARCHIVE" https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
-          echo "5e0fd3f01266cce4ce012d4a99b38eb56578fca40d09edc81cd83dee958202fb  $SDK_ARCHIVE" | shasum -a 256 -c -
-          mkdir -p "$THEOS/sdks"
-          tar -xJf "$SDK_ARCHIVE" -C "$THEOS/sdks"
-          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
-          PZB_ARCHIVE="$RUNNER_TEMP/pzb.zip"
-          PZB_ROOT="$RUNNER_TEMP/pzb"
-          TOOLS_DIR="$RUNNER_TEMP/lc32-tools"
-          curl --fail --location --retry 3 -o "$PZB_ARCHIVE" https://github.com/tihmstar/partialZipBrowser/releases/download/44/buildroot_macos-latest.zip
-          echo "f72452e5c9c1248b8c4b4967a357b03addbe98d61ba8bad286ef0146dfdccdd2  $PZB_ARCHIVE" | shasum -a 256 -c -
-          mkdir -p "$PZB_ROOT" "$TOOLS_DIR"
-          unzip -q "$PZB_ARCHIVE" -d "$PZB_ROOT"
-          install -m 0755 "$PZB_ROOT/buildroot_macos-latest/usr/local/bin/pzb" "$TOOLS_DIR/pzb"
-          echo "$TOOLS_DIR" >> "$GITHUB_PATH"
-
-      - name: Build pinned LiveExec32 runtime
-        if: steps.liveexec-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          SCRIPTS="$PWD/build/liveexec-compat/.github/scripts"
-          gmake -C build/LiveExec32/GuestMakefile generate-shims
-          for patch in \
-            patch-liveexec32-missing-images.py \
-            patch-liveexec32-accelerate.py \
-            patch-liveexec32-coremedia.py \
-            patch-liveexec32-corpus-object-constants.py \
-            patch-liveexec32-quartzcore.py \
-            patch-liveexec32-target-coregraphics.py \
-            patch-liveexec32-host-argument.py \
-            patch-liveexec32-openal-session.py \
-            patch-liveexec32-noexecute-diagnostics.py; do
-            python3 "$SCRIPTS/$patch"
-          done
-          gmake -C build/LiveExec32/GuestMakefile
-          (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
-          GUEST_ROOT=build/LiveExec32/Resources/RootFS
-          for framework in CoreSurface GraphicsServices PlugInKit WebKit; do
-            src="$GUEST_ROOT/System/Library/Frameworks/$framework.framework"
-            dst="$GUEST_ROOT/System/Library/PrivateFrameworks/$framework.framework"
-            if [ -f "$src/$framework" ]; then
-              mkdir -p "$dst"
-              cp "$src/$framework" "$dst/$framework"
-              cp "$src/Info.plist" "$dst/Info.plist"
-              chmod 0755 "$dst/$framework"
-            fi
-          done
-          cp "$GUEST_ROOT/System/Library/Frameworks/LC32.framework/LC32" "$GUEST_ROOT/usr/lib/libresolv.9.dylib"
-          chmod 0755 "$GUEST_ROOT/usr/lib/libresolv.9.dylib"
-          bash "$SCRIPTS/build-guest-libiconv.sh" "$GUEST_ROOT"
-          gmake -C build/LiveExec32 package
-          IPA="$(find build/LiveExec32/packages -maxdepth 1 -type f -name '*.ipa' -print -quit)"
-          test -n "$IPA"
-          rm -rf build/liveexec-package
-          mkdir -p build/liveexec-package
-          unzip -q "$IPA" -d build/liveexec-package
-          EMU="$(find build/liveexec-package/Payload -maxdepth 1 -type d -name 'LiveExec32.app' -print -quit)"
+          rm -rf build/liveexec-source build/liveexec-package
+          mkdir -p build/liveexec-source build/liveexec-package/Payload
+          RUNTIME_IPA="$RUNNER_TEMP/LiveContainer+SideStore-r89.ipa"
+          curl --fail --location --retry 3 --retry-all-errors \
+            -o "$RUNTIME_IPA" "$LIVEEXEC_RUNTIME_URL"
+          echo "$LIVEEXEC_RUNTIME_SHA256  $RUNTIME_IPA" | shasum -a 256 -c -
+          unzip -q "$RUNTIME_IPA" -d build/liveexec-source
+          EMU="$(find build/liveexec-source/Payload -type d -name 'LiveExec32.app' -print -quit)"
           test -n "$EMU"
+          ditto "$EMU" build/liveexec-package/Payload/LiveExec32.app
+
+      - name: Verify LiveExec32 contract and provenance
+        shell: bash
+        run: |
+          set -euxo pipefail
+          EMU=build/liveexec-package/Payload/LiveExec32.app
           test -f "$EMU/LiveExec32"
           test -f "$EMU/$LIVEEXEC_LOAD_PATH"
           test -d "$EMU/RootFS"
           test -f "$EMU/RootFS/usr/lib/libstdc++.6.dylib"
           test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$EMU/RootFS/usr/lib/libcharset.1.dylib"
-          nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" | grep -q '_LC32RunGuest'
-          /usr/libexec/PlistBuddy -c 'Delete :LC32BitTranslationLayer' "$EMU/Info.plist" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c 'Add :LC32BitTranslationLayer bool true' "$EMU/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Delete :LCBundledSourceCommit' "$EMU/Info.plist" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :LCBundledSourceCommit string $LIVEEXEC_SOURCE_COMMIT" "$EMU/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Delete :LCBundledBuildRevision' "$EMU/Info.plist" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :LCBundledBuildRevision string $LIVEEXEC_BUILD_REVISION" "$EMU/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Delete :LC32BitEmulatorLoadPath' "$EMU/Info.plist" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :LC32BitEmulatorLoadPath string $LIVEEXEC_LOAD_PATH" "$EMU/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Delete :LC32BitEmulatorEntrySymbol' "$EMU/Info.plist" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :LC32BitEmulatorEntrySymbol string $LIVEEXEC_ENTRY_SYMBOL" "$EMU/Info.plist"
-
-      - name: Save LiveExec32 package cache
-        if: steps.liveexec-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: build/liveexec-package
-          key: ${{ steps.liveexec-cache.outputs.cache-primary-key }}
-
-      - name: Save guest ramdisk cache
-        if: steps.liveexec-cache.outputs.cache-hit != 'true' && steps.ramdisk-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: build/LiveExec32/tmp/ipsw/ramdisk.dmg
-          key: flekdeck-liveexec32-ramdisk-3564d16366b053503107288be6cb335b2283cf14838ab64a88017c17a2a6a1bc
-
-      - name: Verify LiveExec32 contract
-        shell: bash
-        run: |
-          set -euxo pipefail
-          EMU="$(find build/liveexec-package/Payload -maxdepth 1 -type d -name 'LiveExec32.app' -print -quit)"
-          test -n "$EMU"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = true
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC_SOURCE_COMMIT"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC_BUILD_REVISION"
@@ -254,8 +134,8 @@ jobs:
         run: |
           set -euxo pipefail
           APP="$(find build/FlekDeck-32bit.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
-          EMU="$(find build/liveexec-package/Payload -maxdepth 1 -type d -name 'LiveExec32.app' -print -quit)"
-          test -n "$APP"; test -n "$EMU"
+          EMU=build/liveexec-package/Payload/LiveExec32.app
+          test -n "$APP"; test -d "$EMU"
           rm -rf "$APP/LiveExec32.app"
           ditto "$EMU" "$APP/LiveExec32.app"
           find "$APP" -type d -name _CodeSignature -prune -exec rm -rf {} + || true
