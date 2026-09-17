@@ -194,7 +194,9 @@ classic_launch = '''+ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicM
 
     _LSOpenConfiguration *configuration = [[PrivClass(_LSOpenConfiguration) alloc] init];
     NSMutableDictionary *frontBoardOptions = [NSMutableDictionary new];
-    frontBoardOptions[FBSOpenApplicationOptionKeyActivateAsClassic] = @(classicMode);
+    // Match current LiveContainer's private FrontBoard key without introducing
+    // a link-time dependency on FrontBoardServices in FlekDeck's shared target.
+    frontBoardOptions[@"__ActivateAsClassic"] = @(classicMode);
     configuration.frontBoardOptions = frontBoardOptions;
 
     NSString *bundleIdentifier = lcMainBundle.bundleIdentifier ?: NSBundle.mainBundle.bundleIdentifier;
@@ -284,7 +286,7 @@ checks = {
     app_model: ["uiClassicMode", "let classicMode = appInfo.defaultClassicMode", "classicMode: classicMode"],
     app_settings: ["$model.uiClassicMode", "lc.appSettings.classicModeDesc"],
     shared_h: ["launchToGuestAppWithClassicMode"],
-    shared_m: ["FBSOpenApplicationOptionKeyActivateAsClassic", "launchToGuestAppWithClassicMode:classicMode"],
+    shared_m: ["__ActivateAsClassic", "launchToGuestAppWithClassicMode:classicMode"],
     utils_ext: ["classicMode: UInt = 0", "launchToGuestApp(withClassicMode: classicMode)"],
     app_list: ["askForJIT(withScript: script, appName: appName, classicMode: classicMode)", "finalNewApp.classicMode"],
 }
