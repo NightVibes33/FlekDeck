@@ -88,6 +88,10 @@ runpy.run_path("Tools/patch_flekdeck_relaunch_safety.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_context_runtime.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_postscan_runtime.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_classic_probe_link.py", run_name="__main__")
+# The parent edit/drag long press and the inner UIKit context menu are separate
+# recognizers. Reject only the parent recognizer for installed-app holds, before
+# it begins, so the menu is reliable without touching the switcher pan gesture.
+runpy.run_path("Tools/patch_flekdeck_context_menu_arbitration.py", run_name="__main__")
 
 
 def add_trigger_path(text: str, anchor: str) -> str:
@@ -203,8 +207,15 @@ if "return @12;" in probe or "return @1;" in probe:
 
 spring_drag = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift").read_text()
 spring_vc = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift").read_text()
-if "gestureRecognizerShouldBegin" in spring_drag or "longPressGesture.delegate = dragManager" in spring_vc:
-    raise SystemExit("temp Springboard root gesture arbitration survived")
+for marker in (
+    "UIGestureRecognizerDelegate",
+    "gestureRecognizerShouldBegin",
+    "if case .installed = pageCell.items[indexPath.item]",
+):
+    if marker not in spring_drag:
+        raise SystemExit(f"installed-app context-menu arbitration missing: {marker}")
+if "longPressGesture.delegate = dragManager" not in spring_vc:
+    raise SystemExit("Springboard parent long press is not yielding to installed-app context menus")
 
 for error_ui in (
     Path("LiveContainerSwiftUI/Views/LCTabView.swift").read_text(),
