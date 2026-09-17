@@ -155,8 +155,9 @@ if assignment_new not in text:
 app.write_text(text)
 
 # ---------------------------------------------------------------------------
-# Per-app settings: ARM32 always needs JIT, owns the iOS 26+ TXM script path,
-# and may override the shared translator.
+# Per-app settings. This adapter is only invoked by the dedicated ARM32 build,
+# so keep the generated Swift structurally simple instead of splitting a chained
+# Toggle modifier across #if directives.
 # ---------------------------------------------------------------------------
 app_settings = Path("LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift")
 replace_once(
@@ -168,12 +169,8 @@ replace_once(
     '''                Toggle(isOn: $model.uiIsJITNeeded) {
                     Text("lc.appSettings.launchWithJit".loc)
                 }
-#if is32BitSupported
                 .disabled(model.uiIs32bit)
-                if #available(iOS 26.0, *), model.uiIsJITNeeded, !model.uiIs32bit {
-#else
-                if #available(iOS 26.0, *), model.uiIsJITNeeded {
-#endif''',
+                if #available(iOS 26.0, *), model.uiIsJITNeeded, !model.uiIs32bit {''',
     "ARM32 JIT control gating",
 )
 text = app_settings.read_text()
@@ -182,18 +179,16 @@ script_end = '''                    }
             } footer: {'''
 translator_picker = '''                    }
                 }
-#if is32BitSupported
                 if model.uiIs32bit {
                     Picker(selection: $model.uiSelected32BitEmulator) {
                         Text("lc.common.default".loc).tag("")
-                        ForEach(sharedModel.arm32EmuApps, id: \.self) { app in
+                        ForEach(sharedModel.arm32EmuApps, id: \\.self) { app in
                             Text(app.appInfo.displayName()).tag(app.appInfo.relativeBundlePath ?? "")
                         }
                     } label: {
                         Text("32-bit Runtime")
                     }
                 }
-#endif
             } footer: {'''
 if translator_picker not in text:
     if script_end not in text:
@@ -217,7 +212,7 @@ jit_new = '''
                 Section {
                     Picker(selection: $liveExec32Path) {
                         Text("Bundled LiveExec32 (r89)").tag("LiveExec32.app")
-                        ForEach(sharedModel.arm32EmuApps.filter { $0.appInfo.relativeBundlePath != "LiveExec32.app" }, id: \.self) { app in
+                        ForEach(sharedModel.arm32EmuApps.filter { $0.appInfo.relativeBundlePath != "LiveExec32.app" }, id: \\.self) { app in
                             Text(app.appInfo.displayName()).tag(app.appInfo.relativeBundlePath ?? "")
                         }
                     } label: {
@@ -276,8 +271,8 @@ if data_new not in text:
 settings.write_text(text)
 
 # ---------------------------------------------------------------------------
-# Open Data Folder: Flek's container.filesAppURL is more capable than LC's hard
-# coded Documents path. Expose it for shared containers and never fail silently.
+# Open Data Folder: expose Flek's existing richer resolver for shared containers
+# too, and surface a real error instead of silently doing nothing.
 # ---------------------------------------------------------------------------
 banner = Path("LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift")
 text = banner.read_text().replace(
@@ -339,7 +334,6 @@ replace_once(
     "ARM32 crash-log sharing",
 )
 
-# CI sanity markers.
 checks = {
     shared: ["arm32EmuApps"],
     app_info_h: ["selected32BitEmulator", "is32bitEmulator"],
