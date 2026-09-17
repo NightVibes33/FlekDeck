@@ -5,9 +5,11 @@ import runpy
 # Always run the primary stability hardening last.
 runpy.run_path("Tools/patch_flekdeck_runtime_stability.py", run_name="__main__")
 # Then apply the on-device regression fixes that preserve real guest errors,
-# keep distribution-signing diagnostics non-modal, and repair the nullable
-# app-group defaults path produced by the stability generator.
+# keep distribution-signing diagnostics non-modal, and repair startup discovery.
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
+# ARM32 classification is inspection-only. Existing mutation callbacks remain
+# ARM64-only so adding 32-bit support cannot corrupt older Mach-O patch paths.
+runpy.run_path("Tools/patch_flekdeck_macho_contract.py", run_name="__main__")
 
 # Old parity generators can append another Classic implementation because their
 # template no longer byte-matches the hardened one. Canonicalize the entire
@@ -123,6 +125,8 @@ if final.count("- (bool)classicMode {") != 1:
     raise SystemExit(f"{app_info}: duplicate classicMode implementations remain")
 if "(void)[self defaultClassicMode]" in final[final.find("- (void)setClassicMode:"):final.find("- (NSUInteger)defaultClassicMode")]:
     raise SystemExit(f"{app_info}: Compatibility Mode toggle still executes the private probe")
+if "LCInspectMachOArchitectures" not in final:
+    raise SystemExit(f"{app_info}: safe ARM32 inspection contract missing")
 
 shared = Path("LiveContainer/LCSharedUtils.m").read_text()
 classic_region = shared[shared.find("+ (BOOL)launchToGuestAppWithClassicMode"):shared.find("+ (BOOL)launchToGuestAppWithURL")]
