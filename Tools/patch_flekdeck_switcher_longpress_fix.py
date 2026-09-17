@@ -135,7 +135,7 @@ replace_once(
 app_list = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift")
 app_list_text = app_list.read_text()
 for marker in [
-    "private func homeOpenDataFolder(_ app: LCAppModel)",
+    "func homeOpenDataFolder(_ app: LCAppModel)",
     'UIAction(title: "lc.appBanner.openDataFolder".loc, image: UIImage(systemName: "folder"))',
     "homeOpenDataFolder(app)",
     "let dataGroup = UIMenu(",
