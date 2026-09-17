@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/build-flekdeck-sidestore-parity-temp.yml'
       - 'Tools/patch_flekdeck_runtime_guardrails.py'
+      - 'Tools/normalize_flekdeck_relaunch_guard.py'
       - 'LiveContainer/**'
       - 'LiveContainerSwiftUI/**'
       - 'MultitaskSupport/**'
@@ -40,6 +41,7 @@ jobs:
       - name: Apply canonical temp guardrails
         run: |
           set -euxo pipefail
+          python3 Tools/normalize_flekdeck_relaunch_guard.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
