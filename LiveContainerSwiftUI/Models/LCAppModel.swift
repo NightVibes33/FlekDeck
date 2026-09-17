@@ -3,8 +3,8 @@ import Foundation
 protocol LCAppModelDelegate {
     func closeNavigationView()
     func changeAppVisibility(app : LCAppModel)
-    func jitLaunch(appName: String, classicMode: UInt) async
-    func jitLaunch(withScript script: String, appName: String, classicMode: UInt) async
+    func jitLaunch(appName: String) async
+    func jitLaunch(withScript script: String, appName: String) async
     func jitLaunch(withPID pid: Int, withScript script: String?, appName: String) async
     func showRunWhenMultitaskAlert() async -> Bool?
 }
@@ -23,11 +23,6 @@ class LCAppModel: ObservableObject, Hashable {
             appInfo.isJITNeeded = uiIsJITNeeded
         }
     }
-    @Published var uiClassicMode : Bool {
-        didSet {
-            appInfo.classicMode = uiClassicMode
-        }
-    }
     @Published var uiIsHidden : Bool
     @Published var uiIsLocked : Bool
     @Published var uiIsShared : Bool
@@ -36,10 +31,6 @@ class LCAppModel: ObservableObject, Hashable {
     @Published var uiSelectedContainer : LCContainer?
 #if is32BitSupported
     @Published var uiIs32bit : Bool
-    @Published var uiIs32bitEmulator : Bool
-    @Published var uiSelected32BitEmulator : String {
-        didSet { appInfo.selected32BitEmulator = uiSelected32BitEmulator }
-    }
 #endif
     @Published var uiTweakFolder : String? {
         didSet {
@@ -167,7 +158,6 @@ class LCAppModel: ObservableObject, Hashable {
         }
         
         self.uiIsJITNeeded = appInfo.isJITNeeded
-        self.uiClassicMode = appInfo.classicMode
         self.uiIsHidden = appInfo.isHidden
         self.uiIsLocked = appInfo.isLocked
         self.uiIsShared = appInfo.isShared
@@ -191,8 +181,6 @@ class LCAppModel: ObservableObject, Hashable {
         self.uiRemark = appInfo.remark ?? ""
 #if is32BitSupported
         self.uiIs32bit = appInfo.is32bit
-        self.uiIs32bitEmulator = appInfo.is32bitEmulator
-        self.uiSelected32BitEmulator = appInfo.selected32BitEmulator ?? ""
 #endif
         for container in uiContainers {
             if container.folderName == uiDefaultDataFolder {
@@ -217,9 +205,6 @@ class LCAppModel: ObservableObject, Hashable {
         }
         
         if uiContainers.isEmpty {
-            guard let appIdentifier = appInfo.bundleIdentifier(), !appIdentifier.isEmpty else {
-                throw "The selected app does not have a valid bundle identifier."
-            }
             let newName = NSUUID().uuidString
             let newContainer = LCContainer(folderName: newName, name: newName, isShared: uiIsShared)
             uiContainers.append(newContainer)
@@ -227,7 +212,7 @@ class LCAppModel: ObservableObject, Hashable {
                 uiSelectedContainer = newContainer;
             }
             appInfo.containers = uiContainers;
-            newContainer.makeLCContainerInfoPlist(appIdentifier: appIdentifier, keychainGroupId: Int.random(in: 0..<SharedModel.keychainAccessGroupCount))
+            newContainer.makeLCContainerInfoPlist(appIdentifier: appInfo.bundleIdentifier()!, keychainGroupId: Int.random(in: 0..<SharedModel.keychainAccessGroupCount))
             appInfo.dataUUID = newName
             uiDefaultDataFolder = newName
         }
@@ -237,16 +222,10 @@ class LCAppModel: ObservableObject, Hashable {
         let currentDataFolder = containerFolderName ?? uiSelectedContainer?.folderName
         
 #if is32BitSupported
-        // Preserve FlekDeck's proven App Switcher / Parallel routing for every
-        // native ARM64 guest. Only ARM32 is forced onto LiveExec32 single mode.
         let multitask = appInfo.is32bit ? false : (multitask ?? shouldLaunchInMultitaskMode)
 #else
         let multitask = multitask ?? shouldLaunchInMultitaskMode
 #endif
-        // Compatibility Mode is a single-process launch option. Resolving it can
-        // touch private SpringBoard APIs, so never probe it for Parallel launches
-        // that cannot consume the result anyway.
-        let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode
         
         if MultitaskManager.isMultitasking() || multitask,
            let currentDataFolder {
@@ -276,8 +255,8 @@ class LCAppModel: ObservableObject, Hashable {
                     URLQueryItem(name: "url", value: Data(urlStr.utf8).base64EncodedString())
                 ]
             }
-            if let openURL = openURLComp.url, await UIApplication.shared.canOpenURL(openURL) {
-                await UIApplication.shared.open(openURL)
+            if await UIApplication.shared.canOpenURL(openURLComp.url!) {
+                await UIApplication.shared.open(openURLComp.url!)
                 return
             }
         }
@@ -334,12 +313,6 @@ class LCAppModel: ObservableObject, Hashable {
             }}
         }
         try await signApp(force: false)
-
-        // Start every guest attempt with a clean diagnostic slot. The bootstrap
-        // is the sole owner of the next guest error, so an app which dies before
-        // writing one cannot inherit the previous app's crash text or ARM32 log.
-        UserDefaults.standard.removeObject(forKey: "error")
-        UserDefaults.lcShared().removeObject(forKey: "LC32BitTranslationLayerLogFile")
         
         if let bundleIdOverride {
             UserDefaults.standard.set(bundleIdOverride, forKey: "selected")
@@ -384,26 +357,20 @@ class LCAppModel: ObservableObject, Hashable {
             } else {
                 // Non-multitask JIT flow remains unchanged
                 if let scriptData = jitLaunchScriptJs, !scriptData.isEmpty {
-                    await delegate?.jitLaunch(withScript: scriptData, appName: self.appInfo.displayName(), classicMode: classicMode)
+                    await delegate?.jitLaunch(withScript: scriptData, appName: self.appInfo.displayName())
                 } else {
-                    await delegate?.jitLaunch(appName: self.appInfo.displayName(), classicMode: classicMode)
+                    await delegate?.jitLaunch(appName: self.appInfo.displayName())
                 }
             }
         } else if multitask, #available(iOS 16.0, *) {
             try await LCUtils.launchMultitaskGuestApp(appInfo.displayName())
         } else {
-            if #available(iOS 26.0, *),
-               let bundlePath = appInfo.bundlePath(),
-               FileManager.default.fileExists(atPath: "\(bundlePath)/Frameworks/MetalANGLE.framework/MetalANGLE") {
-                let fileContents = "\(bundlePath)/Frameworks/MetalANGLE.framework/MetalANGLE".data(using: .utf8)
+            if #available(iOS 26.0, *), FileManager.default.fileExists(atPath: "\(appInfo.bundlePath()!)/Frameworks/MetalANGLE.framework/MetalANGLE") {
+                let fileContents = "\(appInfo.bundlePath()!)/Frameworks/MetalANGLE.framework/MetalANGLE".data(using: .utf8)
                 let fileURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("preloadLibraries.txt")
                 try fileContents?.write(to: fileURL)
             }
-            guard LCSharedUtils.launchToGuestApp(withClassicMode: classicMode) else {
-                // This is a host relaunch failure: the guest never started, so do
-                // not fabricate or reuse a guest crash report. Keep it explicit.
-                throw "Host relaunch was rejected before \(appInfo.displayName()) started. No guest crash report was produced."
-            }
+            LCSharedUtils.launchToGuestApp()
         }
         
         // Record the launch time

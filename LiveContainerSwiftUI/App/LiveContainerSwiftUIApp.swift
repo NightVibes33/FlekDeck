@@ -18,50 +18,28 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         let bundledURL = Bundle.main.bundleURL.appendingPathComponent(bundled32BitRuntimeName, isDirectory: true)
         guard fm.fileExists(atPath: bundledURL.path) else { return }
 
-        func runtimeIsHealthy(_ url: URL, requirePinnedBuild: Bool) -> Bool {
-            let infoURL = url.appendingPathComponent("Info.plist")
-            guard let info = NSDictionary(contentsOf: infoURL),
-                  info["LC32BitTranslationLayer"] as? Bool == true else { return false }
-            if requirePinnedBuild {
-                guard info["LCBundledSourceCommit"] as? String == bundled32BitRuntimeCommit,
-                      info["LCBundledBuildRevision"] as? String == bundled32BitRuntimeRevision else { return false }
-            }
-            guard let loadPath = info["LC32BitEmulatorLoadPath"] as? String, !loadPath.isEmpty,
-                  let entry = info["LC32BitEmulatorEntrySymbol"] as? String, !entry.isEmpty else { return false }
-            let sharedImage = url.appendingPathComponent(loadPath)
-            var isDirectory: ObjCBool = false
-            guard fm.fileExists(atPath: sharedImage.path, isDirectory: &isDirectory), !isDirectory.boolValue,
-                  fm.isReadableFile(atPath: sharedImage.path) else { return false }
-            let rootFS = url.appendingPathComponent("RootFS", isDirectory: true)
-            var rootIsDirectory: ObjCBool = false
-            guard fm.fileExists(atPath: rootFS.path, isDirectory: &rootIsDirectory), rootIsDirectory.boolValue else { return false }
-            guard let launcherName = info["CFBundleExecutable"] as? String, !launcherName.isEmpty else { return false }
-            let launcher = url.appendingPathComponent(launcherName)
-            guard fm.fileExists(atPath: launcher.path), fm.isExecutableFile(atPath: launcher.path) else { return false }
-            return true
-        }
-
-        guard runtimeIsHealthy(bundledURL, requirePinnedBuild: true) else {
-            NSLog("[FlekDeck/LC32] Embedded LiveExec32 payload is invalid or incomplete")
+        let bundledInfoURL = bundledURL.appendingPathComponent("Info.plist")
+        guard let bundledInfo = NSDictionary(contentsOf: bundledInfoURL),
+              bundledInfo["LC32BitTranslationLayer"] as? Bool == true,
+              bundledInfo["LCBundledSourceCommit"] as? String == bundled32BitRuntimeCommit,
+              bundledInfo["LCBundledBuildRevision"] as? String == bundled32BitRuntimeRevision else {
+            NSLog("[FlekDeck/LC32] Embedded LiveExec32 metadata is invalid or stale")
             return
         }
 
         try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
         let installedURL = LCPath.bundlePath.appendingPathComponent(bundled32BitRuntimeName, isDirectory: true)
-        let stagingURL = LCPath.bundlePath.appendingPathComponent(".LiveExec32.app.staging", isDirectory: true)
-        let backupURL = LCPath.bundlePath.appendingPathComponent(".LiveExec32.app.backup", isDirectory: true)
-
         let installedInfo = NSDictionary(contentsOf: installedURL.appendingPathComponent("Info.plist"))
-        let installedPinned = installedInfo?["LCBundledSourceCommit"] as? String == bundled32BitRuntimeCommit &&
-                              installedInfo?["LCBundledBuildRevision"] as? String == bundled32BitRuntimeRevision
-        let installedHealthy = installedPinned && runtimeIsHealthy(installedURL, requirePinnedBuild: true)
+        let installedCommit = installedInfo?["LCBundledSourceCommit"] as? String
+        let installedRevision = installedInfo?["LCBundledBuildRevision"] as? String
+        if installedCommit != bundled32BitRuntimeCommit || installedRevision != bundled32BitRuntimeRevision {
+            if fm.fileExists(atPath: installedURL.path) {
+                try fm.removeItem(at: installedURL)
+            }
+            try fm.copyItem(at: bundledURL, to: installedURL)
 
-        if !installedHealthy {
-            // Build a complete replacement beside the current runtime first. Do
-            // not remove the known-old runtime until the replacement validates.
-            if fm.fileExists(atPath: stagingURL.path) { try fm.removeItem(at: stagingURL) }
-            try fm.copyItem(at: bundledURL, to: stagingURL)
-
+            // Keep the runtime out of the normal app list. It is an implementation
+            // detail, not a user-launchable guest.
             let runtimeAppInfo: [String: Any] = [
                 "isHidden": true,
                 "isLocked": true,
@@ -70,47 +48,8 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
             let runtimeAppInfoData = try PropertyListSerialization.data(
                 fromPropertyList: runtimeAppInfo, format: .binary, options: 0
             )
-            try runtimeAppInfoData.write(
-                to: stagingURL.appendingPathComponent("LCAppInfo.plist"),
-                options: .atomic
-            )
-
-            guard runtimeIsHealthy(stagingURL, requirePinnedBuild: true) else {
-                try? fm.removeItem(at: stagingURL)
-                throw NSError(
-                    domain: "FlekDeck.LiveExec32Seed",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "The staged LiveExec32 runtime failed integrity validation."]
-                )
-            }
-
-            if fm.fileExists(atPath: backupURL.path) { try fm.removeItem(at: backupURL) }
-            let hadInstalledRuntime = fm.fileExists(atPath: installedURL.path)
-            if hadInstalledRuntime {
-                try fm.moveItem(at: installedURL, to: backupURL)
-            }
-
-            do {
-                try fm.moveItem(at: stagingURL, to: installedURL)
-                if fm.fileExists(atPath: backupURL.path) { try fm.removeItem(at: backupURL) }
-                NSLog("[FlekDeck/LC32] Atomically installed/repaired LiveExec32 revision %@", bundled32BitRuntimeRevision)
-            } catch {
-                // Restore the previous runtime if the final rename failed.
-                try? fm.removeItem(at: installedURL)
-                if hadInstalledRuntime, fm.fileExists(atPath: backupURL.path) {
-                    try? fm.moveItem(at: backupURL, to: installedURL)
-                }
-                try? fm.removeItem(at: stagingURL)
-                throw error
-            }
-        } else {
-            // Old builds may have a healthy runtime but no hidden metadata.
-            let appInfoURL = installedURL.appendingPathComponent("LCAppInfo.plist")
-            if !fm.fileExists(atPath: appInfoURL.path) {
-                let runtimeAppInfo: [String: Any] = ["isHidden": true, "isLocked": true, "dontSign": true]
-                let data = try PropertyListSerialization.data(fromPropertyList: runtimeAppInfo, format: .binary, options: 0)
-                try data.write(to: appInfoURL, options: .atomic)
-            }
+            try runtimeAppInfoData.write(to: installedURL.appendingPathComponent("LCAppInfo.plist"))
+            NSLog("[FlekDeck/LC32] Installed bundled LiveExec32 revision %@", bundled32BitRuntimeRevision)
         }
 
         let defaults = LCUtils.appGroupUserDefault
@@ -144,19 +83,12 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         var tempTweakFolderNames : [String] = []
         
         var tempApps: [LCAppModel] = []
-#if is32BitSupported
-        var tempArm32EmuApps: [LCAppModel] = []
-#endif
         var tempHiddenApps: [LCAppModel] = []
         var tempURLSchemes: Set<String>? = DataManager.shared.model.multiLCStatus != 2 ? Set() : nil
 
         do {
             try Self.seedBundled32BitRuntime(using: fm)
-        } catch {
-            NSLog("[FlekDeck/LC32] Runtime seed failed without blocking app discovery: \(error)")
-        }
 
-        do {
             // load apps
             try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
             var appDirs = try fm.contentsOfDirectory(atPath: LCPath.bundlePath.path)
@@ -170,23 +102,14 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
                 if !appDir.hasSuffix(".app") {
                     continue
                 }
-                guard let newApp = LCAppInfo(bundlePath: "\(LCPath.bundlePath.path)/\(appDir)") else {
-                    NSLog("[FlekDeck] Skipping malformed app bundle: %@", appDir)
-                    continue
-                }
+                let newApp = LCAppInfo(bundlePath: "\(LCPath.bundlePath.path)/\(appDir)")!
                 newApp.relativeBundlePath = appDir
                 newApp.isShared = false
-#if is32BitSupported
-                if newApp.is32bitEmulator {
-                    tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
-                    continue
-                }
-#endif
                 if newApp.isHidden {
                     tempHiddenApps.append(LCAppModel(appInfo: newApp))
                 } else {
                     tempApps.append(LCAppModel(appInfo: newApp))
-                    tempURLSchemes?.formUnion((newApp.urlSchemes() as? [String]) ?? [])
+                    tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
                 }
             }
             if LCPath.lcGroupDocPath != LCPath.docPath {
@@ -200,23 +123,14 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
                     if !appDir.hasSuffix(".app") {
                         continue
                     }
-                    guard let newApp = LCAppInfo(bundlePath: "\(LCPath.lcGroupBundlePath.path)/\(appDir)") else {
-                        NSLog("[FlekDeck] Skipping malformed shared app bundle: %@", appDir)
-                        continue
-                    }
+                    let newApp = LCAppInfo(bundlePath: "\(LCPath.lcGroupBundlePath.path)/\(appDir)")!
                     newApp.relativeBundlePath = appDir
                     newApp.isShared = true
-#if is32BitSupported
-                    if newApp.is32bitEmulator {
-                        tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
-                        continue
-                    }
-#endif
                     if newApp.isHidden {
                         tempHiddenApps.append(LCAppModel(appInfo: newApp))
                     } else {
                         tempApps.append(LCAppModel(appInfo: newApp))
-                        tempURLSchemes?.formUnion((newApp.urlSchemes() as? [String]) ?? [])
+                        tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
                     }
                 }
             }
@@ -247,41 +161,6 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         }
         
         DataManager.shared.model.apps = tempApps
-#if is32BitSupported
-        DataManager.shared.model.arm32EmuApps = tempArm32EmuApps
-
-        // Runtime choices are persisted across updates/removals. Normalize them
-        // against the runtimes that actually exist now so a stale path cannot
-        // make every ARM32 app fail forever. Per-app stale overrides fall back to
-        // the global selection; the global selection prefers bundled LiveExec32.
-        let available32BitRuntimeNames = Set(tempArm32EmuApps.compactMap { model in
-            model.appInfo.relativeBundlePath.map { ($0 as NSString).lastPathComponent }
-        })
-        let runtimeDefaults = LCUtils.appGroupUserDefault
-        let persistedDefault = runtimeDefaults.string(forKey: "LCSelected32BitEmulator") ?? ""
-        let persistedDefaultName = (persistedDefault as NSString).lastPathComponent
-        if !persistedDefaultName.isEmpty && !available32BitRuntimeNames.contains(persistedDefaultName) {
-            if available32BitRuntimeNames.contains(Self.bundled32BitRuntimeName) {
-                runtimeDefaults.set(Self.bundled32BitRuntimeName, forKey: "LCSelected32BitEmulator")
-                NSLog("[FlekDeck/LC32] Repaired stale default runtime %@ -> %@", persistedDefaultName, Self.bundled32BitRuntimeName)
-            } else if let firstRuntime = available32BitRuntimeNames.sorted().first {
-                runtimeDefaults.set(firstRuntime, forKey: "LCSelected32BitEmulator")
-                NSLog("[FlekDeck/LC32] Repaired stale default runtime %@ -> %@", persistedDefaultName, firstRuntime)
-            } else {
-                runtimeDefaults.removeObject(forKey: "LCSelected32BitEmulator")
-            }
-        }
-
-        for model in tempApps + tempHiddenApps where model.appInfo.is32bit {
-            guard let selected = model.appInfo.selected32BitEmulator, !selected.isEmpty else { continue }
-            let selectedName = (selected as NSString).lastPathComponent
-            if !available32BitRuntimeNames.contains(selectedName) {
-                model.appInfo.selected32BitEmulator = ""
-                model.uiSelected32BitEmulator = ""
-                NSLog("[FlekDeck/LC32] Cleared stale per-app runtime %@ for %@", selectedName, model.appInfo.displayName())
-            }
-        }
-#endif
         DataManager.shared.model.hiddenApps = tempHiddenApps
         DataManager.shared.model.appDataFolderNames = tempAppDataFolderNames
         DataManager.shared.model.tweakFolderNames = tempTweakFolderNames

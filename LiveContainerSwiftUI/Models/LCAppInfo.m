@@ -306,64 +306,18 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         return;
     }
     NSFileManager* fm = NSFileManager.defaultManager;
-    NSString *execName = _infoPlist[@"CFBundleExecutable"];
-    if(![execName isKindOfClass:NSString.class] || execName.length == 0) {
-        [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
-        completetionHandler(NO, @"The app bundle has no valid CFBundleExecutable.");
-        return;
-    }
-    NSString *execPath = [appPath stringByAppendingPathComponent:execName];
-    BOOL execIsDirectory = NO;
-    if(![fm fileExistsAtPath:execPath isDirectory:&execIsDirectory] || execIsDirectory) {
-        [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
-        completetionHandler(NO, [NSString stringWithFormat:@"The app executable is missing: %@", execPath]);
-        return;
-    }
+    NSString *execPath = [NSString stringWithFormat:@"%@/%@", appPath, _infoPlist[@"CFBundleExecutable"]];
     
     // Update patch
     int currentPatchRev = 7;
     bool needPatch = [info[@"LCPatchRevision"] intValue] < currentPatchRev;
     if (needPatch || forceSign) {
-        // copy-delete-move avoids EXC_BAD_ACCESS (SIGKILL - CODESIGNING), but
-        // it must be transactional: never delete the only executable unless the
-        // backup copy is known-good.
-        NSString *backupPath = [NSString stringWithFormat:@"%@/%@_LiveContainerPatchBackUp", appPath, execName];
-        NSError *err = nil;
-        if([fm fileExistsAtPath:backupPath]) {
-            if(![fm removeItemAtPath:backupPath error:&err]) {
-                [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
-                completetionHandler(NO, [NSString stringWithFormat:@"Could not clear stale executable backup: %@", err.localizedDescription ?: @"unknown filesystem error"]);
-                return;
-            }
-        }
-        err = nil;
-        if(![fm copyItemAtPath:execPath toPath:backupPath error:&err]) {
-            [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
-            completetionHandler(NO, [NSString stringWithFormat:@"Could not back up the app executable: %@", err.localizedDescription ?: @"unknown filesystem error"]);
-            return;
-        }
-        err = nil;
-        if(![fm removeItemAtPath:execPath error:&err]) {
-            [fm removeItemAtPath:backupPath error:nil];
-            [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
-            completetionHandler(NO, [NSString stringWithFormat:@"Could not replace the app executable: %@", err.localizedDescription ?: @"unknown filesystem error"]);
-            return;
-        }
-        err = nil;
-        if(![fm moveItemAtPath:backupPath toPath:execPath error:&err]) {
-            NSError *restoreError = nil;
-            if([fm fileExistsAtPath:backupPath]) {
-                [fm copyItemAtPath:backupPath toPath:execPath error:&restoreError];
-                if(!restoreError) [fm removeItemAtPath:backupPath error:nil];
-            }
-            [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
-            NSString *detail = err.localizedDescription ?: @"unknown filesystem error";
-            if(restoreError) {
-                detail = [detail stringByAppendingFormat:@"; restore also failed: %@", restoreError.localizedDescription];
-            }
-            completetionHandler(NO, [NSString stringWithFormat:@"Could not restore the app executable after patch preparation: %@", detail]);
-            return;
-        }
+        // copy-delete-move to avoid EXC_BAD_ACCESS (SIGKILL - CODESIGNING)
+        NSString *backupPath = [NSString stringWithFormat:@"%@/%@_LiveContainerPatchBackUp", appPath, _infoPlist[@"CFBundleExecutable"]];
+        NSError *err;
+        [fm copyItemAtPath:execPath toPath:backupPath error:&err];
+        [fm removeItemAtPath:execPath error:&err];
+        [fm moveItemAtPath:backupPath toPath:execPath error:&err];
     }
     
 #if is32BitSupported
@@ -372,30 +326,12 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 #else
     bool is32bit = false;
 #endif
-#if is32BitSupported
-    bool needsArchitectureClassification = (info[@"is32bit"] == nil);
-#else
-    bool needsArchitectureClassification = false;
-#endif
-    if (needPatch || needsArchitectureClassification) {
-        bool has64bitSlice = false;
-        bool has32bitSlice = false;
-        bool isEncrypted = false;
-        NSString *error = LCInspectMachOArchitectures(execPath.UTF8String, &has64bitSlice, &has32bitSlice, &isEncrypted);
-        if(!error && !has64bitSlice && !has32bitSlice) {
-            error = @"The app executable has no supported ARM slice.";
-        }
-
-        is32bit = !has64bitSlice && has32bitSlice;
-#if is32BitSupported
-        self.is32bit = is32bit;
-#endif
-
-        // Only a genuinely outdated ARM64 executable goes through FlekDeck's
-        // 64-bit mutation pipeline. Classification-only migration must never
-        // rewrite an app whose patch revision is already current.
-        if(!error && needPatch && has64bitSlice) {
-            error = LCParseMachO(execPath.UTF8String, false, ^(const char *path, struct mach_header_64 *header, int fd, void* filePtr) {
+    if (needPatch) {
+        __block bool has64bitSlice = NO;
+        __block bool isEncrypted = false;
+        NSString *error = LCParseMachO(execPath.UTF8String, false, ^(const char *path, struct mach_header_64 *header, int fd, void* filePtr) {
+            if(header->cputype == CPU_TYPE_ARM64) {
+                has64bitSlice |= YES;
                 int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
                 if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
                     info[@"LCTweakLoaderCantInject"] = @YES;
@@ -404,20 +340,23 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
                 if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
                     info[@"segCountMismatch"] = @YES;
                 }
-            });
-            if(!error) {
-                LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
             }
-        }
-
+            isEncrypted |= LCIsMachOEncrypted(header);
+        });
+        is32bit = !has64bitSlice;
 #if is32BitSupported
-        if(is32bit) {
-            // Existing ARM32 imports get the same runtime contract as fresh ones.
+        self.is32bit = is32bit;
+#endif
+        if (!is32bit) {
+            LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
+        } else {
+#if is32BitSupported
+            // LiveExec32 owns ARM32 execution. It requires JIT and SDK spoofing.
             self.isJITNeeded = YES;
             self.classicMode = YES;
             self.spoofSDKVersion = YES;
-        }
 #endif
+        }
         if (isEncrypted) {
             error = @"The app you tried to install is encrypted. Please provide decrypted app.";
         }
@@ -426,10 +365,9 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
             completetionHandler(NO, error);
             return;
         }
-        if(needPatch) {
-            info[@"LCPatchRevision"] = @(currentPatchRev);
-            forceSign = true;
-        }
+        info[@"LCPatchRevision"] = @(currentPatchRev);
+        forceSign = true;
+        
         [self save];
     }
 #if !is32BitSupported
@@ -500,44 +438,6 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     _info[@"isJITNeeded"] = [NSNumber numberWithBool:isJITNeeded];
     [self save];
     
-}
-
-- (bool)classicMode {
-    return [_info[@"classicMode"] boolValue];
-}
-
-- (void)setClassicMode:(bool)classicMode {
-    // Flipping the UI setting must be side-effect free.
-    _info[@"classicMode"] = @(classicMode);
-    if(!classicMode) {
-        [_info removeObjectForKey:@"LCClassicModeCache"];
-    }
-    [self save];
-}
-
-- (NSUInteger)defaultClassicMode {
-    if(!self.classicMode) return 0;
-
-    NSInteger systemMajorVersion = NSProcessInfo.processInfo.operatingSystemVersion.majorVersion;
-    NSDictionary *cache = _info[@"LCClassicModeCache"];
-    NSNumber *cachedMode = cache[@"defaultClassicMode"];
-    NSNumber *cachedSystemMajorVersion = cache[@"systemMajorVersion"];
-    if([cachedMode isKindOfClass:NSNumber.class] &&
-       [cachedSystemMajorVersion isKindOfClass:NSNumber.class] &&
-       cachedSystemMajorVersion.integerValue == systemMajorVersion) {
-        return cachedMode.unsignedIntegerValue;
-    }
-
-    NSNumber *mode = LCGetDefaultClassicMode([NSURL fileURLWithPath:self.bundlePath]);
-    if(![mode isKindOfClass:NSNumber.class] || mode.unsignedIntegerValue == 0) {
-        return 0;
-    }
-    _info[@"LCClassicModeCache"] = @{
-        @"defaultClassicMode": mode,
-        @"systemMajorVersion": @(systemMajorVersion),
-    };
-    [self save];
-    return mode.unsignedIntegerValue;
 }
 
 - (bool)isLocked {
@@ -765,20 +665,7 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 - (void)setIs32bit:(bool)is32bit {
     _info[@"is32bit"] = [NSNumber numberWithBool:is32bit];
     [self save];
-}
-- (NSString *)selected32BitEmulator {
-    return _info[@"selected32BitEmulator"];
-}
-- (void)setSelected32BitEmulator:(NSString *)selected32BitEmulator {
-    if(selected32BitEmulator.length > 0) {
-        _info[@"selected32BitEmulator"] = selected32BitEmulator;
-    } else {
-        [_info removeObjectForKey:@"selected32BitEmulator"];
-    }
-    if (!_autoSaveDisabled) [self save];
-}
-- (bool)is32bitEmulator {
-    return [_infoPlist[@"LC32BitTranslationLayer"] boolValue];
+    
 }
 #endif
 - (bool)dontSign {
@@ -795,14 +682,6 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 }
 
 - (NSString *)jitLaunchScriptJs {
-#if is32BitSupported
-    if (self.is32bit && LCUtils.isTXMScriptRequired) {
-        NSString *universalScript = LCUtils.base64EncodedUniversalJITScript;
-        if (universalScript.length > 0) {
-            return universalScript;
-        }
-    }
-#endif
     return _info[@"jitLaunchScriptJs"];
 }
 
@@ -828,18 +707,12 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         _info[@"spoofSDKVersion"] = 0;
     } else {
         NSString *execPath = [NSString stringWithFormat:@"%@/%@", _bundlePath, _infoPlist[@"CFBundleExecutable"]];
-        uint32_t sdkVersion = 0;
+        __block uint32_t sdkVersion = 0;
+        LCParseMachO(execPath.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
+            sdkVersion = dyld_get_sdk_version((const struct mach_header *)header);
+        });
 #if is32BitSupported
-        NSString *sdkReadError = LCReadMachOSDKVersion(execPath.UTF8String, self.is32bit, &sdkVersion);
-#else
-        NSString *sdkReadError = LCReadMachOSDKVersion(execPath.UTF8String, false, &sdkVersion);
-#endif
-        if(sdkReadError) {
-            NSLog(@"[LC] failed to read linked SDK for %@: %@", execPath, sdkReadError);
-        }
-#if is32BitSupported
-        // Keep the same compatibility floor as the proven LiveExec32 integration,
-        // but preserve a real ARM32 SDK when it is newer than that floor.
+        // Keep the same compatibility floor as the proven LiveExec32 integration.
         uint32_t minSDK = self.is32bit ? 0x20000 : 0xb0000;
         if ((self.is32bit || sdkVersion) && sdkVersion < minSDK) {
             sdkVersion = minSDK;

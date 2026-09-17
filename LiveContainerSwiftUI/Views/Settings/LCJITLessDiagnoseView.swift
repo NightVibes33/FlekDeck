@@ -7,7 +7,6 @@
 import SwiftUI
 
 struct LCEntitlementView : View {
-    @State var isLiveProcess: Bool
     @State var loaded = false
     @State var entitlementReadSuccess = false
     
@@ -24,18 +23,16 @@ struct LCEntitlementView : View {
         if loaded {
             Form {
                 Section {
-                    if !isLiveProcess {
-                        HStack {
-                            Text("lc.jitlessDiag.bundleId".loc)
-                            Spacer()
-                            Text(Bundle.main.bundleIdentifier ?? "lc.common.unknown".loc)
-                                .foregroundStyle(entitlementReadSuccess && teamId != nil ? (isBundleIdCorrect ? .green : .red): .gray)
-                                .textSelection(.enabled)
-                        }
+                    HStack {
+                        Text("lc.jitlessDiag.bundleId".loc)
+                        Spacer()
+                        Text(Bundle.main.bundleIdentifier ?? "lc.common.unknown".loc)
+                            .foregroundStyle(entitlementReadSuccess && teamId != nil ? (isBundleIdCorrect ? .green : .red): .gray)
+                            .textSelection(.enabled)
                     }
                     
                     if entitlementReadSuccess {
-                        if !isLiveProcess && !isBundleIdCorrect && teamId != nil {
+                        if !isBundleIdCorrect && teamId != nil {
                             HStack {
                                 Text("lc.jitlessDiag.bundleIdExpected".loc)
                                 Spacer()
@@ -82,7 +79,7 @@ struct LCEntitlementView : View {
                         .font(.system(.subheadline, design: .monospaced))
                 }
             }
-            .navigationTitle(isLiveProcess ? "LiveProcess Entitlements" : "FlekDeck Entitlements")
+            .navigationTitle("lc.jielessDiag.entitlement".loc)
             .navigationBarTitleDisplayMode(.inline)
         } else {
             Text("lc.common.loading".loc)
@@ -101,17 +98,7 @@ struct LCEntitlementView : View {
             loaded = true
         }
         
-        let executablePath: String?
-        if isLiveProcess {
-            executablePath = Bundle.main.builtInPlugInsURL?.appendingPathComponent("LiveProcess.appex/LiveProcess").path
-            if let executablePath, !FileManager.default.fileExists(atPath: executablePath) {
-                entitlementContent = "LiveProcess is not installed."
-                return
-            }
-        } else {
-            executablePath = Bundle.main.executablePath
-        }
-        guard let entitlementXML = getExecutableEntitlementXML(executablePath) else {
+        guard let entitlementXML = getLCEntitlementXML() else {
             entitlementContent = "Failed to load entitlement."
             return
         }
@@ -161,7 +148,6 @@ struct LCEntitlementView : View {
 struct LCJITLessDiagnoseView : View {
     @State var loaded = false
     @State var appGroupId = "Unknown"
-    @State var appGroupIdColor : Color = .gray
     @State var store : Store = .SideStore
     @State var certificateDataFound = false
     @State var certificatePasswordFound = false
@@ -199,7 +185,7 @@ struct LCJITLessDiagnoseView : View {
                         Text("lc.jitlessDiag.appGroupId".loc)
                         Spacer()
                         Text(appGroupId)
-                            .foregroundStyle(appGroupIdColor)
+                            .foregroundStyle(appGroupId == "Unknown" ? .red : .green)
                     }
                     HStack {
                         Text("lc.jitlessDiag.appGroupAccessible".loc)
@@ -226,16 +212,9 @@ struct LCJITLessDiagnoseView : View {
                         
                     }
                     NavigationLink {
-                        LCEntitlementView(isLiveProcess: false)
+                        LCEntitlementView()
                     } label: {
-                        Text("FlekDeck Entitlements")
-                    }
-                    if sharedModel.multiLCStatus == 0 {
-                        NavigationLink {
-                            LCEntitlementView(isLiveProcess: true)
-                        } label: {
-                            Text("LiveProcess Entitlements")
-                        }
+                        Text("lc.jielessDiag.entitlement".loc)
                     }
                 }
                     
@@ -347,26 +326,7 @@ struct LCJITLessDiagnoseView : View {
     }
     
     func onAppear() {
-        let task = SecTaskCreateFromSelf(nil)
-        guard let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.team-identifier" as CFString, nil),
-              let teamId = value.takeRetainedValue() as? String else {
-            errorInfo = "Failed to read com.apple.developer.team-identifier"
-            errorShow = true
-            return
-        }
-        expectedTeamId = teamId
-
-        if let fetchedAppGroupId = LCSharedUtils.appGroupID(), fetchedAppGroupId != "Unknown" {
-            appGroupId = fetchedAppGroupId
-            if UserDefaults.sideStoreExist() && fetchedAppGroupId != "group.com.SideStore.SideStore." + teamId {
-                appGroupIdColor = .orange
-            } else {
-                appGroupIdColor = .green
-            }
-        } else {
-            appGroupId = "lc.common.unknown".loc
-            appGroupIdColor = .red
-        }
+        appGroupId = LCSharedUtils.appGroupID() ?? "lc.common.unknown".loc
         store = LCUtils.store()
         appGroupAccessible = LCSharedUtils.appGroupPath() != nil
         certificateDataFound = LCUtils.certificateData() != nil
@@ -380,6 +340,14 @@ struct LCJITLessDiagnoseView : View {
         if certificateDataFound {
             validateCertificate()
         }
+        let task = SecTaskCreateFromSelf(nil)
+        guard let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.team-identifier" as CFString, nil), let teamId = value.takeRetainedValue() as? String else {
+            errorInfo = "Failed to read com.apple.developer.team-identifier"
+            errorShow = true
+            return
+        }
+        expectedTeamId = teamId
+        
         loaded = true
     }
     

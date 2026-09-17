@@ -117,9 +117,6 @@ class SharedModel: ObservableObject {
     @Published var tweakFolderNames: [String] = []
     
     @Published var apps : [LCAppModel] = []
-#if is32BitSupported
-    @Published var arm32EmuApps : [LCAppModel] = []
-#endif
     @Published var hiddenApps : [LCAppModel] = []
     
     @Published var pidCallback : ((NSNumber, Error?) -> Void)? = nil

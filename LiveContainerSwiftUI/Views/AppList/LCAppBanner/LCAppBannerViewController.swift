@@ -236,20 +236,11 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
     }
 
     private func openDataFolder() {
-        guard let container = configuration.model.uiSelectedContainer else {
-            showError("No data container is selected.")
+        guard let container = configuration.model.uiSelectedContainer,
+              let url = container.filesAppURL else {
             return
         }
-        guard let url = container.filesAppURL else {
-            showError("Unable to create a Files URL for this data container.")
-            return
-        }
-        UIApplication.shared.open(url, options: [:]) { [weak self] success in
-            guard !success else { return }
-            DispatchQueue.main.async {
-                self?.showError("Files could not open this data container.")
-            }
-        }
+        UIApplication.shared.open(url)
     }
 
     private func uninstall() async {

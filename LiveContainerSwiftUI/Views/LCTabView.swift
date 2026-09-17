@@ -39,33 +39,22 @@ struct LCTabView: View {
             Button("lc.common.copy".loc) { copyError() }
         } message: {
             Text(errorInfo)
-                .foregroundColor(.primary)
         }
         .sheet(isPresented: $crashReportShow) {
             NavigationView {
                 ScrollView {
                     Text(errorInfo)
                         .font(.system(size: 12).monospaced())
-                        .foregroundColor(.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .fixedSize(horizontal: false, vertical: false)
                         .textSelection(.enabled)
-                        .padding(.vertical, 8)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(Color(uiColor: .systemBackground))
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        if #available(iOS 16.0, *) {
-                            if let log = UserDefaults.lcShared().url(forKey: "LC32BitTranslationLayerLogFile") {
-                                ShareLink(item: log)
-                            } else {
-                                ShareLink(item: errorInfo)
-                            }
-                        } else {
-                            Button("lc.common.copy".loc) { copyError() }
-                        }
+                        Button("lc.common.copy".loc, action: {
+                            copyError()
+                        })
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("lc.common.ok".loc, action: {
@@ -126,7 +115,7 @@ struct LCTabView: View {
             case "certificate":
                 sharedModel.selectedTab = .settings
             case "source":
-                sharedModel.selectedTab = .apps
+                sharedModel.selectedTab = .sources
             default:
                 return
             }
@@ -160,32 +149,21 @@ struct LCTabView: View {
         DataManager.shared.model.mainWindowOpened = true
     }
     
-    @discardableResult
-    func checkLastLaunchError() -> Bool {
-        let defaults = UserDefaults.standard
-        let signingWasInterrupted = defaults.bool(forKey: "SigningInProgress")
-        defaults.removeObject(forKey: "SigningInProgress")
-
-        guard let raw = defaults.string(forKey: "error") else {
-            if signingWasInterrupted {
-                print("[FlekDeck/Error] stale SigningInProgress with no backend diagnostic; not showing a synthetic app error")
-            }
-            return false
+    func checkLastLaunchError() {
+        var errorStr = UserDefaults.standard.string(forKey: "error")
+        if errorStr == nil && UserDefaults.standard.bool(forKey: "SigningInProgress") {
+            errorStr = "lc.signer.crashDuringSignErr".loc
+            UserDefaults.standard.removeObject(forKey: "SigningInProgress")
         }
-        defaults.removeObject(forKey: "error")
-
-        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            print("[FlekDeck/Error] backend recorded an empty error; not showing a synthetic app error")
-            return false
-        }
-        errorInfo = raw
+        guard let errorStr else { return }
+        UserDefaults.standard.removeObject(forKey: "error")
+        errorInfo = errorStr
         crashReportShow = true
-        return true
     }
-
+    
     func copyError() { UIPasteboard.general.string = errorInfo }
-
-
+    
+    
     func checkTeamId() {
         if let certificateTeamId = UserDefaults.standard.string(forKey: "LCCertificateTeamId") {
             if DataManager.shared.model.multiLCStatus != 2 {
@@ -259,13 +237,10 @@ struct LCTabView: View {
     
     func checkGetTaskAllow() {
         let task = SecTaskCreateFromSelf(nil)
-        guard let value = SecTaskCopyValueForEntitlement(task, "get-task-allow" as CFString, nil) else {
-            NSLog("[FlekDeck] get-task-allow entitlement is absent; valid for distribution/JIT-less installs")
+        guard let value = SecTaskCopyValueForEntitlement(task, "get-task-allow" as CFString, nil), (value.takeRetainedValue() as? NSNumber)?.boolValue ?? false else {
+            errorInfo = "lc.settings.notDevCert".loc
+            errorShow = true
             return
-        }
-        let allowed = (value.takeRetainedValue() as? NSNumber)?.boolValue ?? false
-        if !allowed {
-            NSLog("[FlekDeck] get-task-allow=false; keeping this as a diagnostic instead of a launch error")
         }
     }
     
@@ -316,13 +291,11 @@ struct LCTabView: View {
 
         sharedModel.selectedTab = .apps
         closeDuplicatedWindow()
-        let presentedGuestCrash = checkLastLaunchError()
-        if !presentedGuestCrash {
-            checkTeamId()
-            checkAndSaveBundleId()
-            checkGetTaskAllow()
-            checkPrivateContainerBookmark()
-        }
+        checkLastLaunchError()
+        checkTeamId()
+        checkAndSaveBundleId()
+        checkGetTaskAllow()
+        checkPrivateContainerBookmark()
         checkiOSBeta()
         processPendingURLIfNeeded()
     }

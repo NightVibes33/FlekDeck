@@ -13,7 +13,6 @@ typedef NS_ENUM(NSInteger, Store){
 void refreshFile(NSString* execPath);
 int dyld_get_program_sdk_version(void);
 uint32_t dyld_get_sdk_version(const struct mach_header* mh);
-NSNumber *LCGetDefaultClassicMode(NSURL *appURL);
 
 @interface PKZipArchiver : NSObject
 
@@ -37,11 +36,6 @@ NSNumber *LCGetDefaultClassicMode(NSURL *appURL);
 + (NSProgress *)signFilesWithZSignWithURLs:(NSArray<NSURL*>*)urls completionHandler:(void (^)(BOOL success, NSError *error))completionHandler;
 + (NSString*)getCertTeamIdWithKeyData:(NSData*)keyData password:(NSString*)password;
 + (int)validateCertificateWithCompletionHandler:(void(^)(int status, NSDate *expirationDate, NSString *organizationalUnitName, NSString *error))completionHandler;
-
-#if is32BitSupported
-+ (BOOL)isTXMScriptRequired;
-+ (NSString *)base64EncodedUniversalJITScript;
-#endif
 
 + (BOOL)isAppGroupAltStoreLike;
 + (Store)store;

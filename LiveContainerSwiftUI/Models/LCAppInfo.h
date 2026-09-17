@@ -23,8 +23,6 @@ typedef NS_ENUM(NSInteger, MultitaskSpecified){
 @property NSString* relativeBundlePath;
 @property bool isShared;
 @property bool isJITNeeded;
-@property bool classicMode;
-@property (nonatomic, readonly) NSUInteger defaultClassicMode;
 @property bool isLocked;
 @property bool isHidden;
 @property bool doSymlinkInbox;
@@ -49,8 +47,6 @@ typedef NS_ENUM(NSInteger, MultitaskSpecified){
 @property NSString* remark;
 #if is32BitSupported
 @property bool is32bit;
-@property (nonatomic, strong) NSString* selected32BitEmulator;
-@property(readonly) bool is32bitEmulator;
 #endif
 @property UIColor* cachedColor;
 @property UIColor* cachedColorDark;

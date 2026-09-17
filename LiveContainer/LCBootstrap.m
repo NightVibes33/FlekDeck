@@ -187,7 +187,7 @@ static void LCInstallLegacyWindowSceneBridgeIfNeeded(NSBundle *appBundle) {
     return lcUserDefaults;
 }
 + (instancetype)lcSharedDefaults {
-    if(!lcSharedDefaults) {
+    if(!lcUserDefaults) {
         NSString *groupID = [LCSharedUtils appGroupID];
         lcSharedDefaults = (!groupID.length || [groupID isEqualToString:@"Unknown"])
             ? NSUserDefaults.standardUserDefaults
@@ -550,17 +550,8 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     const char **path = _CFGetProcessPath();
     const char *oldPath = *path;
     
-    // Overwrite @executable_path. Validate the guest executable before touching
-    // dyld process state; a malformed bundle must become a real error, not a NULL
-    // path passed into the private executable-path rewrite.
-    NSString *guestExecutablePath = appBundle.executablePath;
-    if(guestExecutablePath.length == 0) {
-        return @"App's executable path was not found. The bundle is malformed or incomplete.";
-    }
-    const char *appExecPath = guestExecutablePath.fileSystemRepresentation;
-    if(!appExecPath || !appExecPath[0]) {
-        return @"App's executable path could not be represented for launch.";
-    }
+    // Overwrite @executable_path
+    const char *appExecPath = appBundle.executablePath.fileSystemRepresentation;
     NSString *emulatorLauncherPath = nil;
     NSString *emulatorEntrySymbol = nil;
     int (*emulatorMain)(int, char **, char **) = NULL;
@@ -596,16 +587,9 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
                     NSError* err = nil;
                     BOOL isStale = false;
                     bookmarkURL = [NSURL URLByResolvingBookmarkData:bookmarkData options:0 relativeToURL:nil bookmarkDataIsStale:&isStale error:&err];
-                    if(!bookmarkURL) {
-                        NSString *detail = err.localizedDescription;
-                        return detail.length > 0
-                            ? [NSString stringWithFormat:@"Bookmark resolution failed: %@", detail]
-                            : @"Bookmark resolution failed without an NSError.";
-                    }
                     bool access = [bookmarkURL startAccessingSecurityScopedResource];
-                    if(!access) {
-                        return [NSString stringWithFormat:@"Security-scoped access denied for data container: %@",
-                                bookmarkURL.path ?: @"(unknown path)"];
+                    if(!bookmarkURL || !access) {
+                        return [@"Bookmark resolution failed or unable to access the container. You might need to readd the data storage. %@" stringByAppendingString:err.localizedDescription];
                     }
                     [lcUserDefaults removeObjectForKey:@"error"];
                 }
@@ -759,11 +743,8 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         }
     }
     
-    // Keep the flag in function scope so native builds/targets that do not
-    // define is32BitSupported still compile the shared loader code below.
-    bool is32bit = false;
 #if is32BitSupported
-    is32bit = [guestAppInfo[@"is32bit"] boolValue];
+    bool is32bit = [guestAppInfo[@"is32bit"] boolValue];
     if(is32bit) {
         if (!isJitEnabled) {
             return @"JIT is required to run 32-bit apps.";
@@ -814,72 +795,19 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         emulatorLauncherPath = selected32bitLayerBundle.executablePath;
         NSString *emulatorLoadPath = selected32bitLayerBundle.infoDictionary[@"LC32BitEmulatorLoadPath"];
         emulatorEntrySymbol = selected32bitLayerBundle.infoDictionary[@"LC32BitEmulatorEntrySymbol"];
-
-        BOOL hasLoadPath = emulatorLoadPath.length > 0;
-        BOOL hasEntrySymbol = emulatorEntrySymbol.length > 0;
-        if(hasLoadPath != hasEntrySymbol) {
-            appError = @"The selected 32-bit runtime has incomplete loader metadata (load path and entry symbol must both be present).";
-            NSLog(@"[LCBootstrap] %@", appError);
-            *path = oldPath;
-            return appError;
-        }
-
-        if(hasLoadPath && hasEntrySymbol) {
-            if(emulatorLauncherPath.length == 0 || ![fm isExecutableFileAtPath:emulatorLauncherPath]) {
-                appError = @"The selected 32-bit runtime launcher executable is missing or not executable.";
-                NSLog(@"[LCBootstrap] %@", appError);
-                *path = oldPath;
-                return appError;
-            }
+        if(emulatorLoadPath.length > 0 && emulatorEntrySymbol.length > 0) {
             NSString *resolvedLoadPath = [selected32bitLayerBundle.bundlePath stringByAppendingPathComponent:emulatorLoadPath];
-            BOOL loadImageIsDirectory = NO;
-            if(![fm fileExistsAtPath:resolvedLoadPath isDirectory:&loadImageIsDirectory] || loadImageIsDirectory) {
-                appError = [NSString stringWithFormat:@"32-bit runtime load image is missing or invalid: %@", resolvedLoadPath];
+            if(![fm fileExistsAtPath:resolvedLoadPath]) {
+                appError = [NSString stringWithFormat:@"32-bit runtime load image is missing: %@", resolvedLoadPath];
                 NSLog(@"[LCBootstrap] %@", appError);
                 *path = oldPath;
                 return appError;
             }
-            const char *loadImagePath = resolvedLoadPath.fileSystemRepresentation;
-            const char *launcherPath = emulatorLauncherPath.fileSystemRepresentation;
-            if(!loadImagePath || !launcherPath) {
-                appError = @"The selected 32-bit runtime paths could not be represented for launch.";
-                NSLog(@"[LCBootstrap] %@", appError);
-                *path = oldPath;
-                return appError;
-            }
-            char *ownedLoadImagePath = strdup(loadImagePath);
-            if(!ownedLoadImagePath) {
-                appError = @"Unable to allocate the 32-bit runtime load path.";
-                NSLog(@"[LCBootstrap] %@", appError);
-                *path = oldPath;
-                return appError;
-            }
-            appExecPath = ownedLoadImagePath;
-            overwriteExecPath(launcherPath);
+            appExecPath = strdup(resolvedLoadPath.fileSystemRepresentation);
+            overwriteExecPath(emulatorLauncherPath.fileSystemRepresentation);
         } else {
-            // Compatibility fallback for older translation-layer bundles. A legacy
-            // runtime still has to contain a real executable before it can be used.
-            if(emulatorLauncherPath.length == 0 || ![fm isExecutableFileAtPath:emulatorLauncherPath]) {
-                appError = @"The selected legacy 32-bit runtime executable is missing or not executable.";
-                NSLog(@"[LCBootstrap] %@", appError);
-                *path = oldPath;
-                return appError;
-            }
-            const char *legacyPath = emulatorLauncherPath.fileSystemRepresentation;
-            if(!legacyPath) {
-                appError = @"The selected legacy 32-bit runtime path could not be represented for launch.";
-                NSLog(@"[LCBootstrap] %@", appError);
-                *path = oldPath;
-                return appError;
-            }
-            char *ownedLegacyPath = strdup(legacyPath);
-            if(!ownedLegacyPath) {
-                appError = @"Unable to allocate the legacy 32-bit runtime path.";
-                NSLog(@"[LCBootstrap] %@", appError);
-                *path = oldPath;
-                return appError;
-            }
-            appExecPath = ownedLegacyPath;
+            // Compatibility fallback for older LiveExec32 bundles.
+            appExecPath = strdup(selected32bitLayerBundle.executablePath.fileSystemRepresentation);
             overwriteExecPath(appExecPath);
         }
     }
@@ -1162,12 +1090,6 @@ int LiveContainerMain(int argc, char *argv[]) {
             lcLaunchURL = launchUrl;
             [lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
         }
-        // Start a new guest-error epoch. Never attribute a previous app's stale
-        // diagnostic to the guest we are about to launch.
-        [lcUserDefaults removeObjectForKey:@"error"];
-        // Start a new guest-error epoch. Never attribute a previous app's stale
-        // diagnostic to the guest we are about to launch.
-        [lcUserDefaults removeObjectForKey:@"error"];
         NSSetUncaughtExceptionHandler(&exceptionHandler);
         NSString *appError = invokeAppMain(selectedApp, selectedContainer, argc, argv);
         if (appError) {

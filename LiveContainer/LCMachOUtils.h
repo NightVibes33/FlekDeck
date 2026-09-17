@@ -8,8 +8,6 @@ typedef void (^LCParseMachOCallback)(const char *path, struct mach_header_64 *he
 
 void LCPatchAppBundleFixupARM64eSlice(NSURL *bundleURL);
 NSString *LCParseMachO(const char *path, bool readOnly, NS_NOESCAPE LCParseMachOCallback callback);
-NSString *LCInspectMachOArchitectures(const char *path, bool *hasArm64, bool *hasArm32, bool *isEncrypted);
-NSString *LCReadMachOSDKVersion(const char *path, bool preferArm32, uint32_t *sdkVersion);
 void LCPatchAddRPath(const char *path, struct mach_header_64 *header);
 int LCPatchExecSlice(const char *path, struct mach_header_64 *header, bool doInject);
 void LCChangeMachOUUID(struct mach_header_64 *header);
@@ -18,6 +16,5 @@ bool LCIsMachOEncrypted(struct mach_header_64 *header);
 uint64_t LCFindSymbolOffset(const char *basePath, const char *symbol);
 struct mach_header_64 *LCGetLoadedImageHeader(int i0, const char* name);
 NSString* getEntitlementXML(struct mach_header_64* header, void** entitlementXMLPtrOut);
-NSString* getExecutableEntitlementXML(NSString* executablePath);
 NSString* getLCEntitlementXML(void);
 bool checkCodeSignature(const char* path);

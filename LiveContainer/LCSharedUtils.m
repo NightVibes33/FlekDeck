@@ -162,7 +162,7 @@ extern NSBundle *lcMainBundle;
     NSString *urlScheme = nil;
     NSString *tsPath = [NSString stringWithFormat:@"%@/../_TrollStore", NSBundle.mainBundle.bundlePath];
     UIApplication *application = [NSClassFromString(@"UIApplication") sharedApplication];
-
+    
     int tries = 1;
     if (!self.certificatePassword) {
         if (!access(tsPath.UTF8String, F_OK)) {
@@ -177,82 +177,27 @@ extern NSBundle *lcMainBundle;
         tries = 2;
         urlScheme = [NSString stringWithFormat:@"%@://livecontainer-relaunch", lcAppUrlScheme];
     }
-
     NSURL *launchURL = [NSURL URLWithString:[NSString stringWithFormat:urlScheme, NSBundle.mainBundle.bundleIdentifier]];
-    if(!launchURL) {
-        NSLog(@"[FlekDeck/Relaunch] could not construct relaunch URL from scheme %@", urlScheme);
-        return NO;
-    }
-    if(![application canOpenURL:launchURL]) {
-        // This is a host relaunch failure, not a guest-app crash. Keep FlekDeck
-        // alive so the caller can recover instead of exiting and later showing
-        // a misleading guest crash report.
-        NSLog(@"[FlekDeck/Relaunch] iOS cannot open relaunch URL %@; keeping host alive", launchURL);
-        return NO;
-    }
 
-    for (int i = 0; i < tries; i++) {
-        [application openURL:launchURL options:@{} completionHandler:^(BOOL success) {
-            if(!success) {
-                NSLog(@"[FlekDeck/Relaunch] openURL rejected %@; keeping host alive", launchURL);
-                return;
-            }
-
-            // The replacement process was accepted. Only now terminate this
-            // incarnation so the newly launched host can take ownership.
-            __asm__ __volatile__ (
-                "mov x0, #31\n"
-                "mov x16, #26\n"
-                "svc #0x80\n"
-            );
-            raise(SIGKILL);
-        }];
-    }
-    return YES;
-}
-
-+ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode {
-    if(classicMode == 0) {
-        return [self launchToGuestApp];
-    }
-
-    _LSOpenConfiguration *configuration = [[PrivClass(_LSOpenConfiguration) alloc] init];
-    LSApplicationWorkspace *workspace = [PrivClass(LSApplicationWorkspace) defaultWorkspace];
-    NSString *bundleIdentifier = lcMainBundle.bundleIdentifier ?: NSBundle.mainBundle.bundleIdentifier;
-    SEL openSelector = @selector(openApplicationWithBundleIdentifier:configuration:completionHandler:);
-    SEL optionsSelector = @selector(setFrontBoardOptions:);
-    if(!configuration || !workspace || bundleIdentifier.length == 0 ||
-       ![workspace respondsToSelector:openSelector] || ![configuration respondsToSelector:optionsSelector]) {
-        NSLog(@"[FlekDeck/ClassicMode] private launch surface unavailable; falling back to normal launch");
-        return [self launchToGuestApp];
-    }
-
-    @try {
-        configuration.frontBoardOptions = @{ @"__ActivateAsClassic": @(classicMode) };
-        [workspace openApplicationWithBundleIdentifier:bundleIdentifier
-                                         configuration:configuration
-                                     completionHandler:^(BOOL success, NSError *error) {
-            NSLog(@"[FlekDeck/ClassicMode] success=%d mode=%lu error=%@", success, (unsigned long)classicMode, error);
-            if(success) {
+    if ([application canOpenURL:launchURL]) {
+        //[UIApplication.sharedApplication suspend];
+        for (int i = 0; i < tries; i++) {
+            [application openURL:launchURL options:@{} completionHandler:^(BOOL b) {
+                // syscall(SYS_ptrace, PT_DENY_ATTACH, 0, 0, 0);
                 __asm__ __volatile__ (
                     "mov x0, #31\n"
                     "mov x16, #26\n"
                     "svc #0x80\n"
                 );
                 raise(SIGKILL);
-                return;
-            }
-            // Rejected Classic launch is not a host crash. Fall back to the
-            // exact normal relaunch path and keep the real private error in log.
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self launchToGuestApp];
-            });
-        }];
+            }];
+        }
         return YES;
-    } @catch (NSException *exception) {
-        NSLog(@"[FlekDeck/ClassicMode] launch exception %@: %@; falling back", exception.name, exception.reason);
-        return [self launchToGuestApp];
+    } else {
+        // none of the ways work somehow (e.g. LC itself was hidden), we just exit and wait for user to manually launch it
+        exit(0);
     }
+    return NO;
 }
 
 + (BOOL)launchToGuestAppWithURL:(NSURL *)url {
@@ -280,18 +225,7 @@ extern NSBundle *lcMainBundle;
         // Attempt to restart LiveContainer with the selected guest app
         [lcUserDefaults setObject:launchBundleId forKey:@"selected"];
         [lcUserDefaults setObject:containerFolderName forKey:@"selectedContainer"];
-        bool isSharedApp = false;
-        NSBundle *appBundle = [self findBundleWithBundleId:launchBundleId isSharedAppOut:&isSharedApp];
-        NSDictionary *appInfo = [NSDictionary dictionaryWithContentsOfFile:
-            [appBundle.bundlePath stringByAppendingPathComponent:@"LCAppInfo.plist"]];
-        NSUInteger classicMode = 0;
-        if([appInfo[@"classicMode"] boolValue]) {
-            NSNumber *cachedClassicMode = appInfo[@"LCClassicModeCache"][@"defaultClassicMode"];
-            if([cachedClassicMode isKindOfClass:NSNumber.class]) {
-                classicMode = cachedClassicMode.unsignedIntegerValue;
-            }
-        }
-        return [self launchToGuestAppWithClassicMode:classicMode];
+        return [self launchToGuestApp];
     }
     
     return NO;
