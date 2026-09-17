@@ -1,4 +1,4 @@
-name: Converge FlekDeck Temp Builders
+name: Validate FlekDeck Temp Builders
 
 on:
   workflow_dispatch:
@@ -7,24 +7,27 @@ on:
     paths:
       - 'Tools/patch_flekdeck_workflow_convergence.py'
       - '.github/workflows/converge-flekdeck-temp-builders.yml'
+      - '.github/workflows/build-flekdeck-sidestore-parity-temp.yml'
+      - '.github/workflows/build-flekdeck-full-parity-temp.yml'
+      - '.github/workflows/build-flekdeck-32bit-temp.yml'
+      - '.github/workflows/build-flekdeck-32bit-parity-temp.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  converge:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Make SideStore build canonical
+      - name: Verify SideStore-compatible builder is canonical
         run: |
           set -euxo pipefail
-          python3 Tools/patch_flekdeck_workflow_convergence.py
-          git diff --check
           grep -q 'workflow_call:' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
+          grep -q 'test "$BUNDLE_ID" = "com.fs.flekdeck"' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
+          grep -q 'AAAAA11111.com.fs.flekdeck' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
+          grep -q 'patch_flekdeck_sidestore_identity.py' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
           for f in \
             .github/workflows/build-flekdeck-full-parity-temp.yml \
             .github/workflows/build-flekdeck-32bit-temp.yml \
@@ -33,20 +36,3 @@ jobs:
             ! grep -q 'flekdeck-final-ondevice-audit.yml' "$f"
             ! grep -q 'patch_direct_multitask_host_bridge.py' "$f"
           done
-
-      - name: Bake workflow convergence
-        run: |
-          set -euxo pipefail
-          git add -- \
-            .github/workflows/build-flekdeck-sidestore-parity-temp.yml \
-            .github/workflows/build-flekdeck-full-parity-temp.yml \
-            .github/workflows/build-flekdeck-32bit-temp.yml \
-            .github/workflows/build-flekdeck-32bit-parity-temp.yml
-          if git diff --cached --quiet; then
-            echo 'Temp builders already converge on the SideStore-compatible build.'
-            exit 0
-          fi
-          git config user.name 'NightVibes33 Actions'
-          git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Converge temp builders on SideStore-compatible artifact'
-          git push origin HEAD:temp/32bit-liveexec-data-folder
