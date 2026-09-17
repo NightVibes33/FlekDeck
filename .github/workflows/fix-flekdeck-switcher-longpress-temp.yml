@@ -1,4 +1,4 @@
-name: FlekDeck App Switcher + Hold Menu Fix
+name: FlekDeck App Switcher + Hold Menu + Error UI Fix
 
 on:
   workflow_dispatch:
@@ -8,13 +8,14 @@ on:
       - '.github/workflows/fix-flekdeck-switcher-longpress-temp.yml'
       - 'Tools/patch_flekdeck_switcher_longpress_fix.py'
       - 'Tools/patch_flekdeck_classic_mode_switcher_guard.py'
+      - 'Tools/patch_flekdeck_error_ui_parity.py'
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Restore switcher + reliable app hold menu
+    name: Restore switcher + hold menu + readable errors
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -34,15 +35,17 @@ jobs:
         with:
           xcode-version: '26.6'
 
-      - name: Apply switcher and hold-menu fix
+      - name: Apply switcher hold-menu and error UI fixes
         shell: bash
         run: |
           set -euxo pipefail
           python3 -m py_compile \
             Tools/patch_flekdeck_classic_mode_switcher_guard.py \
-            Tools/patch_flekdeck_switcher_longpress_fix.py
+            Tools/patch_flekdeck_switcher_longpress_fix.py \
+            Tools/patch_flekdeck_error_ui_parity.py
           python3 Tools/patch_flekdeck_classic_mode_switcher_guard.py
           python3 Tools/patch_flekdeck_switcher_longpress_fix.py
+          python3 Tools/patch_flekdeck_error_ui_parity.py
 
           grep -q 'appInfo.is32bit ? false : (multitask ?? shouldLaunchInMultitaskMode)' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'classicMode != 0) ? false' LiveContainerSwiftUI/Models/LCAppModel.swift
@@ -52,12 +55,17 @@ jobs:
           grep -q 'contextMenuConfigurationForItemAt' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardPageCell.swift
           grep -q 'homeOpenDataFolder' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -q 'lc.appBanner.openDataFolder' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'Text(displayErrorInfo(errorInfo))' LiveContainerSwiftUI/Views/LCTabView.swift
+          grep -q 'fixedSize(horizontal: false, vertical: true)' LiveContainerSwiftUI/Views/LCTabView.swift
+          grep -q 'Text(displayErrorInfo(errorInfo))' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
 
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardPageCell.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
 
       - name: Preserve existing FlekDeck direct-build compatibility
         shell: bash
@@ -98,7 +106,7 @@ jobs:
             -project LiveContainer.xcodeproj \
             -scheme LiveContainer \
             -configuration Release \
-            -archivePath "$PWD/build/FlekDeck-switcher-hold-fix.xcarchive" \
+            -archivePath "$PWD/build/FlekDeck-switcher-hold-error-fix.xcarchive" \
             -destination 'generic/platform=iOS' \
             CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee build/xcodebuild.log | xcpretty
@@ -113,7 +121,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          APP="$(find build/FlekDeck-switcher-hold-fix.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          APP="$(find build/FlekDeck-switcher-hold-error-fix.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$APP"
           ditto build/liveexec-package/Payload/LiveExec32.app "$APP/LiveExec32.app"
           test -s Resources/universal.js
@@ -127,17 +135,17 @@ jobs:
           mkdir -p build/Payload
           ditto "$APP" "build/Payload/$(basename "$APP")"
           cd build
-          zip -qry FlekDeck-switcher-hold-fix-temp-unsigned.ipa Payload
-          unzip -t FlekDeck-switcher-hold-fix-temp-unsigned.ipa >/dev/null
-          shasum -a 256 FlekDeck-switcher-hold-fix-temp-unsigned.ipa | tee FlekDeck-switcher-hold-fix-temp-unsigned.sha256
+          zip -qry FlekDeck-switcher-hold-error-fix-temp-unsigned.ipa Payload
+          unzip -t FlekDeck-switcher-hold-error-fix-temp-unsigned.ipa >/dev/null
+          shasum -a 256 FlekDeck-switcher-hold-error-fix-temp-unsigned.ipa | tee FlekDeck-switcher-hold-error-fix-temp-unsigned.sha256
 
       - name: Upload fixed IPA
         uses: actions/upload-artifact@v4
         with:
-          name: FlekDeck-switcher-hold-fix-temp-unsigned
+          name: FlekDeck-switcher-hold-error-fix-temp-unsigned
           path: |
-            build/FlekDeck-switcher-hold-fix-temp-unsigned.ipa
-            build/FlekDeck-switcher-hold-fix-temp-unsigned.sha256
+            build/FlekDeck-switcher-hold-error-fix-temp-unsigned.ipa
+            build/FlekDeck-switcher-hold-error-fix-temp-unsigned.sha256
           if-no-files-found: error
           compression-level: 0
 
@@ -150,19 +158,22 @@ jobs:
 
           python3 Tools/patch_flekdeck_classic_mode_switcher_guard.py
           python3 Tools/patch_flekdeck_switcher_longpress_fix.py
+          python3 Tools/patch_flekdeck_error_ui_parity.py
 
           git add -- \
             Tools/patch_flekdeck_classic_mode_parity.py \
             LiveContainerSwiftUI/Models/LCAppModel.swift \
             LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift \
-            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift \
+            LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
+            LiveContainerSwiftUI/Views/LCTabView.swift
 
           if git diff --cached --quiet; then
-            echo 'Switcher and hold-menu fix already baked.'
+            echo 'Switcher hold-menu and error UI fixes already baked.'
             exit 0
           fi
 
           git config user.name 'NightVibes33 Actions'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Restore App Switcher and reliable app hold menu'
+          git commit -m 'Restore App Switcher hold menu and readable errors'
           git push origin HEAD:temp/32bit-liveexec-data-folder
