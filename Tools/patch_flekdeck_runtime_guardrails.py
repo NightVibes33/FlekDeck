@@ -7,6 +7,7 @@ import runpy
 runpy.run_path("Tools/patch_flekdeck_defaults_settings_stability.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_signing_stability.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_loader_guard.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_error_transport.py", run_name="__main__")
 
@@ -237,5 +238,11 @@ if 'TextField("", text: $liveExec32Path)' in settings:
     raise SystemExit("unsafe raw ARM32 runtime field survived")
 if "Default 32-bit Runtime" not in settings:
     raise SystemExit("validated ARM32 runtime picker is missing")
+
+utils_impl = Path("LiveContainerSwiftUI/Utilities/LCUtils.m").read_text()
+if "NSError *error;" in utils_impl:
+    raise SystemExit("uninitialized NSError local remains in signer utilities")
+if "if (error) *error = nil;" not in utils_impl:
+    raise SystemExit("ZSign loader does not initialize its NSError out-parameter")
 
 print("FlekDeck runtime guardrails applied with full post-scan protections")
