@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 
 # The Home app context menu is owned by the inner icon UICollectionView. The
 # Springboard's parent long-press recognizer is only for edit-mode dragging. If
@@ -84,3 +85,9 @@ if "UIPanGestureRecognizer" in method:
     raise SystemExit("context-menu arbitration unexpectedly touches pan gestures")
 
 print("FlekDeck Home hold menu arbitration restored without touching App Switcher pan gestures")
+
+# This script is the last leaf of the canonical runtime guardrail. Keep the
+# user's other reported UI regression adjacent to it: once gesture ownership is
+# final, scope guest diagnostics to the current launch so old app errors/logs
+# cannot bleed into the next app.
+runpy.run_path("Tools/patch_flekdeck_error_session.py", run_name="__main__")
