@@ -1,0 +1,168 @@
+name: FlekDeck App Switcher + Hold Menu Fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [temp/32bit-liveexec-data-folder]
+    paths:
+      - '.github/workflows/fix-flekdeck-switcher-longpress-temp.yml'
+      - 'Tools/patch_flekdeck_switcher_longpress_fix.py'
+      - 'Tools/patch_flekdeck_classic_mode_switcher_guard.py'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Restore switcher + reliable app hold menu
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      LIVEEXEC_RUNTIME_URL: https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/download/liveexec32-r89/LiveExec32-r89.zip
+      LIVEEXEC_RUNTIME_SHA256: 9d35d8d6d4c9c5188e6a53e797de307e6aab579ab43b8fdbb05c8e1b5e8cf7c2
+      LIVEEXEC_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
+
+    steps:
+      - name: Checkout temp branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Apply switcher and hold-menu fix
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile \
+            Tools/patch_flekdeck_classic_mode_switcher_guard.py \
+            Tools/patch_flekdeck_switcher_longpress_fix.py
+          python3 Tools/patch_flekdeck_classic_mode_switcher_guard.py
+          python3 Tools/patch_flekdeck_switcher_longpress_fix.py
+
+          grep -q 'appInfo.is32bit ? false : (multitask ?? shouldLaunchInMultitaskMode)' LiveContainerSwiftUI/Models/LCAppModel.swift
+          ! grep -q 'classicMode != 0) ? false' LiveContainerSwiftUI/Models/LCAppModel.swift
+          ! grep -q 'classicMode == 0 ?' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -q 'longPressGesture.delegate = dragManager' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+          grep -q 'gestureRecognizerShouldBegin' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+          grep -q 'contextMenuConfigurationForItemAt' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardPageCell.swift
+          grep -q 'homeOpenDataFolder' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'lc.appBanner.openDataFolder' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardPageCell.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+
+      - name: Preserve existing FlekDeck direct-build compatibility
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for script in \
+            Tools/patch_direct_multitask_host_bridge.py \
+            Tools/patch_stikdebug_pid_verification.py \
+            Tools/patch_guest_native_pip_bridge.py \
+            Tools/patch_youtube_native_pip_render.py \
+            Tools/patch_pip_state_separation.py; do
+            [ ! -f "$script" ] || python3 "$script"
+          done
+
+      - name: Fetch pinned LiveExec32 r89
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf build/liveexec-source build/liveexec-package
+          mkdir -p build/liveexec-source build/liveexec-package/Payload
+          RUNTIME_ZIP="$RUNNER_TEMP/LiveExec32-r89.zip"
+          curl --fail --location --retry 3 --retry-all-errors -o "$RUNTIME_ZIP" "$LIVEEXEC_RUNTIME_URL"
+          echo "$LIVEEXEC_RUNTIME_SHA256  $RUNTIME_ZIP" | shasum -a 256 -c -
+          unzip -q "$RUNTIME_ZIP" -d build/liveexec-source
+          EMU="$(find build/liveexec-source -maxdepth 2 -type d -name 'LiveExec32.app' -print -quit)"
+          test -n "$EMU"
+          ditto "$EMU" build/liveexec-package/Payload/LiveExec32.app
+          test -f "build/liveexec-package/Payload/LiveExec32.app/$LIVEEXEC_LOAD_PATH"
+          nm -gU "build/liveexec-package/Payload/LiveExec32.app/$LIVEEXEC_LOAD_PATH" > "$RUNNER_TEMP/liveexec32.symbols"
+          grep -q '_LC32RunGuest' "$RUNNER_TEMP/liveexec32.symbols"
+
+      - name: Build fixed FlekDeck
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck-switcher-hold-fix.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -300 || true
+            exit "$status"
+          fi
+
+      - name: Embed LiveExec32 and package IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="$(find build/FlekDeck-switcher-hold-fix.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
+          ditto build/liveexec-package/Payload/LiveExec32.app "$APP/LiveExec32.app"
+          test -s Resources/universal.js
+          ditto Resources/universal.js "$APP/universal.js"
+          find "$APP" -type d -name _CodeSignature -prune -exec rm -rf {} + || true
+          find "$APP" -type f -name embedded.mobileprovision -delete || true
+          test -f "$APP/LiveExec32.app/$LIVEEXEC_LOAD_PATH"
+          test -d "$APP/LiveExec32.app/RootFS"
+
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          ditto "$APP" "build/Payload/$(basename "$APP")"
+          cd build
+          zip -qry FlekDeck-switcher-hold-fix-temp-unsigned.ipa Payload
+          unzip -t FlekDeck-switcher-hold-fix-temp-unsigned.ipa >/dev/null
+          shasum -a 256 FlekDeck-switcher-hold-fix-temp-unsigned.ipa | tee FlekDeck-switcher-hold-fix-temp-unsigned.sha256
+
+      - name: Upload fixed IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-switcher-hold-fix-temp-unsigned
+          path: |
+            build/FlekDeck-switcher-hold-fix-temp-unsigned.ipa
+            build/FlekDeck-switcher-hold-fix-temp-unsigned.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Bake validated fix into temp source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git reset --hard "$GITHUB_SHA"
+          git clean -fd
+
+          python3 Tools/patch_flekdeck_classic_mode_switcher_guard.py
+          python3 Tools/patch_flekdeck_switcher_longpress_fix.py
+
+          git add -- \
+            Tools/patch_flekdeck_classic_mode_parity.py \
+            LiveContainerSwiftUI/Models/LCAppModel.swift \
+            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift \
+            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+
+          if git diff --cached --quiet; then
+            echo 'Switcher and hold-menu fix already baked.'
+            exit 0
+          fi
+
+          git config user.name 'NightVibes33 Actions'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'Restore App Switcher and reliable app hold menu'
+          git push origin HEAD:temp/32bit-liveexec-data-folder
