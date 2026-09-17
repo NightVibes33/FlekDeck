@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/flekdeck-final-ondevice-audit.yml'
       - 'Tools/patch_flekdeck_runtime_guardrails.py'
+      - 'Tools/patch_flekdeck_user_regressions.py'
       - 'Tools/patch_flekdeck_ondevice_regressions.py'
       - 'Tools/patch_flekdeck_liveexec32_loader_guard.py'
       - 'Tools/patch_flekdeck_error_transport.py'
@@ -44,6 +45,7 @@ jobs:
           set -euxo pipefail
           python3 -m py_compile \
             Tools/patch_flekdeck_runtime_guardrails.py \
+            Tools/patch_flekdeck_user_regressions.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
             Tools/patch_flekdeck_liveexec32_loader_guard.py \
             Tools/patch_flekdeck_error_transport.py \
@@ -55,18 +57,36 @@ jobs:
             Tools/patch_flekdeck_classic_launch_isolation.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
 
+          # Error authenticity: show only the real backend string.
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          ! grep -q 'errorStr = "lc.signer.crashDuringSignErr"' LiveContainerSwiftUI/Views/LCTabView.swift
           grep -q 'let presentedGuestCrash = checkLastLaunchError()' LiveContainerSwiftUI/Views/LCTabView.swift
           grep -q 'ShareLink(item: errorInfo)' LiveContainerSwiftUI/Views/LCTabView.swift
-          grep -q 'The security-scoped resource denied access.' LiveContainer/LCBootstrap.m
+          grep -q 'Bookmark resolution failed without an NSError.' LiveContainer/LCBootstrap.m
+          grep -q 'Security-scoped access denied for data container:' LiveContainer/LCBootstrap.m
+          ! grep -q 'The security-scoped resource denied access.' LiveContainer/LCBootstrap.m
           ! grep -q 'stringByAppendingString:err.localizedDescription' LiveContainer/LCBootstrap.m
 
+          # Compatibility Mode must not execute private SpringBoard construction.
           ! sed -n '/- (void)setClassicMode:/,/- (NSUInteger)defaultClassicMode/p' LiveContainerSwiftUI/Models/LCAppInfo.m | grep -q 'defaultClassicMode]'
           grep -q 'let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode' LiveContainerSwiftUI/Models/LCAppModel.swift
-          grep -q 'instancesRespondToSelector:modernInit' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
-          ! grep -q 'NSCAssert(springBoard' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          ! grep -q 'NSCAssert(' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          ! grep -q 'assert(' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          ! grep -q 'SBApplication' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          ! grep -q 'SpringBoard.framework' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'return @12;' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'return @1;' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'if(success)' LiveContainer/LCSharedUtils.m
+          grep -q 'falling back to normal launch' LiveContainer/LCSharedUtils.m
 
+          # Home keeps main's gesture ownership. Open Data Folder is context menu only.
+          ! grep -q 'longPressGesture.delegate = dragManager' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+          ! grep -q 'gestureRecognizerShouldBegin' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+          grep -q 'homeOpenDataFolder' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'lc.appBanner.openDataFolder' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+
+          # ARM32 runtime integrity.
           grep -q 'guestExecutablePath.length == 0' LiveContainer/LCBootstrap.m
           grep -q 'hasLoadPath != hasEntrySymbol' LiveContainer/LCBootstrap.m
           grep -q 'LCInspectMachOArchitectures' LiveContainer/LCMachOUtils.h
@@ -83,6 +103,8 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
 
       - name: Preserve non-switcher direct-build compatibility
         run: |
@@ -101,31 +123,48 @@ jobs:
           git fetch --no-tags origin main
           rm -rf /tmp/flek-main-switcher
           git worktree add --detach /tmp/flek-main-switcher origin/main
+
+          # Reproduce main's actual direct-build switcher surface, including the
+          # Objective-C host-window selector LCUtils calls, then its Single/Home
+          # bottom-swipe compatibility layer.
+          (cd /tmp/flek-main-switcher && python3 Tools/patch_direct_multitask_host_bridge.py)
           (cd /tmp/flek-main-switcher && python3 Tools/patch_parallel_guest_viewport.py)
 
           protected=(
             MultitaskSupport/MultitaskDockView.swift
             MultitaskSupport/DecoratedAppSceneViewController.m
             MultitaskSupport/MultitaskAppWindow.swift
+            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
           )
-          for p in "${protected[@]}"; do cp "/tmp/flek-main-switcher/$p" "$p"; done
+          for p in "${protected[@]}"; do
+            cp "/tmp/flek-main-switcher/$p" "$p"
+          done
 
+          # Rebuild only the guest hook side against the protected main host.
           python3 Tools/patch_parallel_guest_viewport.py
+
           for p in "${protected[@]}"; do
             ref_hash="$(git -C /tmp/flek-main-switcher hash-object "$p")"
             built_hash="$(git hash-object "$p")"
             test "$built_hash" = "$ref_hash" || {
-              echo "SWITCHER REGRESSION: $p differs from generated main" >&2
+              echo "MAIN HOME/SWITCHER REGRESSION: $p differs from generated main" >&2
               diff -u "/tmp/flek-main-switcher/$p" "$p" || true
               exit 1
             }
           done
+
+          grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
           grep -q 'FlekHomeSingleSwitcherGestureBridge' MultitaskSupport/MultitaskDockView.swift
           grep -q 'FlekSingleGuestSwitcherGestureRequested' MultitaskSupport/MultitaskDockView.swift
           grep -q 'MultitaskSwipeZone' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
           grep -q '!hasForegroundAppWindow()' MultitaskSupport/MultitaskDockView.swift
+          ! grep -q 'longPressGesture.delegate = dragManager' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+          ! grep -q 'gestureRecognizerShouldBegin' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
 
       - name: Static analyzer
         run: |
@@ -210,6 +249,7 @@ jobs:
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           git add -- \
             Tools/patch_flekdeck_runtime_guardrails.py \
+            Tools/patch_flekdeck_user_regressions.py \
             Tools/patch_flekdeck_runtime_stability.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
             Tools/patch_flekdeck_liveexec32_loader_guard.py \
@@ -232,6 +272,8 @@ jobs:
             LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
             LiveContainerSwiftUI/Models/LCAppInfo.m \
             LiveContainerSwiftUI/Models/LCAppModel.swift \
+            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift \
+            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift \
             LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
             LiveContainerSwiftUI/Views/LCTabView.swift \
             LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
