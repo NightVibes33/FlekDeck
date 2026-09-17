@@ -1,0 +1,193 @@
+name: FlekDeck 32-bit Temp IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - temp/32bit-liveexec-data-folder
+    paths:
+      - '.github/workflows/build-flekdeck-32bit-temp.yml'
+      - 'Tools/patch_flekdeck_liveexec32.py'
+      - 'LiveContainer/**'
+      - 'LiveContainerSwiftUI/**'
+      - 'MultitaskSupport/**'
+      - 'TweakLoader/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      LIVEEXEC_SOURCE_COMMIT: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
+      LIVEEXEC_BUILD_REVISION: '89'
+      LIVEEXEC_HOST_REPO_COMMIT: 44733db43df3a50849abddd31ff52ac021d0fede
+      LIVEEXEC_IPA_SHA256: b652d7206625778a4c52d6c0e7b7c97bdb1110ce91f7fbd2b0c8aa3611a553b1
+      LIVEEXEC_IPA_URL: https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/download/nightly/LiveContainer.ipa
+
+    steps:
+      - name: Checkout FlekDeck temp branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Preserve FlekDeck direct-build compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            Tools/patch_direct_multitask_host_bridge.py \
+            Tools/patch_stikdebug_pid_verification.py \
+            Tools/patch_guest_native_pip_bridge.py \
+            Tools/patch_youtube_native_pip_render.py \
+            Tools/patch_pip_state_separation.py; do
+            if [ -f "$script" ]; then
+              python3 "$script"
+            fi
+          done
+
+      - name: Apply LiveExec32 and data-folder integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Tools/patch_flekdeck_liveexec32.py
+          python3 -m py_compile Tools/patch_flekdeck_liveexec32.py
+          grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
+          grep -q 'LC32BitEmulatorLoadPath' LiveContainer/LCBootstrap.m
+          grep -q 'LC32BitEmulatorEntrySymbol' LiveContainer/LCBootstrap.m
+          grep -q 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
+          grep -q 'seedBundled32BitRuntime' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          grep -q 'if model.uiSelectedContainer != nil' LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift
+          ! grep -q 'if !model.uiIsShared, model.uiSelectedContainer != nil' LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+
+      - name: Fetch pinned working LiveExec32 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/liveexec-source
+          curl --fail --location --retry 4 --retry-all-errors \
+            "$LIVEEXEC_IPA_URL" \
+            --output build/liveexec-source/LiveContainer.ipa
+          echo "$LIVEEXEC_IPA_SHA256  build/liveexec-source/LiveContainer.ipa" | shasum -a 256 -c -
+          unzip -q build/liveexec-source/LiveContainer.ipa -d build/liveexec-source/extracted
+          EMU="$(find build/liveexec-source/extracted/Payload -maxdepth 2 -type d -name 'LiveExec32.app' -print -quit)"
+          test -n "$EMU"
+          test -f "$EMU/Info.plist"
+          test -f "$EMU/LiveExec32"
+          test -d "$EMU/RootFS"
+          test -f "$EMU/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC_SOURCE_COMMIT"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC_BUILD_REVISION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$EMU/Info.plist")" = "Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorEntrySymbol' "$EMU/Info.plist")" = "LC32RunGuest"
+          nm -gU "$EMU/Frameworks/LiveExec32Shared.framework/LiveExec32Shared" | grep -q '_LC32RunGuest'
+          rm -rf build/LiveExec32.app
+          ditto "$EMU" build/LiveExec32.app
+
+      - name: Build ARM64 FlekDeck host with ARM32 guest support
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p build
+          set +e
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck-32bit.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) is32BitSupported=1' \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) is32BitSupported' \
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- compiler/linker errors ---'
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -300 || true
+            exit "$status"
+          fi
+
+      - name: Embed pinned LiveExec32 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find build/FlekDeck-32bit.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
+          rm -rf "$APP/LiveExec32.app"
+          ditto build/LiveExec32.app "$APP/LiveExec32.app"
+          test -f "$APP/LiveExec32.app/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          test -d "$APP/LiveExec32.app/RootFS"
+
+          # The distributable artifact stays unsigned. Remove stale signature folders
+          # and profiles from the host and the nested runtime before packaging.
+          find "$APP" -type d -name '_CodeSignature' -prune -exec rm -rf {} +
+          find "$APP" -type f -name 'embedded.mobileprovision' -delete
+
+      - name: Validate integrated archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find build/FlekDeck-32bit.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          test -f "$APP/$EXECUTABLE"
+          file "$APP/$EXECUTABLE" | grep -q 'arm64'
+
+          EMU="$APP/LiveExec32.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC_SOURCE_COMMIT"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC_BUILD_REVISION"
+          nm -gU "$EMU/Frameworks/LiveExec32Shared.framework/LiveExec32Shared" | grep -q '_LC32RunGuest'
+          test -f "$EMU/RootFS/usr/lib/libstdc++.6.dylib"
+          test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
+          test -f "$EMU/RootFS/usr/lib/libcharset.1.dylib"
+
+          if find "$APP" \( -name '_CodeSignature' -o -name 'embedded.mobileprovision' \) -print -quit | grep -q .; then
+            echo 'Residual signing material found in unsigned package'
+            exit 1
+          fi
+
+          grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
+          grep -q 'appMain(argc, argv, environ)' LiveContainer/LCBootstrap.m
+          grep -q 'emulatorArgv0' LiveContainer/LCBootstrap.m
+          grep -q 'seedBundled32BitRuntime' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          grep -q 'container.filesAppURL' LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift
+
+      - name: Package unsigned FlekDeck IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find build/FlekDeck-32bit.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          ditto "$APP" "build/Payload/$(basename "$APP")"
+          cd build
+          zip -qry FlekDeck-32bit-temp-unsigned.ipa Payload
+          unzip -t FlekDeck-32bit-temp-unsigned.ipa >/dev/null
+          unzip -l FlekDeck-32bit-temp-unsigned.ipa | grep -q '/LiveExec32.app/RootFS/'
+          shasum -a 256 FlekDeck-32bit-temp-unsigned.ipa | tee FlekDeck-32bit-temp-unsigned.sha256
+          ls -lh FlekDeck-32bit-temp-unsigned.ipa FlekDeck-32bit-temp-unsigned.sha256
+
+      - name: Upload temp IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-32bit-temp-unsigned
+          path: |
+            build/FlekDeck-32bit-temp-unsigned.ipa
+            build/FlekDeck-32bit-temp-unsigned.sha256
+          if-no-files-found: error
+          compression-level: 0
