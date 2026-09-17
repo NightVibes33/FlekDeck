@@ -101,7 +101,7 @@ s = s[:classic_start] + classic_block + s[classic_end:]
 app_info.write_text(s)
 
 probe = Path("LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m")
-probe.write_text('''#import <Foundation/Foundation.h>\n#import <UIKit/UIKit.h>\n#import "LCUtils.h"\n\n// Do not construct SBApplication/SBApplicationInfo in the host process. Those\n// private SpringBoard objects change between iOS releases and failure can abort\n// below Objective-C exception handling. Compatibility Mode is an optional\n// launch hint, so use stable generic modes instead: 1 = phone, 12 = iPad.\nNSNumber *LCGetDefaultClassicMode(NSURL *appURL) {\n    NSBundle *bundle = appURL ? [NSBundle bundleWithURL:appURL] : nil;\n    if(!bundle || !bundle.executableURL) {\n        return @0;\n    }\n\n    NSArray *families = [bundle objectForInfoDictionaryKey:@"UIDeviceFamily"];\n    BOOL guestSupportsPad = [families isKindOfClass:NSArray.class] && [families containsObject:@2];\n    if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad && guestSupportsPad) {\n        return @12;\n    }\n    return @1;\n}\n''')
+probe.write_text('''#import <Foundation/Foundation.h>\n#import <UIKit/UIKit.h>\n#import "LCUtils.h"\n\n// Do not construct private SpringBoard application objects in the host process.\n// Those objects change between iOS releases and failure can abort below\n// Objective-C exception handling. Compatibility Mode is an optional launch\n// hint, so use stable generic modes instead: 1 = phone, 12 = iPad.\nNSNumber *LCGetDefaultClassicMode(NSURL *appURL) {\n    NSBundle *bundle = appURL ? [NSBundle bundleWithURL:appURL] : nil;\n    if(!bundle || !bundle.executableURL) {\n        return @0;\n    }\n\n    NSArray *families = [bundle objectForInfoDictionaryKey:@"UIDeviceFamily"];\n    BOOL guestSupportsPad = [families isKindOfClass:NSArray.class] && [families containsObject:@2];\n    if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad && guestSupportsPad) {\n        return @12;\n    }\n    return @1;\n}\n''')
 
 app_model = Path("LiveContainerSwiftUI/Models/LCAppModel.swift")
 s = app_model.read_text()
@@ -270,9 +270,10 @@ if 'errorStr = "lc.signer.crashDuringSignErr"' in tab.read_text():
     raise SystemExit("Stale signing marker still fabricates an app error")
 if "let presentedGuestCrash = checkLastLaunchError()" not in tab.read_text():
     raise SystemExit("Real guest errors no longer suppress host diagnostics during startup")
-if "NSCAssert(" in probe.read_text() or "assert(" in probe.read_text():
+probe_value = probe.read_text()
+if "NSCAssert(" in probe_value or "assert(" in probe_value:
     raise SystemExit("Compatibility probe still contains process-fatal assertions")
-if "SBApplication" in probe.read_text() or "SpringBoard.framework" in probe.read_text():
+if "PrivClass(SBApplication" in probe_value or 'NSClassFromString(@"SBApplication' in probe_value or "SpringBoard.framework" in probe_value:
     raise SystemExit("Compatibility probe still constructs private SpringBoard objects")
 if "let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode" not in app_model.read_text():
     raise SystemExit("Compatibility Mode still probes before final launch routing")
