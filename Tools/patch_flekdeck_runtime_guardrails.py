@@ -6,6 +6,7 @@ runpy.run_path("Tools/patch_flekdeck_runtime_stability.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_loader_guard.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_error_transport.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_macho_contract.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_macho_sdk_reader.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_arm32_migration.py", run_name="__main__")
@@ -129,9 +130,12 @@ for marker in (
     "guestExecutablePath.length == 0",
     "hasLoadPath != hasEntrySymbol",
     "runtime launcher executable is missing or not executable",
+    "The security-scoped resource denied access.",
 ):
     if marker not in bootstrap:
-        raise SystemExit(f"LiveExec32 loader hardening missing: {marker}")
+        raise SystemExit(f"LiveExec32/error transport hardening missing: {marker}")
+if "stringByAppendingString:err.localizedDescription" in bootstrap:
+    raise SystemExit("nil-unsafe external-container error transport survived")
 
 app_entry = Path("LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift").read_text()
 if "Repaired stale default runtime" not in app_entry or "Cleared stale per-app runtime" not in app_entry:
