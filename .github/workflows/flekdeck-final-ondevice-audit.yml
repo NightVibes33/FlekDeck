@@ -9,6 +9,7 @@ on:
       - 'Tools/patch_flekdeck_runtime_guardrails.py'
       - 'Tools/patch_flekdeck_ondevice_regressions.py'
       - 'Tools/patch_flekdeck_macho_contract.py'
+      - 'Tools/patch_flekdeck_liveexec32_txm.py'
 
 permissions:
   contents: write
@@ -37,7 +38,8 @@ jobs:
           python3 -m py_compile \
             Tools/patch_flekdeck_runtime_guardrails.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
-            Tools/patch_flekdeck_macho_contract.py
+            Tools/patch_flekdeck_macho_contract.py \
+            Tools/patch_flekdeck_liveexec32_txm.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
@@ -49,6 +51,9 @@ jobs:
           grep -q 'LCInspectMachOArchitectures' LiveContainer/LCMachOUtils.h
           grep -q 'is32bit = !has64bitSlice && has32bitSlice' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'Runtime seed failed without blocking app discovery' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          grep -q 'isTXMScriptRequired' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -q 'pathForResource:@"universal"' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -q 'self.is32bit && LCUtils.isTXMScriptRequired' LiveContainerSwiftUI/Models/LCAppInfo.m
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
@@ -77,7 +82,6 @@ jobs:
           for p in "${protected[@]}"; do
             git show origin/main:"$p" > "$p"
           done
-          # Main's build itself reapplies this bridge after runtime overlays.
           python3 Tools/patch_parallel_guest_viewport.py
           for p in "${protected[@]}"; do
             main_hash="$(git show origin/main:"$p" | git hash-object --stdin)"
@@ -169,12 +173,15 @@ jobs:
             Tools/patch_flekdeck_runtime_stability.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
             Tools/patch_flekdeck_macho_contract.py \
+            Tools/patch_flekdeck_liveexec32_txm.py \
             Tools/patch_flekdeck_error_ui_parity.py \
             LiveContainer/LCSharedUtils.m \
             LiveContainer/LCMachOUtils.h \
             LiveContainer/LCMachOUtils.m \
             LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift \
             LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m \
+            LiveContainerSwiftUI/Utilities/LCUtils.h \
+            LiveContainerSwiftUI/Utilities/LCUtils.m \
             LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
             LiveContainerSwiftUI/Models/LCAppInfo.m \
             LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
