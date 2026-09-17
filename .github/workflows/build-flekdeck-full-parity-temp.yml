@@ -68,7 +68,8 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC_BUILD_REVISION"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$EMU/Info.plist")" = "$LIVEEXEC_LOAD_PATH"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorEntrySymbol' "$EMU/Info.plist")" = "$LIVEEXEC_ENTRY_SYMBOL"
-          nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" | grep -q '_LC32RunGuest'
+          nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" > "$RUNNER_TEMP/liveexec32.symbols"
+          grep -q '_LC32RunGuest' "$RUNNER_TEMP/liveexec32.symbols"
 
       - name: Preserve FlekDeck direct-build compatibility
         shell: bash
@@ -172,7 +173,8 @@ jobs:
           test -s "$APP/universal.js"
           test -f "$EMU/$LIVEEXEC_LOAD_PATH"
           test -d "$EMU/RootFS"
-          nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" | grep -q '_LC32RunGuest'
+          nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" > "$RUNNER_TEMP/flek-liveexec32.symbols"
+          grep -q '_LC32RunGuest' "$RUNNER_TEMP/flek-liveexec32.symbols"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC_BUILD_REVISION"
           ! find "$APP" \( -name _CodeSignature -o -name embedded.mobileprovision \) -print -quit | grep -q .
 
