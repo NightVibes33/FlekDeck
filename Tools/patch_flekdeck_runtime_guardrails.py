@@ -10,9 +10,6 @@ runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main_
 runpy.run_path("Tools/patch_flekdeck_liveexec32_loader_guard.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_error_transport.py", run_name="__main__")
 
-# The migration-aware ARM32 classifier is a stronger final form than the older
-# Mach-O contract transform knows how to generate. If it is already present,
-# preserve it; legacy layouts still run through the transformer normally.
 app_info_path = Path("LiveContainerSwiftUI/Models/LCAppInfo.m")
 macho_path = Path("LiveContainer/LCMachOUtils.m")
 app_info_before_macho = app_info_path.read_text()
@@ -84,11 +81,12 @@ text = text[:start] + canonical + text[end:]
 app_info.write_text(text)
 
 # These layers own the earlier user-reported regressions and must run after old
-# parity transforms. The post-scan pass is deliberately the final owner.
+# parity transforms. Post-scan behavior and its target-link adapter are last.
 runpy.run_path("Tools/patch_flekdeck_user_regressions.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_relaunch_safety.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_context_runtime.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_postscan_runtime.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_classic_probe_link.py", run_name="__main__")
 
 
 def add_trigger_path(text: str, anchor: str) -> str:
@@ -192,9 +190,13 @@ for marker in (
     "LCInspectMachOArchitectures",
     "LCReadMachOSDKVersion",
     "probe failed safely",
+    "static void LCFlekClassicProbeBypass",
+    "LCFlekClassicProbeBypass(^{",
 ):
     if marker not in probe:
         raise SystemExit(f"real crash-safe Compatibility probe missing: {marker}")
+if "bypass_os_variant_has_internal_content" in probe:
+    raise SystemExit("unlinked Compatibility bypass symbol survived")
 if "return @12;" in probe or "return @1;" in probe:
     raise SystemExit("hard-coded Compatibility Mode heuristic survived")
 
