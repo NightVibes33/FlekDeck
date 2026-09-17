@@ -37,4 +37,4 @@ if value.find("appInfo.defaultClassicMode") < value.find("let multitask"):
 
 print("FlekDeck Compatibility Mode isolated to final single-process launches")
 
-# Audit trigger marker: structural gesture-chain repair, pass 2.
+# Audit trigger marker: repaired guardrails + iOS 27 Classic safety, pass 3.
