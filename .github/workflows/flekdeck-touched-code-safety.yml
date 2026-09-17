@@ -1,0 +1,192 @@
+name: FlekDeck Touched-Code Safety
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [temp/32bit-liveexec-data-folder]
+    paths:
+      - '.github/workflows/flekdeck-touched-code-safety.yml'
+      - 'Tools/patch_flekdeck_touched_code_safety.py'
+
+permissions:
+  contents: write
+
+jobs:
+  safety:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      LIVEEXEC_RUNTIME_URL: https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/download/liveexec32-r89/LiveExec32-r89.zip
+      LIVEEXEC_RUNTIME_SHA256: 9d35d8d6d4c9c5188e6a53e797de307e6aab579ab43b8fdbb05c8e1b5e8cf7c2
+      LIVEEXEC_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Apply baked runtime guardrails and final safety sweep
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile Tools/patch_flekdeck_runtime_guardrails.py Tools/patch_flekdeck_touched_code_safety.py
+          python3 Tools/patch_flekdeck_runtime_guardrails.py
+          python3 Tools/patch_flekdeck_touched_code_safety.py
+
+          ! grep -q 'renameFolderInput.close(result: newText!)' LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift
+          grep -q 'defer { url.stopAccessingSecurityScopedResource() }' LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift
+          ! grep -q 'canOpenURL(openURLComp.url!)' LiveContainerSwiftUI/Models/LCAppModel.swift
+          ! grep -q 'appInfo.bundlePath()!)/Frameworks/MetalANGLE' LiveContainerSwiftUI/Models/LCAppModel.swift
+          ! grep -q 'app.appInfo.urlSchemes() as! \[Any\]' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'certTeamId = nil' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+
+          # Preserve the previous real-error and Compatibility invariants.
+          ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
+          grep -q 'Start a new guest-error epoch' LiveContainer/LCBootstrap.m
+          ! grep -q 'NSCAssert(' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          ! grep -q 'assert(' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode' LiveContainerSwiftUI/Models/LCAppModel.swift
+
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+
+      - name: Preserve normal direct-build compatibility
+        run: |
+          set -euxo pipefail
+          for script in \
+            Tools/patch_stikdebug_pid_verification.py \
+            Tools/patch_guest_native_pip_bridge.py \
+            Tools/patch_youtube_native_pip_render.py \
+            Tools/patch_pip_state_separation.py; do
+            [ ! -f "$script" ] || python3 "$script"
+          done
+
+      - name: Restore exact generated main App Switcher
+        run: |
+          set -euxo pipefail
+          git fetch --no-tags origin main
+          rm -rf /tmp/flek-main-switcher
+          git worktree add --detach /tmp/flek-main-switcher origin/main
+          (cd /tmp/flek-main-switcher && python3 Tools/patch_direct_multitask_host_bridge.py)
+          (cd /tmp/flek-main-switcher && python3 Tools/patch_parallel_guest_viewport.py)
+
+          protected=(
+            MultitaskSupport/MultitaskDockView.swift
+            MultitaskSupport/DecoratedAppSceneViewController.m
+            MultitaskSupport/MultitaskAppWindow.swift
+          )
+          for p in "${protected[@]}"; do
+            cp "/tmp/flek-main-switcher/$p" "$p"
+          done
+          python3 Tools/patch_parallel_guest_viewport.py
+
+          for p in "${protected[@]}"; do
+            ref_hash="$(git -C /tmp/flek-main-switcher hash-object "$p")"
+            built_hash="$(git hash-object "$p")"
+            test "$built_hash" = "$ref_hash" || {
+              echo "MAIN APP SWITCHER REGRESSION: $p differs from generated main" >&2
+              diff -u "/tmp/flek-main-switcher/$p" "$p" || true
+              exit 1
+            }
+          done
+          grep -q 'FlekHomeSingleSwitcherGestureBridge' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
+          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
+
+      - name: Static analyzer
+        run: |
+          set -uo pipefail
+          mkdir -p build
+          set +e
+          xcodebuild analyze \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/analyze.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            if grep -qE '(^|[[:space:]])error:|fatal error:|Undefined symbols|duplicate symbol|ld:.*error' build/analyze.log; then
+              grep -nE '(^|[[:space:]])error:|fatal error:|Undefined symbols|duplicate symbol|ld:.*error' build/analyze.log | tail -300 || true
+              exit "$status"
+            fi
+          fi
+
+      - name: Strict Release archive
+        run: |
+          set -uo pipefail
+          mkdir -p build
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck-touched-safety.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/archive.log | xcpretty
+          status=${PIPESTATUS[0]}
+          [ "$status" -eq 0 ] || {
+            grep -nE '(^|[[:space:]])error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/archive.log | tail -350 || true
+            exit "$status"
+          }
+
+      - name: Embed verified LiveExec32 and package IPA
+        run: |
+          set -euxo pipefail
+          ZIP="$RUNNER_TEMP/LiveExec32-r89.zip"
+          curl --fail --location --retry 3 --retry-all-errors -o "$ZIP" "$LIVEEXEC_RUNTIME_URL"
+          echo "$LIVEEXEC_RUNTIME_SHA256  $ZIP" | shasum -a 256 -c -
+          rm -rf build/liveexec-source build/Payload
+          mkdir -p build/liveexec-source build/Payload
+          unzip -q "$ZIP" -d build/liveexec-source
+          EMU="$(find build/liveexec-source -maxdepth 2 -type d -name LiveExec32.app -print -quit)"
+          APP="$(find build/FlekDeck-touched-safety.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$EMU"; test -n "$APP"
+          test -f "$EMU/$LIVEEXEC_LOAD_PATH"; test -d "$EMU/RootFS"; test -s Resources/universal.js
+          nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" > "$RUNNER_TEMP/liveexec32.symbols"
+          grep -q '_LC32RunGuest' "$RUNNER_TEMP/liveexec32.symbols"
+          rm -rf "$APP/LiveExec32.app"
+          ditto "$EMU" "$APP/LiveExec32.app"
+          ditto Resources/universal.js "$APP/universal.js"
+          find "$APP" -type d -name _CodeSignature -prune -exec rm -rf {} + || true
+          find "$APP" -type f -name embedded.mobileprovision -delete || true
+          ditto "$APP" "build/Payload/$(basename "$APP")"
+          cd build
+          zip -qry FlekDeck-touched-safety-temp-unsigned.ipa Payload
+          unzip -t FlekDeck-touched-safety-temp-unsigned.ipa >/dev/null
+          shasum -a 256 FlekDeck-touched-safety-temp-unsigned.ipa | tee FlekDeck-touched-safety-temp-unsigned.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-touched-safety-temp-unsigned
+          path: |
+            build/FlekDeck-touched-safety-temp-unsigned.ipa
+            build/FlekDeck-touched-safety-temp-unsigned.sha256
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Bake validated safety changes
+        run: |
+          set -euxo pipefail
+          git reset --hard "$GITHUB_SHA"
+          git clean -fd
+          python3 Tools/patch_flekdeck_runtime_guardrails.py
+          python3 Tools/patch_flekdeck_touched_code_safety.py
+          git add -- \
+            Tools/patch_flekdeck_touched_code_safety.py \
+            LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift \
+            LiveContainerSwiftUI/Models/LCAppModel.swift \
+            LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
+            LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'NightVibes33 Actions'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'Bake final touched-code safety fixes'
+          git push origin HEAD:temp/32bit-liveexec-data-folder
