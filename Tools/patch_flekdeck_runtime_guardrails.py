@@ -13,6 +13,7 @@ runpy.run_path("Tools/patch_flekdeck_arm32_migration.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_runtime_selection.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_classic_launch_isolation.py", run_name="__main__")
 
+# Canonicalize the model block after older parity generators.
 app_info = Path("LiveContainerSwiftUI/Models/LCAppInfo.m")
 text = app_info.read_text()
 start = text.find("- (bool)classicMode {")
@@ -44,12 +45,7 @@ canonical = '''- (bool)classicMode {
         return cachedMode.unsignedIntegerValue;
     }
 
-    NSNumber *mode = nil;
-    @try {
-        mode = LCGetDefaultClassicMode([NSURL fileURLWithPath:self.bundlePath]);
-    } @catch (NSException *exception) {
-        NSLog(@"[FlekDeck/ClassicMode] default-mode probe exception: %@ %@", exception.name, exception.reason);
-    }
+    NSNumber *mode = LCGetDefaultClassicMode([NSURL fileURLWithPath:self.bundlePath]);
     if (![mode isKindOfClass:NSNumber.class]) mode = @0;
     _info[@"LCClassicModeCache"] = @{
         @"defaultClassicMode": mode,
@@ -63,6 +59,11 @@ canonical = '''- (bool)classicMode {
 text = text[:start] + canonical + text[end:]
 app_info.write_text(text)
 
+# This layer is intentionally LAST. It owns the user-reported regressions and
+# prevents any earlier parity generator from restoring them.
+runpy.run_path("Tools/patch_flekdeck_user_regressions.py", run_name="__main__")
+
+
 def add_trigger_path(text: str, anchor: str) -> str:
     marker = "      - 'Tools/patch_flekdeck_runtime_guardrails.py'\n"
     if marker in text:
@@ -70,6 +71,7 @@ def add_trigger_path(text: str, anchor: str) -> str:
     if anchor not in text:
         return text
     return text.replace(anchor, anchor + marker, 1)
+
 
 full = Path(".github/workflows/build-flekdeck-full-parity-temp.yml")
 if full.exists():
@@ -109,13 +111,14 @@ if parity.exists():
     )
     parity.write_text(value)
 
+# Final end-to-end invariants.
 final = app_info.read_text()
 if final.count("- (NSUInteger)defaultClassicMode {") != 1:
     raise SystemExit(f"{app_info}: duplicate defaultClassicMode implementations remain")
 if final.count("- (bool)classicMode {") != 1:
     raise SystemExit(f"{app_info}: duplicate classicMode implementations remain")
 if "(void)[self defaultClassicMode]" in final[final.find("- (void)setClassicMode:"):final.find("- (NSUInteger)defaultClassicMode")]:
-    raise SystemExit(f"{app_info}: Compatibility Mode toggle still executes the private probe")
+    raise SystemExit(f"{app_info}: Compatibility Mode toggle still executes the probe")
 if "LCInspectMachOArchitectures" not in final:
     raise SystemExit(f"{app_info}: safe ARM32 inspection contract missing")
 if "LCReadMachOSDKVersion(execPath.UTF8String, self.is32bit, &sdkVersion)" not in final:
@@ -130,10 +133,13 @@ for marker in (
     "guestExecutablePath.length == 0",
     "hasLoadPath != hasEntrySymbol",
     "runtime launcher executable is missing or not executable",
-    "The security-scoped resource denied access.",
+    "Bookmark resolution failed without an NSError.",
+    "Security-scoped access denied for data container:",
 ):
     if marker not in bootstrap:
         raise SystemExit(f"LiveExec32/error transport hardening missing: {marker}")
+if "The security-scoped resource denied access." in bootstrap:
+    raise SystemExit("generic external-container failure survived")
 if "stringByAppendingString:err.localizedDescription" in bootstrap:
     raise SystemExit("nil-unsafe external-container error transport survived")
 
@@ -145,11 +151,27 @@ app_model = Path("LiveContainerSwiftUI/Models/LCAppModel.swift").read_text()
 if "let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode" not in app_model:
     raise SystemExit("Compatibility Mode is not isolated from Parallel launch routing")
 
+probe = Path("LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m").read_text()
+if "NSCAssert(" in probe or "assert(" in probe or "SBApplication" in probe or "SpringBoard.framework" in probe:
+    raise SystemExit("process-fatal/private Compatibility probe survived")
+
+spring_drag = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift").read_text()
+spring_vc = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift").read_text()
+if "gestureRecognizerShouldBegin" in spring_drag or "longPressGesture.delegate = dragManager" in spring_vc:
+    raise SystemExit("temp Springboard root gesture arbitration survived")
+
+for error_ui in (
+    Path("LiveContainerSwiftUI/Views/LCTabView.swift").read_text(),
+    Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift").read_text(),
+):
+    if "No diagnostic text was provided" in error_ui:
+        raise SystemExit("synthetic generic app error survived")
+
 shared = Path("LiveContainer/LCSharedUtils.m").read_text()
 classic_region = shared[shared.find("+ (BOOL)launchToGuestAppWithClassicMode"):shared.find("+ (BOOL)launchToGuestAppWithURL")]
 if classic_region.count("+ (BOOL)launchToGuestAppWithClassicMode") != 1:
     raise SystemExit("Duplicate Classic relaunch methods remain")
-if "completionHandler(success);" in classic_region:
-    raise SystemExit("Unsafe unconditional Classic completion handler remains")
+if "if(success)" not in classic_region or "falling back" not in classic_region:
+    raise SystemExit("Classic relaunch is not fail-safe")
 
-print("FlekDeck runtime guardrails applied")
+print("FlekDeck runtime guardrails applied with user-reported regressions protected")
