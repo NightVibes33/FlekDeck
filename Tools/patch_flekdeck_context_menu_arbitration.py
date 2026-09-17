@@ -80,6 +80,8 @@ print("FlekDeck Home hold menu arbitration restored without touching App Switche
 
 # Final leaf: older parity generators have all finished at this point. Keep every
 # on-device safety repair here so they cannot be silently reintroduced later.
+runpy.run_path("Tools/patch_flekdeck_touched_code_safety.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_container_safety_final.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ios27_classic_safety.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_exec_backup_safety.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_runtime_seed_atomic.py", run_name="__main__")
