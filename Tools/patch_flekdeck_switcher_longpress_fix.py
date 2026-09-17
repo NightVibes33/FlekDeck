@@ -136,10 +136,11 @@ app_list = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift")
 app_list_text = app_list.read_text()
 for marker in [
     "func homeOpenDataFolder(_ app: LCAppModel)",
+    "var dataActions: [UIMenuElement] = []",
     'title: "lc.appBanner.openDataFolder".loc,',
     'image: UIImage(systemName: "folder")',
     "homeOpenDataFolder(app)",
-    "let dataGroup = UIMenu(",
+    "[launchGroup] + dataActions",
 ]:
     if marker not in app_list_text:
         raise SystemExit(f"{app_list}: active Springboard Open Data Folder marker missing: {marker}")
