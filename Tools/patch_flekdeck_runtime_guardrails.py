@@ -10,7 +10,30 @@ runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_loader_guard.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_error_transport.py", run_name="__main__")
-runpy.run_path("Tools/patch_flekdeck_macho_contract.py", run_name="__main__")
+
+# The migration-aware ARM32 classifier is a stronger final form than the older
+# Mach-O contract transform knows how to generate. If it is already present,
+# do not force the old exact-template rewrite over it. Legacy layouts still run
+# through the transformer normally.
+app_info_path = Path("LiveContainerSwiftUI/Models/LCAppInfo.m")
+macho_path = Path("LiveContainer/LCMachOUtils.m")
+app_info_before_macho = app_info_path.read_text()
+macho_before = macho_path.read_text()
+migrated_macho_contract = all(marker in app_info_before_macho for marker in (
+    'needsArchitectureClassification = (info[@"is32bit"] == nil)',
+    'LCInspectMachOArchitectures(execPath.UTF8String, &has64bitSlice, &has32bitSlice, &isEncrypted)',
+    'is32bit = !has64bitSlice && has32bitSlice',
+    'if(!error && needPatch && has64bitSlice)',
+)) and all(marker in macho_before for marker in (
+    'NSString *LCInspectMachOArchitectures(',
+    'cpu != CPU_TYPE_ARM64) continue',
+    'ARM32 is intentionally inspection-only',
+))
+if migrated_macho_contract:
+    print("FlekDeck Mach-O contract already migration-aware; preserving canonical form")
+else:
+    runpy.run_path("Tools/patch_flekdeck_macho_contract.py", run_name="__main__")
+
 runpy.run_path("Tools/patch_flekdeck_macho_sdk_reader.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_arm32_migration.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_runtime_selection.py", run_name="__main__")
