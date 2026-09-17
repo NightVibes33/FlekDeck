@@ -63,6 +63,7 @@ app_info.write_text(text)
 # and prevent earlier parity generators from restoring unsafe behavior.
 runpy.run_path("Tools/patch_flekdeck_user_regressions.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_relaunch_safety.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_context_runtime.py", run_name="__main__")
 
 
 def add_trigger_path(text: str, anchor: str) -> str:
@@ -167,6 +168,10 @@ for error_ui in (
 ):
     if "No diagnostic text was provided" in error_ui:
         raise SystemExit("synthetic generic app error survived")
+
+app_list_text = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift").read_text()
+if app_list_text.count("app.appInfo.dataUUID = container.folderName") < 2:
+    raise SystemExit("Home quick-container selection is not persisted in both menu paths")
 
 shared = Path("LiveContainer/LCSharedUtils.m").read_text()
 classic_region = shared[shared.find("+ (BOOL)launchToGuestAppWithClassicMode"):shared.find("+ (BOOL)launchToGuestAppWithURL")]
