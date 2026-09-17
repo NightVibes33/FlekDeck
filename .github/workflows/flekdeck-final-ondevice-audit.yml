@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/flekdeck-final-ondevice-audit.yml'
       - 'Tools/patch_flekdeck_runtime_guardrails.py'
+      - 'Tools/patch_flekdeck_postscan_runtime.py'
       - 'Tools/patch_flekdeck_user_regressions.py'
       - 'Tools/patch_flekdeck_ondevice_regressions.py'
       - 'Tools/patch_flekdeck_liveexec32_loader_guard.py'
@@ -45,6 +46,7 @@ jobs:
           set -euxo pipefail
           python3 -m py_compile \
             Tools/patch_flekdeck_runtime_guardrails.py \
+            Tools/patch_flekdeck_postscan_runtime.py \
             Tools/patch_flekdeck_user_regressions.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
             Tools/patch_flekdeck_liveexec32_loader_guard.py \
@@ -68,17 +70,25 @@ jobs:
           ! grep -q 'The security-scoped resource denied access.' LiveContainer/LCBootstrap.m
           ! grep -q 'stringByAppendingString:err.localizedDescription' LiveContainer/LCBootstrap.m
 
-          # Compatibility Mode must not execute private SpringBoard construction.
+          # Compatibility Mode: real LiveContainer-style probe, but fail closed.
           ! sed -n '/- (void)setClassicMode:/,/- (NSUInteger)defaultClassicMode/p' LiveContainerSwiftUI/Models/LCAppInfo.m | grep -q 'defaultClassicMode]'
           grep -q 'let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'NSCAssert(' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
           ! grep -q 'assert(' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
-          ! grep -q 'SBApplication' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
-          ! grep -q 'SpringBoard.framework' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
-          grep -q 'return @12;' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
-          grep -q 'return @1;' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q '_defaultClassicMode' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'instancesRespondToSelector:modernInit' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'LCInspectMachOArchitectures' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'LCReadMachOSDKVersion' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'probe failed safely' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          ! grep -q 'return @12;' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          ! grep -q 'return @1;' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
           grep -q 'if(success)' LiveContainer/LCSharedUtils.m
           grep -q 'falling back to normal launch' LiveContainer/LCSharedUtils.m
+          ! grep -q 'guestSupportsPad' LiveContainer/LCSharedUtils.m
+
+          # Shared settings and immediate relaunch failures must be real.
+          grep -q 'if(!lcSharedDefaults)' LiveContainer/LCBootstrap.m
+          grep -q 'guard LCSharedUtils.launchToGuestApp(withClassicMode: classicMode) else' LiveContainerSwiftUI/Models/LCAppModel.swift
 
           # Home keeps main's gesture ownership. Open Data Folder is context menu only.
           ! grep -q 'longPressGesture.delegate = dragManager' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
@@ -249,6 +259,7 @@ jobs:
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           git add -- \
             Tools/patch_flekdeck_runtime_guardrails.py \
+            Tools/patch_flekdeck_postscan_runtime.py \
             Tools/patch_flekdeck_user_regressions.py \
             Tools/patch_flekdeck_runtime_stability.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
