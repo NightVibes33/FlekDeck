@@ -86,8 +86,9 @@ if "UIPanGestureRecognizer" in method:
 
 print("FlekDeck Home hold menu arbitration restored without touching App Switcher pan gestures")
 
-# This script is the last leaf of the canonical runtime guardrail. Keep the
-# user's other reported UI regression adjacent to it: once gesture ownership is
-# final, scope guest diagnostics to the current launch so old app errors/logs
-# cannot bleed into the next app.
+# This script is the final leaf of the canonical runtime guardrail. Run the
+# remaining on-device safety passes here so older parity generators cannot
+# reintroduce them afterward.
+runpy.run_path("Tools/patch_flekdeck_ios27_classic_safety.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_exec_backup_safety.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_error_session.py", run_name="__main__")
