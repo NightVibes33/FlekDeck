@@ -326,12 +326,30 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 #else
     bool is32bit = false;
 #endif
-    if (needPatch) {
-        __block bool has64bitSlice = NO;
-        __block bool isEncrypted = false;
-        NSString *error = LCParseMachO(execPath.UTF8String, false, ^(const char *path, struct mach_header_64 *header, int fd, void* filePtr) {
-            if(header->cputype == CPU_TYPE_ARM64) {
-                has64bitSlice |= YES;
+#if is32BitSupported
+    bool needsArchitectureClassification = (info[@"is32bit"] == nil);
+#else
+    bool needsArchitectureClassification = false;
+#endif
+    if (needPatch || needsArchitectureClassification) {
+        bool has64bitSlice = false;
+        bool has32bitSlice = false;
+        bool isEncrypted = false;
+        NSString *error = LCInspectMachOArchitectures(execPath.UTF8String, &has64bitSlice, &has32bitSlice, &isEncrypted);
+        if(!error && !has64bitSlice && !has32bitSlice) {
+            error = @"The app executable has no supported ARM slice.";
+        }
+
+        is32bit = !has64bitSlice && has32bitSlice;
+#if is32BitSupported
+        self.is32bit = is32bit;
+#endif
+
+        // Only a genuinely outdated ARM64 executable goes through FlekDeck's
+        // 64-bit mutation pipeline. Classification-only migration must never
+        // rewrite an app whose patch revision is already current.
+        if(!error && needPatch && has64bitSlice) {
+            error = LCParseMachO(execPath.UTF8String, false, ^(const char *path, struct mach_header_64 *header, int fd, void* filePtr) {
                 int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
                 if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
                     info[@"LCTweakLoaderCantInject"] = @YES;
@@ -340,23 +358,20 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
                 if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
                     info[@"segCountMismatch"] = @YES;
                 }
+            });
+            if(!error) {
+                LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
             }
-            isEncrypted |= LCIsMachOEncrypted(header);
-        });
-        is32bit = !has64bitSlice;
+        }
+
 #if is32BitSupported
-        self.is32bit = is32bit;
-#endif
-        if (!is32bit) {
-            LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
-        } else {
-#if is32BitSupported
-            // LiveExec32 owns ARM32 execution. It requires JIT and SDK spoofing.
+        if(is32bit) {
+            // Existing ARM32 imports get the same runtime contract as fresh ones.
             self.isJITNeeded = YES;
             self.classicMode = YES;
             self.spoofSDKVersion = YES;
-#endif
         }
+#endif
         if (isEncrypted) {
             error = @"The app you tried to install is encrypted. Please provide decrypted app.";
         }
@@ -365,9 +380,10 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
             completetionHandler(NO, error);
             return;
         }
-        info[@"LCPatchRevision"] = @(currentPatchRev);
-        forceSign = true;
-        
+        if(needPatch) {
+            info[@"LCPatchRevision"] = @(currentPatchRev);
+            forceSign = true;
+        }
         [self save];
     }
 #if !is32BitSupported
@@ -445,13 +461,12 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 }
 
 - (void)setClassicMode:(bool)classicMode {
+    // Flipping the UI setting must be side-effect free.
     _info[@"classicMode"] = @(classicMode);
-    if(classicMode) {
-        (void)[self defaultClassicMode];
-    } else {
+    if(!classicMode) {
         [_info removeObjectForKey:@"LCClassicModeCache"];
-        [self save];
     }
+    [self save];
 }
 
 - (NSUInteger)defaultClassicMode {
@@ -468,8 +483,9 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     }
 
     NSNumber *mode = LCGetDefaultClassicMode([NSURL fileURLWithPath:self.bundlePath]);
+    if(![mode isKindOfClass:NSNumber.class]) mode = @0;
     _info[@"LCClassicModeCache"] = @{
-        @"defaultClassicMode": mode ?: @0,
+        @"defaultClassicMode": mode,
         @"systemMajorVersion": @(systemMajorVersion),
     };
     [self save];
@@ -764,12 +780,18 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         _info[@"spoofSDKVersion"] = 0;
     } else {
         NSString *execPath = [NSString stringWithFormat:@"%@/%@", _bundlePath, _infoPlist[@"CFBundleExecutable"]];
-        __block uint32_t sdkVersion = 0;
-        LCParseMachO(execPath.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
-            sdkVersion = dyld_get_sdk_version((const struct mach_header *)header);
-        });
+        uint32_t sdkVersion = 0;
 #if is32BitSupported
-        // Keep the same compatibility floor as the proven LiveExec32 integration.
+        NSString *sdkReadError = LCReadMachOSDKVersion(execPath.UTF8String, self.is32bit, &sdkVersion);
+#else
+        NSString *sdkReadError = LCReadMachOSDKVersion(execPath.UTF8String, false, &sdkVersion);
+#endif
+        if(sdkReadError) {
+            NSLog(@"[LC] failed to read linked SDK for %@: %@", execPath, sdkReadError);
+        }
+#if is32BitSupported
+        // Keep the same compatibility floor as the proven LiveExec32 integration,
+        // but preserve a real ARM32 SDK when it is newer than that floor.
         uint32_t minSDK = self.is32bit ? 0x20000 : 0xb0000;
         if ((self.is32bit || sdkVersion) && sdkVersion < minSDK) {
             sdkVersion = minSDK;

@@ -233,15 +233,17 @@ class LCAppModel: ObservableObject, Hashable {
         }
         let currentDataFolder = containerFolderName ?? uiSelectedContainer?.folderName
         
-        let classicMode = appInfo.defaultClassicMode
 #if is32BitSupported
-        // Preserve FlekDeck's App Switcher / Parallel routing for every native
-        // ARM64 guest. Only ARM32 is forced onto the single-process LiveExec32
-        // path; Classic Mode is consumed only if that single-process path wins.
+        // Preserve FlekDeck's proven App Switcher / Parallel routing for every
+        // native ARM64 guest. Only ARM32 is forced onto LiveExec32 single mode.
         let multitask = appInfo.is32bit ? false : (multitask ?? shouldLaunchInMultitaskMode)
 #else
         let multitask = multitask ?? shouldLaunchInMultitaskMode
 #endif
+        // Compatibility Mode is a single-process launch option. Resolving it can
+        // touch private SpringBoard APIs, so never probe it for Parallel launches
+        // that cannot consume the result anyway.
+        let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode
         
         if MultitaskManager.isMultitasking() || multitask,
            let currentDataFolder {

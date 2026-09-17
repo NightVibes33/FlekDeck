@@ -31,7 +31,7 @@ new_alert = '''        .alert("lc.common.error".loc, isPresented: $errorShow) {
             Button("lc.common.ok".loc) {}
             Button("lc.common.copy".loc) { copyError() }
         } message: {
-            Text(displayErrorInfo(errorInfo))
+            Text(errorInfo)
                 .foregroundColor(.primary)
         }'''
 if new_alert not in text:
@@ -48,7 +48,7 @@ old_report = '''                ScrollView {
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal)'''
 new_report = '''                ScrollView {
-                    Text(displayErrorInfo(errorInfo))
+                    Text(errorInfo)
                         .font(.system(size: 12).monospaced())
                         .foregroundColor(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -64,7 +64,7 @@ if new_report not in text:
         raise SystemExit(f"{tab}: crash report body anchor missing")
     text = text.replace(old_report, new_report, 1)
 
-text = text.replace('ShareLink(item: errorInfo)', 'ShareLink(item: displayErrorInfo(errorInfo))')
+text = text.replace('ShareLink(item: errorInfo)', 'ShareLink(item: errorInfo)')
 old_copy = '    func copyError() { UIPasteboard.general.string = errorInfo }'
 new_copy = '''    func displayErrorInfo(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -74,7 +74,7 @@ new_copy = '''    func displayErrorInfo(_ value: String) -> String {
         return value
     }
 
-    func copyError() { UIPasteboard.general.string = displayErrorInfo(errorInfo) }'''
+    func copyError() { UIPasteboard.general.string = errorInfo }'''
 if new_copy not in text:
     if old_copy not in text:
         raise SystemExit(f"{tab}: copyError anchor missing")
@@ -92,7 +92,7 @@ old_message = '''        } message: {
         }
         .alert("lc.flek.installFailedTitle".loc'''
 new_message = '''        } message: {
-            Text(displayErrorInfo(errorInfo))
+            Text(errorInfo)
                 .foregroundColor(.primary)
         }
         .alert("lc.flek.installFailedTitle".loc'''
@@ -113,7 +113,7 @@ new_copy = '''    func displayErrorInfo(_ value: String) -> String {
     }
 
     func copyError() {
-        UIPasteboard.general.string = displayErrorInfo(errorInfo)
+        UIPasteboard.general.string = errorInfo
     }'''
 if new_copy not in text:
     if old_copy not in text:
@@ -124,15 +124,15 @@ app_list.write_text(text)
 
 checks = {
     tab: [
-        "Text(displayErrorInfo(errorInfo))",
+        "Text(errorInfo)",
         ".foregroundColor(.primary)",
         ".fixedSize(horizontal: false, vertical: true)",
-        "ShareLink(item: displayErrorInfo(errorInfo))",
+        "ShareLink(item: errorInfo)",
         "No diagnostic text was provided",
     ],
     app_list: [
-        "Text(displayErrorInfo(errorInfo))",
-        "UIPasteboard.general.string = displayErrorInfo(errorInfo)",
+        "Text(errorInfo)",
+        "UIPasteboard.general.string = errorInfo",
         "No diagnostic text was provided",
     ],
 }

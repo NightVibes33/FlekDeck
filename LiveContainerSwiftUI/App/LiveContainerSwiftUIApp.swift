@@ -91,7 +91,11 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
 
         do {
             try Self.seedBundled32BitRuntime(using: fm)
+        } catch {
+            NSLog("[FlekDeck/LC32] Runtime seed failed without blocking app discovery: \(error)")
+        }
 
+        do {
             // load apps
             try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
             var appDirs = try fm.contentsOfDirectory(atPath: LCPath.bundlePath.path)
@@ -105,20 +109,24 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
                 if !appDir.hasSuffix(".app") {
                     continue
                 }
-                let newApp = LCAppInfo(bundlePath: "\(LCPath.bundlePath.path)/\(appDir)")!
+                guard let newApp = LCAppInfo(bundlePath: "\(LCPath.bundlePath.path)/\(appDir)") else {
+                    NSLog("[FlekDeck] Skipping malformed app bundle: %@", appDir)
+                    continue
+                }
                 newApp.relativeBundlePath = appDir
                 newApp.isShared = false
+#if is32BitSupported
+                if newApp.is32bitEmulator {
+                    tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
+                    continue
+                }
+#endif
                 if newApp.isHidden {
                     tempHiddenApps.append(LCAppModel(appInfo: newApp))
                 } else {
                     tempApps.append(LCAppModel(appInfo: newApp))
-                    tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
+                    tempURLSchemes?.formUnion((newApp.urlSchemes() as? [String]) ?? [])
                 }
-#if is32BitSupported
-                if newApp.is32bitEmulator {
-                    tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
-                }
-#endif
             }
             if LCPath.lcGroupDocPath != LCPath.docPath {
                 try fm.createDirectory(at: LCPath.lcGroupBundlePath, withIntermediateDirectories: true)
@@ -131,20 +139,24 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
                     if !appDir.hasSuffix(".app") {
                         continue
                     }
-                    let newApp = LCAppInfo(bundlePath: "\(LCPath.lcGroupBundlePath.path)/\(appDir)")!
+                    guard let newApp = LCAppInfo(bundlePath: "\(LCPath.lcGroupBundlePath.path)/\(appDir)") else {
+                        NSLog("[FlekDeck] Skipping malformed shared app bundle: %@", appDir)
+                        continue
+                    }
                     newApp.relativeBundlePath = appDir
                     newApp.isShared = true
+#if is32BitSupported
+                    if newApp.is32bitEmulator {
+                        tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
+                        continue
+                    }
+#endif
                     if newApp.isHidden {
                         tempHiddenApps.append(LCAppModel(appInfo: newApp))
                     } else {
                         tempApps.append(LCAppModel(appInfo: newApp))
-                        tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
+                        tempURLSchemes?.formUnion((newApp.urlSchemes() as? [String]) ?? [])
                     }
-#if is32BitSupported
-                    if newApp.is32bitEmulator {
-                        tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
-                    }
-#endif
                 }
             }
             // load document folders
@@ -176,6 +188,38 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         DataManager.shared.model.apps = tempApps
 #if is32BitSupported
         DataManager.shared.model.arm32EmuApps = tempArm32EmuApps
+
+        // Runtime choices are persisted across updates/removals. Normalize them
+        // against the runtimes that actually exist now so a stale path cannot
+        // make every ARM32 app fail forever. Per-app stale overrides fall back to
+        // the global selection; the global selection prefers bundled LiveExec32.
+        let available32BitRuntimeNames = Set(tempArm32EmuApps.compactMap { model in
+            model.appInfo.relativeBundlePath.map { ($0 as NSString).lastPathComponent }
+        })
+        let runtimeDefaults = LCUtils.appGroupUserDefault
+        let persistedDefault = runtimeDefaults.string(forKey: "LCSelected32BitEmulator") ?? ""
+        let persistedDefaultName = (persistedDefault as NSString).lastPathComponent
+        if !persistedDefaultName.isEmpty && !available32BitRuntimeNames.contains(persistedDefaultName) {
+            if available32BitRuntimeNames.contains(Self.bundled32BitRuntimeName) {
+                runtimeDefaults.set(Self.bundled32BitRuntimeName, forKey: "LCSelected32BitEmulator")
+                NSLog("[FlekDeck/LC32] Repaired stale default runtime %@ -> %@", persistedDefaultName, Self.bundled32BitRuntimeName)
+            } else if let firstRuntime = available32BitRuntimeNames.sorted().first {
+                runtimeDefaults.set(firstRuntime, forKey: "LCSelected32BitEmulator")
+                NSLog("[FlekDeck/LC32] Repaired stale default runtime %@ -> %@", persistedDefaultName, firstRuntime)
+            } else {
+                runtimeDefaults.removeObject(forKey: "LCSelected32BitEmulator")
+            }
+        }
+
+        for model in tempApps + tempHiddenApps where model.appInfo.is32bit {
+            guard let selected = model.appInfo.selected32BitEmulator, !selected.isEmpty else { continue }
+            let selectedName = (selected as NSString).lastPathComponent
+            if !available32BitRuntimeNames.contains(selectedName) {
+                model.appInfo.selected32BitEmulator = ""
+                model.uiSelected32BitEmulator = ""
+                NSLog("[FlekDeck/LC32] Cleared stale per-app runtime %@ for %@", selectedName, model.appInfo.displayName())
+            }
+        }
 #endif
         DataManager.shared.model.hiddenApps = tempHiddenApps
         DataManager.shared.model.appDataFolderNames = tempAppDataFolderNames

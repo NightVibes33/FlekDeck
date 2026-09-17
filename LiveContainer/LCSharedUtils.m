@@ -205,33 +205,40 @@ extern NSBundle *lcMainBundle;
         return [self launchToGuestApp];
     }
 
-    void (^completionHandler)(BOOL) = ^(BOOL success) {
-        __asm__ __volatile__ (
-            "mov x0, #31\n"
-            "mov x16, #26\n"
-            "svc #0x80\n"
-        );
-        raise(SIGKILL);
-    };
-
     _LSOpenConfiguration *configuration = [[PrivClass(_LSOpenConfiguration) alloc] init];
-    NSMutableDictionary *frontBoardOptions = [NSMutableDictionary new];
-    // Match current LiveContainer's private FrontBoard key without introducing
-    // a link-time dependency on FrontBoardServices in FlekDeck's shared target.
-    frontBoardOptions[@"__ActivateAsClassic"] = @(classicMode);
-    configuration.frontBoardOptions = frontBoardOptions;
-
-    NSString *bundleIdentifier = lcMainBundle.bundleIdentifier ?: NSBundle.mainBundle.bundleIdentifier;
     LSApplicationWorkspace *workspace = [PrivClass(LSApplicationWorkspace) defaultWorkspace];
-    for(int i = 0; i < 2; i++) {
+    NSString *bundleIdentifier = lcMainBundle.bundleIdentifier ?: NSBundle.mainBundle.bundleIdentifier;
+    if(!configuration || !workspace || bundleIdentifier.length == 0) {
+        NSLog(@"[FlekDeck/ClassicMode] private launch surface unavailable; falling back to normal launch");
+        return [self launchToGuestApp];
+    }
+
+    configuration.frontBoardOptions = @{ @"__ActivateAsClassic": @(classicMode) };
+    @try {
         [workspace openApplicationWithBundleIdentifier:bundleIdentifier
                                          configuration:configuration
                                      completionHandler:^(BOOL success, NSError *error) {
             NSLog(@"[FlekDeck/ClassicMode] success=%d mode=%lu error=%@", success, (unsigned long)classicMode, error);
-            completionHandler(success);
+            if(success) {
+                __asm__ __volatile__ (
+                    "mov x0, #31\n"
+                    "mov x16, #26\n"
+                    "svc #0x80\n"
+                );
+                raise(SIGKILL);
+                return;
+            }
+            // Rejected Classic launch is not a host crash. Fall back to the
+            // exact normal relaunch path and keep the real private error in log.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self launchToGuestApp];
+            });
         }];
+        return YES;
+    } @catch (NSException *exception) {
+        NSLog(@"[FlekDeck/ClassicMode] launch exception %@: %@; falling back", exception.name, exception.reason);
+        return [self launchToGuestApp];
     }
-    return YES;
 }
 
 + (BOOL)launchToGuestAppWithURL:(NSURL *)url {

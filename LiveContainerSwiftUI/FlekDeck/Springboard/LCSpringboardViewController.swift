@@ -204,9 +204,6 @@ final class LCSpringboardViewController: UIViewController {
 
         longPressGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPressGesture.minimumPressDuration = 0.3
-        // Installed-app holds must be rejected by the drag recognizer before
-        // recognition so the inner UICollectionView context menu can own them.
-        longPressGesture.delegate = dragManager
         view.addGestureRecognizer(longPressGesture)
     }
 

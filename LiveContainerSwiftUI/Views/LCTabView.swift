@@ -38,13 +38,13 @@ struct LCTabView: View {
             Button("lc.common.ok".loc) {}
             Button("lc.common.copy".loc) { copyError() }
         } message: {
-            Text(displayErrorInfo(errorInfo))
+            Text(errorInfo)
                 .foregroundColor(.primary)
         }
         .sheet(isPresented: $crashReportShow) {
             NavigationView {
                 ScrollView {
-                    Text(displayErrorInfo(errorInfo))
+                    Text(errorInfo)
                         .font(.system(size: 12).monospaced())
                         .foregroundColor(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -61,7 +61,7 @@ struct LCTabView: View {
                             if let log = UserDefaults.lcShared().url(forKey: "LC32BitTranslationLayerLogFile") {
                                 ShareLink(item: log)
                             } else {
-                                ShareLink(item: displayErrorInfo(errorInfo))
+                                ShareLink(item: errorInfo)
                             }
                         } else {
                             Button("lc.common.copy".loc) { copyError() }
@@ -160,29 +160,32 @@ struct LCTabView: View {
         DataManager.shared.model.mainWindowOpened = true
     }
     
-    func checkLastLaunchError() {
-        var errorStr = UserDefaults.standard.string(forKey: "error")
-        if errorStr == nil && UserDefaults.standard.bool(forKey: "SigningInProgress") {
-            errorStr = "lc.signer.crashDuringSignErr".loc
-            UserDefaults.standard.removeObject(forKey: "SigningInProgress")
+    @discardableResult
+    func checkLastLaunchError() -> Bool {
+        let defaults = UserDefaults.standard
+        let signingWasInterrupted = defaults.bool(forKey: "SigningInProgress")
+        defaults.removeObject(forKey: "SigningInProgress")
+
+        guard let raw = defaults.string(forKey: "error") else {
+            if signingWasInterrupted {
+                print("[FlekDeck/Error] stale SigningInProgress with no backend diagnostic; not showing a synthetic app error")
+            }
+            return false
         }
-        guard let errorStr else { return }
-        UserDefaults.standard.removeObject(forKey: "error")
-        errorInfo = errorStr
+        defaults.removeObject(forKey: "error")
+
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            print("[FlekDeck/Error] backend recorded an empty error; not showing a synthetic app error")
+            return false
+        }
+        errorInfo = raw
         crashReportShow = true
-    }
-    
-    func displayErrorInfo(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "An unknown error occurred. No diagnostic text was provided."
-        }
-        return value
+        return true
     }
 
-    func copyError() { UIPasteboard.general.string = displayErrorInfo(errorInfo) }
-    
-    
+    func copyError() { UIPasteboard.general.string = errorInfo }
+
+
     func checkTeamId() {
         if let certificateTeamId = UserDefaults.standard.string(forKey: "LCCertificateTeamId") {
             if DataManager.shared.model.multiLCStatus != 2 {
@@ -256,10 +259,13 @@ struct LCTabView: View {
     
     func checkGetTaskAllow() {
         let task = SecTaskCreateFromSelf(nil)
-        guard let value = SecTaskCopyValueForEntitlement(task, "get-task-allow" as CFString, nil), (value.takeRetainedValue() as? NSNumber)?.boolValue ?? false else {
-            errorInfo = "lc.settings.notDevCert".loc
-            errorShow = true
+        guard let value = SecTaskCopyValueForEntitlement(task, "get-task-allow" as CFString, nil) else {
+            NSLog("[FlekDeck] get-task-allow entitlement is absent; valid for distribution/JIT-less installs")
             return
+        }
+        let allowed = (value.takeRetainedValue() as? NSNumber)?.boolValue ?? false
+        if !allowed {
+            NSLog("[FlekDeck] get-task-allow=false; keeping this as a diagnostic instead of a launch error")
         }
     }
     
@@ -310,11 +316,13 @@ struct LCTabView: View {
 
         sharedModel.selectedTab = .apps
         closeDuplicatedWindow()
-        checkLastLaunchError()
-        checkTeamId()
-        checkAndSaveBundleId()
-        checkGetTaskAllow()
-        checkPrivateContainerBookmark()
+        let presentedGuestCrash = checkLastLaunchError()
+        if !presentedGuestCrash {
+            checkTeamId()
+            checkAndSaveBundleId()
+            checkGetTaskAllow()
+            checkPrivateContainerBookmark()
+        }
         checkiOSBeta()
         processPendingURLIfNeeded()
     }

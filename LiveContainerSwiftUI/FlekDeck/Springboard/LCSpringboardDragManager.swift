@@ -42,7 +42,7 @@ final class LCDragOperation {
 
 // MARK: - Drag manager
 
-final class LCSpringboardDragManager: NSObject, UIGestureRecognizerDelegate {
+final class LCSpringboardDragManager {
 
     weak var viewController: LCSpringboardViewController?
 
@@ -57,35 +57,6 @@ final class LCSpringboardDragManager: NSObject, UIGestureRecognizerDelegate {
     var isDragging: Bool { currentOperation != nil }
 
     // MARK: - Gesture handler
-
-    /// Installed app holds belong to UICollectionView's context-menu recognizer.
-    /// Reject the root drag recognizer before it enters `.began`; cancelling it
-    /// after `.began` is too late and can suppress the menu entirely.
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard let gesture = gestureRecognizer as? UILongPressGestureRecognizer,
-              let vc = viewController,
-              !vc.isInEditMode else {
-            return true
-        }
-
-        let touchInView = gesture.location(in: vc.view)
-        guard let (_, pageCell) = vc.pageCellAtPoint(touchInView) else {
-            return true
-        }
-
-        let touchInPage = gesture.location(in: pageCell.collectionView)
-        guard let indexPath = pageCell.collectionView.indexPathForItem(at: touchInPage),
-              indexPath.item < pageCell.items.count else {
-            // Empty-space holds still belong to FlekDeck's edit-mode gesture.
-            return true
-        }
-
-        let item = pageCell.items[indexPath.item]
-        if case .installed = item {
-            return false
-        }
-        return true
-    }
 
     func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         switch gesture.state {
@@ -146,8 +117,10 @@ final class LCSpringboardDragManager: NSObject, UIGestureRecognizerDelegate {
                 feedbackGenerator.impactOccurred()
                 vc.setEditing(true)
             } else {
-                // Installed app → the recognizer delegate should already have
-                // rejected this drag so UIKit can present the context menu.
+                // Installed app → let context menu handle it. This is main's
+                // proven behavior and does not install another root delegate.
+                gesture.isEnabled = false
+                gesture.isEnabled = true
                 return
             }
         }

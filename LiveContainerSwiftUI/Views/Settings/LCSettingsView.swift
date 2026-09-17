@@ -507,20 +507,13 @@ struct LCSettingsView: View {
                         } label: {
                             Text("Reset Symbol Offsets")
                         }
-                        Button {
-                            presentFLEXOverlay()
-                        } label: {
-                            Text("Show FLEX Overlay")
+                        if NSClassFromString("FLEXManager") != nil {
+                            Button {
+                                presentFLEXOverlay()
+                            } label: {
+                                Text("Show FLEX Overlay")
+                            }
                         }
-                        .disabled(NSClassFromString("FLEXManager") == nil)
-                        #if is32BitSupported
-                        HStack {
-                            Text("32-bit Runtime")
-                            Spacer()
-                            TextField("", text: $liveExec32Path)
-                                .multilineTextAlignment(.trailing)
-                        }
-                        #endif
                     } header: {
                         Text("Developer Settings")
                     } footer: {

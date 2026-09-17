@@ -8,7 +8,15 @@
 import LocalAuthentication
 
 extension LCUtils {
-    public static let appGroupUserDefault = UserDefaults.init(suiteName: LCSharedUtils.appGroupID()) ?? UserDefaults.standard
+    public static let appGroupUserDefault: UserDefaults = {
+        guard let groupID = LCSharedUtils.appGroupID(),
+              !groupID.isEmpty,
+              groupID != "Unknown",
+              let defaults = UserDefaults(suiteName: groupID) else {
+            return .standard
+        }
+        return defaults
+    }()
     
     public static func signTweaks(tweakFolderUrl: URL, force : Bool = false, progressHandler : ((Progress) -> Void)? = nil) async throws {
         guard LCSharedUtils.certificatePassword() != nil else {
@@ -215,8 +223,8 @@ extension LCUtils {
             return true
         }
         
-        guard let groupUserDefaults = UserDefaults(suiteName: LCSharedUtils.appGroupID()),
-              let jitEnabler = JITEnablerType(rawValue: groupUserDefaults.integer(forKey: "LCJITEnablerType")) else {
+        let groupUserDefaults = LCUtils.appGroupUserDefault
+        guard let jitEnabler = JITEnablerType(rawValue: groupUserDefaults.integer(forKey: "LCJITEnablerType")) else {
             return false
         }
         

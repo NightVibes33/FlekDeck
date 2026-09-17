@@ -234,36 +234,277 @@ int LCPatchExecSlice(const char *path, struct mach_header_64 *header, bool doInj
     return ans;
 }
 
-NSString *LCParseMachO(const char *path, bool readOnly, LCParseMachOCallback callback) {
-    int fd = open(path, readOnly ? O_RDONLY : O_RDWR, (mode_t)readOnly ? 0400 : 0600);
-    struct stat s;
-    fstat(fd, &s);
-    void *map = mmap(NULL, s.st_size, readOnly ? PROT_READ : (PROT_READ | PROT_WRITE), readOnly ? MAP_PRIVATE : MAP_SHARED, fd, 0);
+static BOOL LCInspectSliceEncryption(void *slice, size_t sliceSize, BOOL *encryptedOut) {
+    if (!slice || sliceSize < sizeof(struct mach_header)) return NO;
+    uint32_t magic = *(uint32_t *)slice;
+    size_t headerSize = 0;
+    uint32_t ncmds = 0;
+    uint32_t sizeofcmds = 0;
+    if (magic == MH_MAGIC_64) {
+        if (sliceSize < sizeof(struct mach_header_64)) return NO;
+        struct mach_header_64 *h = (struct mach_header_64 *)slice;
+        headerSize = sizeof(struct mach_header_64);
+        ncmds = h->ncmds;
+        sizeofcmds = h->sizeofcmds;
+    } else if (magic == MH_MAGIC) {
+        struct mach_header *h = (struct mach_header *)slice;
+        headerSize = sizeof(struct mach_header);
+        ncmds = h->ncmds;
+        sizeofcmds = h->sizeofcmds;
+    } else {
+        return NO;
+    }
+    if ((uint64_t)headerSize + sizeofcmds > sliceSize) return NO;
+
+    uint8_t *cursor = (uint8_t *)slice + headerSize;
+    uint8_t *commandsEnd = cursor + sizeofcmds;
+    for (uint32_t i = 0; i < ncmds; i++) {
+        if ((size_t)(commandsEnd - cursor) < sizeof(struct load_command)) return NO;
+        struct load_command *command = (struct load_command *)cursor;
+        if (command->cmdsize < sizeof(struct load_command) || cursor + command->cmdsize > commandsEnd) return NO;
+        if (command->cmd == LC_ENCRYPTION_INFO || command->cmd == LC_ENCRYPTION_INFO_64) {
+            if (command->cmdsize < sizeof(struct encryption_info_command)) return NO;
+            if (((struct encryption_info_command *)command)->cryptid != 0 && encryptedOut) *encryptedOut = YES;
+        }
+        cursor += command->cmdsize;
+    }
+    return YES;
+}
+
+NSString *LCInspectMachOArchitectures(const char *path, bool *hasArm64, bool *hasArm32, bool *isEncrypted) {
+    if (hasArm64) *hasArm64 = false;
+    if (hasArm32) *hasArm32 = false;
+    if (isEncrypted) *isEncrypted = false;
+    if (!path) return @"Invalid Mach-O path";
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return [NSString stringWithFormat:@"Failed to open %s: %s", path, strerror(errno)];
+    struct stat s = {0};
+    if (fstat(fd, &s) != 0 || s.st_size < (off_t)sizeof(uint32_t)) {
+        NSString *error = [NSString stringWithFormat:@"Failed to inspect %s: %s", path, strerror(errno)];
+        close(fd);
+        return error;
+    }
+    void *map = mmap(NULL, (size_t)s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (map == MAP_FAILED) {
-        return [NSString stringWithFormat:@"Failed to map %s: %s", path, strerror(errno)];
+        NSString *error = [NSString stringWithFormat:@"Failed to map %s: %s", path, strerror(errno)];
+        close(fd);
+        return error;
     }
 
+    NSString *result = nil;
+    BOOL encrypted = NO;
     uint32_t magic = *(uint32_t *)map;
     if (magic == FAT_CIGAM) {
-        // Find compatible slice
-        struct fat_header *header = (struct fat_header *)map;
-        struct fat_arch *arch = (struct fat_arch *)(map + sizeof(struct fat_header));
-        for (int i = 0; i < OSSwapInt32(header->nfat_arch); i++) {
-            if (OSSwapInt32(arch->cputype) == CPU_TYPE_ARM64) {
-                callback(path, (struct mach_header_64 *)(map + OSSwapInt32(arch->offset)), fd, map);
+        struct fat_header *fat = (struct fat_header *)map;
+        uint32_t count = OSSwapInt32(fat->nfat_arch);
+        size_t tableSize = sizeof(struct fat_header) + ((size_t)count * sizeof(struct fat_arch));
+        if (count > 128 || tableSize > (size_t)s.st_size) {
+            result = @"Malformed FAT Mach-O architecture table";
+        } else {
+            struct fat_arch *arch = (struct fat_arch *)((uint8_t *)map + sizeof(struct fat_header));
+            for (uint32_t i = 0; i < count; i++, arch++) {
+                cpu_type_t cpu = (cpu_type_t)OSSwapInt32(arch->cputype);
+                uint32_t offset = OSSwapInt32(arch->offset);
+                uint32_t size = OSSwapInt32(arch->size);
+                if ((uint64_t)offset + size > (uint64_t)s.st_size || size < sizeof(struct mach_header)) {
+                    result = @"Malformed FAT Mach-O slice";
+                    break;
+                }
+                if (cpu != CPU_TYPE_ARM64 && cpu != CPU_TYPE_ARM) continue;
+                if (cpu == CPU_TYPE_ARM64 && hasArm64) *hasArm64 = true;
+                if (cpu == CPU_TYPE_ARM && hasArm32) *hasArm32 = true;
+                if (!LCInspectSliceEncryption((uint8_t *)map + offset, size, &encrypted)) {
+                    result = @"Malformed ARM Mach-O load commands";
+                    break;
+                }
             }
-            arch = (struct fat_arch *)((void *)arch + sizeof(struct fat_arch));
         }
-    } else if (magic == MH_MAGIC_64 || magic == MH_MAGIC) {
-        callback(path, (struct mach_header_64 *)map, fd, map);
+    } else if (magic == MH_MAGIC_64) {
+        struct mach_header_64 *mh = (struct mach_header_64 *)map;
+        if (mh->cputype == CPU_TYPE_ARM64 && hasArm64) *hasArm64 = true;
+        if (!LCInspectSliceEncryption(map, (size_t)s.st_size, &encrypted)) result = @"Malformed 64-bit Mach-O load commands";
+    } else if (magic == MH_MAGIC) {
+        struct mach_header *mh = (struct mach_header *)map;
+        if (mh->cputype == CPU_TYPE_ARM && hasArm32) *hasArm32 = true;
+        if (!LCInspectSliceEncryption(map, (size_t)s.st_size, &encrypted)) result = @"Malformed 32-bit Mach-O load commands";
     } else {
-        return @"Not a Mach-O file";
+        result = @"Not a Mach-O file";
     }
 
-    msync(map, s.st_size, MS_SYNC);
-    munmap(map, s.st_size);
+    if (isEncrypted) *isEncrypted = encrypted;
+    munmap(map, (size_t)s.st_size);
     close(fd);
-    return nil;
+    return result;
+}
+
+static BOOL LCReadSliceSDKVersion(void *slice, size_t sliceSize, uint32_t *sdkOut) {
+    if (!slice || !sdkOut || sliceSize < sizeof(struct mach_header)) return NO;
+    uint32_t magic = *(uint32_t *)slice;
+    size_t headerSize = 0;
+    uint32_t ncmds = 0;
+    uint32_t sizeofcmds = 0;
+    if (magic == MH_MAGIC_64) {
+        if (sliceSize < sizeof(struct mach_header_64)) return NO;
+        struct mach_header_64 *h = (struct mach_header_64 *)slice;
+        headerSize = sizeof(struct mach_header_64);
+        ncmds = h->ncmds;
+        sizeofcmds = h->sizeofcmds;
+    } else if (magic == MH_MAGIC) {
+        struct mach_header *h = (struct mach_header *)slice;
+        headerSize = sizeof(struct mach_header);
+        ncmds = h->ncmds;
+        sizeofcmds = h->sizeofcmds;
+    } else {
+        return NO;
+    }
+    if ((uint64_t)headerSize + sizeofcmds > sliceSize) return NO;
+
+    uint8_t *cursor = (uint8_t *)slice + headerSize;
+    uint8_t *end = cursor + sizeofcmds;
+    uint32_t found = 0;
+    for (uint32_t i = 0; i < ncmds; i++) {
+        if ((size_t)(end - cursor) < sizeof(struct load_command)) return NO;
+        struct load_command *command = (struct load_command *)cursor;
+        if (command->cmdsize < sizeof(struct load_command) || cursor + command->cmdsize > end) return NO;
+        if (command->cmd == LC_BUILD_VERSION && command->cmdsize >= sizeof(struct build_version_command)) {
+            struct build_version_command *build = (struct build_version_command *)command;
+            if (build->platform == PLATFORM_IOS || build->platform == PLATFORM_IOSSIMULATOR) {
+                found = build->sdk;
+            }
+        } else if (command->cmd == LC_VERSION_MIN_IPHONEOS && command->cmdsize >= sizeof(struct version_min_command)) {
+            struct version_min_command *minimum = (struct version_min_command *)command;
+            if (!found) found = minimum->sdk;
+        }
+        cursor += command->cmdsize;
+    }
+    *sdkOut = found;
+    return YES;
+}
+
+NSString *LCReadMachOSDKVersion(const char *path, bool preferArm32, uint32_t *sdkVersion) {
+    if (sdkVersion) *sdkVersion = 0;
+    if (!path || !sdkVersion) return @"Invalid SDK reader arguments";
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return [NSString stringWithFormat:@"Failed to open %s: %s", path, strerror(errno)];
+    struct stat s = {0};
+    if (fstat(fd, &s) != 0 || s.st_size < (off_t)sizeof(uint32_t)) {
+        NSString *error = [NSString stringWithFormat:@"Failed to inspect SDK for %s: %s", path, strerror(errno)];
+        close(fd);
+        return error;
+    }
+    void *map = mmap(NULL, (size_t)s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) {
+        NSString *error = [NSString stringWithFormat:@"Failed to map %s: %s", path, strerror(errno)];
+        close(fd);
+        return error;
+    }
+
+    NSString *result = nil;
+    BOOL foundTarget = NO;
+    cpu_type_t target = preferArm32 ? CPU_TYPE_ARM : CPU_TYPE_ARM64;
+    uint32_t magic = *(uint32_t *)map;
+    if (magic == FAT_CIGAM) {
+        struct fat_header *fat = (struct fat_header *)map;
+        uint32_t count = OSSwapInt32(fat->nfat_arch);
+        size_t tableSize = sizeof(struct fat_header) + ((size_t)count * sizeof(struct fat_arch));
+        if (count > 128 || tableSize > (size_t)s.st_size) {
+            result = @"Malformed FAT Mach-O architecture table";
+        } else {
+            struct fat_arch *arch = (struct fat_arch *)((uint8_t *)map + sizeof(struct fat_header));
+            for (uint32_t i = 0; i < count; i++, arch++) {
+                if ((cpu_type_t)OSSwapInt32(arch->cputype) != target) continue;
+                uint32_t offset = OSSwapInt32(arch->offset);
+                uint32_t size = OSSwapInt32(arch->size);
+                if ((uint64_t)offset + size > (uint64_t)s.st_size || size < sizeof(struct mach_header)) {
+                    result = @"Malformed target Mach-O slice";
+                    break;
+                }
+                foundTarget = YES;
+                if (!LCReadSliceSDKVersion((uint8_t *)map + offset, size, sdkVersion)) {
+                    result = @"Malformed target Mach-O load commands";
+                }
+                break;
+            }
+        }
+    } else if (magic == MH_MAGIC_64 || magic == MH_MAGIC) {
+        cpu_type_t cpu = magic == MH_MAGIC_64
+            ? ((struct mach_header_64 *)map)->cputype
+            : ((struct mach_header *)map)->cputype;
+        if (cpu == target) {
+            foundTarget = YES;
+            if (!LCReadSliceSDKVersion(map, (size_t)s.st_size, sdkVersion)) {
+                result = @"Malformed Mach-O load commands";
+            }
+        }
+    } else {
+        result = @"Not a Mach-O file";
+    }
+    if (!result && !foundTarget) result = @"Requested ARM slice was not found";
+
+    munmap(map, (size_t)s.st_size);
+    close(fd);
+    return result;
+}
+
+NSString *LCParseMachO(const char *path, bool readOnly, LCParseMachOCallback callback) {
+    if (!path || !callback) return @"Invalid Mach-O parser arguments";
+    int fd = open(path, readOnly ? O_RDONLY : O_RDWR, readOnly ? 0400 : 0600);
+    if (fd < 0) return [NSString stringWithFormat:@"Failed to open %s: %s", path, strerror(errno)];
+
+    struct stat s = {0};
+    if (fstat(fd, &s) != 0) {
+        NSString *error = [NSString stringWithFormat:@"Failed to stat %s: %s", path, strerror(errno)];
+        close(fd);
+        return error;
+    }
+    if (s.st_size < (off_t)sizeof(uint32_t)) { close(fd); return @"Mach-O file is too small"; }
+
+    int protection = readOnly ? PROT_READ : (PROT_READ | PROT_WRITE);
+    int flags = readOnly ? MAP_PRIVATE : MAP_SHARED;
+    void *map = mmap(NULL, (size_t)s.st_size, protection, flags, fd, 0);
+    if (map == MAP_FAILED) {
+        NSString *error = [NSString stringWithFormat:@"Failed to map %s: %s", path, strerror(errno)];
+        close(fd);
+        return error;
+    }
+
+    NSString *result = nil;
+    uint32_t magic = *(uint32_t *)map;
+    if (magic == FAT_CIGAM) {
+        struct fat_header *fat = (struct fat_header *)map;
+        uint32_t count = OSSwapInt32(fat->nfat_arch);
+        size_t tableSize = sizeof(struct fat_header) + ((size_t)count * sizeof(struct fat_arch));
+        if (count > 128 || tableSize > (size_t)s.st_size) {
+            result = @"Malformed FAT Mach-O architecture table";
+        } else {
+            struct fat_arch *arch = (struct fat_arch *)((uint8_t *)map + sizeof(struct fat_header));
+            for (uint32_t i = 0; i < count; i++, arch++) {
+                cpu_type_t cpu = (cpu_type_t)OSSwapInt32(arch->cputype);
+                if (cpu != CPU_TYPE_ARM64) continue;
+                uint32_t offset = OSSwapInt32(arch->offset);
+                uint32_t size = OSSwapInt32(arch->size);
+                if ((uint64_t)offset + size > (uint64_t)s.st_size || size < sizeof(struct mach_header_64)) {
+                    result = @"Malformed ARM64 Mach-O slice";
+                    break;
+                }
+                callback(path, (struct mach_header_64 *)((uint8_t *)map + offset), fd, map);
+            }
+        }
+    } else if (magic == MH_MAGIC_64) {
+        callback(path, (struct mach_header_64 *)map, fd, map);
+    } else if (magic == MH_MAGIC) {
+        // ARM32 is intentionally inspection-only. Existing mutation callbacks
+        // assume mach_header_64 and must never receive a 32-bit header.
+    } else {
+        result = @"Not a Mach-O file";
+    }
+
+    if (!readOnly && result == nil) msync(map, (size_t)s.st_size, MS_SYNC);
+    munmap(map, (size_t)s.st_size);
+    close(fd);
+    return result;
 }
 
 NSString *LCPatchMachOFixupARM64eSlice(const char *path) {
@@ -353,14 +594,21 @@ const uint8_t* LCGetMachOUUID(struct mach_header_64 *header) {
 }
 
 bool LCIsMachOEncrypted(struct mach_header_64 *header) {
-    struct load_command *command = (struct load_command *)(header + 1);
-    for(int i = 0; i < header->ncmds; i++) {
+    if (!header) return false;
+    uint32_t magic = *(uint32_t *)header;
+    size_t headerSize = magic == MH_MAGIC_64 ? sizeof(struct mach_header_64) :
+                        magic == MH_MAGIC ? sizeof(struct mach_header) : 0;
+    if (!headerSize) return false;
+    uint32_t ncmds = magic == MH_MAGIC_64 ? header->ncmds : ((struct mach_header *)header)->ncmds;
+    struct load_command *command = (struct load_command *)((uint8_t *)header + headerSize);
+    for(uint32_t i = 0; i < ncmds; i++) {
         if(command->cmd == LC_ENCRYPTION_INFO || command->cmd == LC_ENCRYPTION_INFO_64) {
             return ((struct encryption_info_command *)command)->cryptid != 0;
         }
-        command = (struct load_command *)((void *)command + command->cmdsize);
+        if(command->cmdsize < sizeof(struct load_command)) return false;
+        command = (struct load_command *)((uint8_t *)command + command->cmdsize);
     }
-    return NO;
+    return false;
 }
 
 uint64_t LCFindSymbolOffset(const char *basePath, const char *symbol) {
