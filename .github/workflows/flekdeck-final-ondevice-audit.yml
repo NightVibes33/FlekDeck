@@ -10,6 +10,8 @@ on:
       - 'Tools/patch_flekdeck_postscan_runtime.py'
       - 'Tools/patch_flekdeck_user_regressions.py'
       - 'Tools/patch_flekdeck_ondevice_regressions.py'
+      - 'Tools/patch_flekdeck_signing_stability.py'
+      - 'Tools/patch_flekdeck_context_menu_arbitration.py'
       - 'Tools/patch_flekdeck_liveexec32_loader_guard.py'
       - 'Tools/patch_flekdeck_error_transport.py'
       - 'Tools/patch_flekdeck_macho_contract.py'
@@ -49,6 +51,8 @@ jobs:
             Tools/patch_flekdeck_postscan_runtime.py \
             Tools/patch_flekdeck_user_regressions.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
+            Tools/patch_flekdeck_signing_stability.py \
+            Tools/patch_flekdeck_context_menu_arbitration.py \
             Tools/patch_flekdeck_liveexec32_loader_guard.py \
             Tools/patch_flekdeck_error_transport.py \
             Tools/patch_flekdeck_macho_contract.py \
@@ -59,12 +63,14 @@ jobs:
             Tools/patch_flekdeck_classic_launch_isolation.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
 
-          # Error authenticity: show only the real backend string.
+          # Error authenticity: show only the real backend string and isolate
+          # every guest launch from stale errors left by a previous app.
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           ! grep -q 'errorStr = "lc.signer.crashDuringSignErr"' LiveContainerSwiftUI/Views/LCTabView.swift
           grep -q 'let presentedGuestCrash = checkLastLaunchError()' LiveContainerSwiftUI/Views/LCTabView.swift
           grep -q 'ShareLink(item: errorInfo)' LiveContainerSwiftUI/Views/LCTabView.swift
+          grep -q 'Start a new guest-error epoch' LiveContainer/LCBootstrap.m
           grep -q 'Bookmark resolution failed without an NSError.' LiveContainer/LCBootstrap.m
           grep -q 'Security-scoped access denied for data container:' LiveContainer/LCBootstrap.m
           ! grep -q 'The security-scoped resource denied access.' LiveContainer/LCBootstrap.m
@@ -86,13 +92,16 @@ jobs:
           grep -q 'falling back to normal launch' LiveContainer/LCSharedUtils.m
           ! grep -q 'guestSupportsPad' LiveContainer/LCSharedUtils.m
 
-          # Shared settings and immediate relaunch failures must be real.
+          # Shared settings, signer state and immediate relaunch failures must be real.
           grep -q 'if(!lcSharedDefaults)' LiveContainer/LCBootstrap.m
           grep -q 'guard LCSharedUtils.launchToGuestApp(withClassicMode: classicMode) else' LiveContainerSwiftUI/Models/LCAppModel.swift
+          ! grep -q 'NSError \*error;' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -q 'if (error) \*error = nil;' LiveContainerSwiftUI/Utilities/LCUtils.m
 
-          # Home keeps main's gesture ownership. Open Data Folder is context menu only.
-          ! grep -q 'longPressGesture.delegate = dragManager' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
-          ! grep -q 'gestureRecognizerShouldBegin' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+          # Home hold-menu arbitration is separate from the bottom-swipe switcher.
+          grep -q 'longPressGesture.delegate = dragManager' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+          grep -q 'gestureRecognizerShouldBegin' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+          grep -q 'if case .installed = pageCell.items\[indexPath.item\]' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
           grep -q 'homeOpenDataFolder' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -q 'lc.appBanner.openDataFolder' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
 
@@ -127,7 +136,7 @@ jobs:
             [ ! -f "$script" ] || python3 "$script"
           done
 
-      - name: Restore exact generated main Home switcher
+      - name: Restore exact generated main App Switcher boundary
         run: |
           set -euxo pipefail
           git fetch --no-tags origin main
@@ -140,12 +149,13 @@ jobs:
           (cd /tmp/flek-main-switcher && python3 Tools/patch_direct_multitask_host_bridge.py)
           (cd /tmp/flek-main-switcher && python3 Tools/patch_parallel_guest_viewport.py)
 
+          # Only files owned by the App Switcher/Parallel runtime are forced to
+          # generated-main. Springboard long-press arbitration is independent and
+          # is validated below rather than overwritten here.
           protected=(
             MultitaskSupport/MultitaskDockView.swift
             MultitaskSupport/DecoratedAppSceneViewController.m
             MultitaskSupport/MultitaskAppWindow.swift
-            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
-            LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
           )
           for p in "${protected[@]}"; do
             cp "/tmp/flek-main-switcher/$p" "$p"
@@ -158,7 +168,7 @@ jobs:
             ref_hash="$(git -C /tmp/flek-main-switcher hash-object "$p")"
             built_hash="$(git hash-object "$p")"
             test "$built_hash" = "$ref_hash" || {
-              echo "MAIN HOME/SWITCHER REGRESSION: $p differs from generated main" >&2
+              echo "MAIN APP SWITCHER REGRESSION: $p differs from generated main" >&2
               diff -u "/tmp/flek-main-switcher/$p" "$p" || true
               exit 1
             }
@@ -170,8 +180,11 @@ jobs:
           grep -q 'MultitaskSwipeZone' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
           grep -q '!hasForegroundAppWindow()' MultitaskSupport/MultitaskDockView.swift
-          ! grep -q 'longPressGesture.delegate = dragManager' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
-          ! grep -q 'gestureRecognizerShouldBegin' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
+
+          # The context menu must remain reliable after the exact-main switcher
+          # restore. Its recognizer is a UILongPress, not the switcher's UIPan.
+          grep -q 'longPressGesture.delegate = dragManager' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
+          grep -q 'gestureRecognizerShouldBegin' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
@@ -263,6 +276,8 @@ jobs:
             Tools/patch_flekdeck_user_regressions.py \
             Tools/patch_flekdeck_runtime_stability.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
+            Tools/patch_flekdeck_signing_stability.py \
+            Tools/patch_flekdeck_context_menu_arbitration.py \
             Tools/patch_flekdeck_liveexec32_loader_guard.py \
             Tools/patch_flekdeck_error_transport.py \
             Tools/patch_flekdeck_macho_contract.py \
