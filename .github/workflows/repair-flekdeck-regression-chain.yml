@@ -1,0 +1,71 @@
+name: Repair FlekDeck Regression Chain
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [temp/32bit-liveexec-data-folder]
+    paths:
+      - '.github/workflows/repair-flekdeck-regression-chain.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Repair guardrail ordering conflict
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          user = Path('Tools/patch_flekdeck_user_regressions.py')
+          s = user.read_text()
+          anchor = 's = vc.read_text()\n'
+          fix = 's = vc.read_text()\ns = s.replace("        longPressGesture.delegate = dragManager\\n", "", 1)\n'
+          if fix not in s:
+              if anchor not in s:
+                  raise SystemExit('user regression VC anchor missing')
+              s = s.replace(anchor, fix, 1)
+          user.write_text(s)
+
+          workflow = Path('.github/workflows/flekdeck-touched-code-safety.yml')
+          w = workflow.read_text()
+          trigger_anchor = "      - 'Tools/patch_flekdeck_touched_code_safety.py'\n"
+          extra = (
+              "      - 'Tools/patch_flekdeck_runtime_guardrails.py'\n"
+              "      - 'Tools/patch_flekdeck_user_regressions.py'\n"
+              "      - 'Tools/patch_flekdeck_context_menu_arbitration.py'\n"
+          )
+          if "      - 'Tools/patch_flekdeck_user_regressions.py'\n" not in w:
+              if trigger_anchor not in w:
+                  raise SystemExit('safety workflow trigger anchor missing')
+              w = w.replace(trigger_anchor, trigger_anchor + extra, 1)
+          workflow.write_text(w)
+
+          # Sanity-check the script can now clear the current delegate before its
+          # own invariant; the canonical context-menu pass re-adds it afterward.
+          text = user.read_text()
+          if 's = s.replace("        longPressGesture.delegate = dragManager\\n", "", 1)' not in text:
+              raise SystemExit('line-based long-press cleanup missing')
+          PY
+
+          git diff --check
+          git diff -- Tools/patch_flekdeck_user_regressions.py .github/workflows/flekdeck-touched-code-safety.yml
+
+      - name: Commit repair
+        run: |
+          set -euxo pipefail
+          git add Tools/patch_flekdeck_user_regressions.py .github/workflows/flekdeck-touched-code-safety.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name 'NightVibes33 Actions'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'Fix regression guardrail ordering conflict'
+          git push origin HEAD:temp/32bit-liveexec-data-folder
