@@ -612,7 +612,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 copyError()
             })
         } message: {
-            Text(errorInfo)
+            Text(displayErrorInfo(errorInfo))
+                .foregroundColor(.primary)
         }
         .alert("lc.flek.installFailedTitle".loc, isPresented: Binding(
             get: { failedInstallItem != nil },
@@ -2549,8 +2550,16 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         navigationTarget = nil
     }
     
+    func displayErrorInfo(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "An unknown error occurred. No diagnostic text was provided."
+        }
+        return value
+    }
+
     func copyError() {
-        UIPasteboard.general.string = errorInfo
+        UIPasteboard.general.string = displayErrorInfo(errorInfo)
     }
     
     func handleURL(url : URL) {

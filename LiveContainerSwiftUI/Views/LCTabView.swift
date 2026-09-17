@@ -38,17 +38,22 @@ struct LCTabView: View {
             Button("lc.common.ok".loc) {}
             Button("lc.common.copy".loc) { copyError() }
         } message: {
-            Text(errorInfo)
+            Text(displayErrorInfo(errorInfo))
+                .foregroundColor(.primary)
         }
         .sheet(isPresented: $crashReportShow) {
             NavigationView {
                 ScrollView {
-                    Text(errorInfo)
+                    Text(displayErrorInfo(errorInfo))
                         .font(.system(size: 12).monospaced())
-                        .fixedSize(horizontal: false, vertical: false)
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                        .padding(.vertical, 8)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Color(uiColor: .systemBackground))
                 .padding(.horizontal)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
@@ -56,7 +61,7 @@ struct LCTabView: View {
                             if let log = UserDefaults.lcShared().url(forKey: "LC32BitTranslationLayerLogFile") {
                                 ShareLink(item: log)
                             } else {
-                                ShareLink(item: errorInfo)
+                                ShareLink(item: displayErrorInfo(errorInfo))
                             }
                         } else {
                             Button("lc.common.copy".loc) { copyError() }
@@ -167,7 +172,15 @@ struct LCTabView: View {
         crashReportShow = true
     }
     
-    func copyError() { UIPasteboard.general.string = errorInfo }
+    func displayErrorInfo(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "An unknown error occurred. No diagnostic text was provided."
+        }
+        return value
+    }
+
+    func copyError() { UIPasteboard.general.string = displayErrorInfo(errorInfo) }
     
     
     func checkTeamId() {

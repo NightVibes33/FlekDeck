@@ -235,10 +235,12 @@ class LCAppModel: ObservableObject, Hashable {
         
         let classicMode = appInfo.defaultClassicMode
 #if is32BitSupported
-        // LiveExec32 and Classic Mode both require the single-process host path.
-        let multitask = (appInfo.is32bit || classicMode != 0) ? false : (multitask ?? shouldLaunchInMultitaskMode)
+        // Preserve FlekDeck's App Switcher / Parallel routing for every native
+        // ARM64 guest. Only ARM32 is forced onto the single-process LiveExec32
+        // path; Classic Mode is consumed only if that single-process path wins.
+        let multitask = appInfo.is32bit ? false : (multitask ?? shouldLaunchInMultitaskMode)
 #else
-        let multitask = classicMode == 0 ? (multitask ?? shouldLaunchInMultitaskMode) : false
+        let multitask = multitask ?? shouldLaunchInMultitaskMode
 #endif
         
         if MultitaskManager.isMultitasking() || multitask,

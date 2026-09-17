@@ -116,10 +116,12 @@ old_multitask = '''#if is32BitSupported
 #endif'''
 new_multitask = '''        let classicMode = appInfo.defaultClassicMode
 #if is32BitSupported
-        // LiveExec32 and Classic Mode both require the single-process host path.
-        let multitask = (appInfo.is32bit || classicMode != 0) ? false : (multitask ?? shouldLaunchInMultitaskMode)
+        // Preserve FlekDeck's App Switcher / Parallel routing for native ARM64.
+        // Only ARM32 is forced to the single-process LiveExec32 path; Classic
+        // Mode is consumed if the single-process path is actually selected.
+        let multitask = appInfo.is32bit ? false : (multitask ?? shouldLaunchInMultitaskMode)
 #else
-        let multitask = classicMode == 0 ? (multitask ?? shouldLaunchInMultitaskMode) : false
+        let multitask = multitask ?? shouldLaunchInMultitaskMode
 #endif'''
 if new_multitask not in text:
     if old_multitask not in text:
