@@ -4,6 +4,10 @@ import runpy
 
 # Always run the primary stability hardening last.
 runpy.run_path("Tools/patch_flekdeck_runtime_stability.py", run_name="__main__")
+# Then apply the on-device regression fixes that preserve real guest errors,
+# keep distribution-signing diagnostics non-modal, and repair the nullable
+# app-group defaults path produced by the stability generator.
+runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
 
 # Old parity generators can append another Classic implementation because their
 # template no longer byte-matches the hardened one. Canonicalize the entire
