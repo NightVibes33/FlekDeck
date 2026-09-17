@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 
 app_list = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift")
 text = app_list.read_text()
@@ -42,4 +43,9 @@ if final.count("app.appInfo.dataUUID = container.folderName") < 2:
 if final.count("app.uiDefaultDataFolder = container.folderName") < 2:
     raise SystemExit("Quick-container UI default is not synchronized in both menu implementations")
 
-print("FlekDeck Home quick-container selection now persists LCDataUUID in UIKit and SwiftUI menus")
+# Keep app-specific ARM32 runtime choices across IPA replacement too. Running
+# this from the final context/runtime adapter ensures older parity generators
+# cannot silently drop that preference after this script has normalized menus.
+runpy.run_path("Tools/patch_flekdeck_arm32_persistence.py", run_name="__main__")
+
+print("FlekDeck Home container state and per-app ARM32 runtime persistence are synchronized")
