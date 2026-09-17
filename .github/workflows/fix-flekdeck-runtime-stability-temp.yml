@@ -8,6 +8,7 @@ on:
       - '.github/workflows/fix-flekdeck-runtime-stability-temp.yml'
       - 'Tools/patch_flekdeck_runtime_stability.py'
       - 'Tools/patch_flekdeck_runtime_guardrails.py'
+      - 'Tools/patch_flekdeck_ondevice_regressions.py'
 
 permissions:
   contents: write
@@ -38,7 +39,10 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          python3 -m py_compile Tools/patch_flekdeck_runtime_stability.py Tools/patch_flekdeck_runtime_guardrails.py
+          python3 -m py_compile \
+            Tools/patch_flekdeck_runtime_stability.py \
+            Tools/patch_flekdeck_runtime_guardrails.py \
+            Tools/patch_flekdeck_ondevice_regressions.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
 
           grep -q 'instancesRespondToSelector:modernInit' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
@@ -47,12 +51,20 @@ jobs:
           grep -q 'compatibility relaunch failed twice' LiveContainer/LCSharedUtils.m
           grep -q 'if (shouldTerminate)' LiveContainer/LCSharedUtils.m
           ! grep -q 'completionHandler(success);' LiveContainer/LCSharedUtils.m
-          grep -q 'groupID != "Unknown"' LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+          grep -q 'guard let groupID = LCSharedUtils.appGroupID()' LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
           grep -q 'let groupUserDefaults = LCUtils.appGroupUserDefault' LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
           grep -q 'CPU_TYPE_ARM64 && cputype != CPU_TYPE_ARM' LiveContainer/LCMachOUtils.m
           ! grep -q 'TextField("", text: \$liveExec32Path)' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           test "$(grep -c -- '- (NSUInteger)defaultClassicMode {' LiveContainerSwiftUI/Models/LCAppInfo.m)" = 1
           test "$(grep -c -- '+ (BOOL)launchToGuestAppWithClassicMode' LiveContainer/LCSharedUtils.m)" = 1
+
+          # Error fidelity: no synthetic fallback, and a real guest crash wins
+          # over host/certificate diagnostics during the same startup.
+          ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
+          ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'let presentedGuestCrash = checkLastLaunchError()' LiveContainerSwiftUI/Views/LCTabView.swift
+          grep -q 'get-task-allow=false; keeping this as a diagnostic' LiveContainerSwiftUI/Views/LCTabView.swift
+          grep -q 'ShareLink(item: errorInfo)' LiveContainerSwiftUI/Views/LCTabView.swift
 
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
@@ -60,10 +72,11 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
 
-      - name: Preserve existing FlekDeck direct-build compatibility
+      - name: Reapply exact main switcher compatibility last
         shell: bash
         run: |
           set -euxo pipefail
+          # Preserve the non-switcher temp compatibility pieces first.
           for script in \
             Tools/patch_direct_multitask_host_bridge.py \
             Tools/patch_stikdebug_pid_verification.py \
@@ -73,10 +86,23 @@ jobs:
             [ ! -f "$script" ] || python3 "$script"
           done
 
+          # Main's on-device-proven Home/Single/Parallel boundary must be LAST.
+          # This restores the exact gesture bridge main uses instead of letting
+          # the temp direct-build scripts silently own the Home switcher.
+          python3 Tools/patch_parallel_guest_viewport.py
+
+          grep -q 'FlekHomeSingleSwitcherGestureBridge' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'FlekSingleGuestSwitcherGestureRequested' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'MultitaskSwipeZone' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
+          grep -q '!hasForegroundAppWindow()' MultitaskSupport/MultitaskDockView.swift
+          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
+
       - name: Static analyzer
         shell: bash
         run: |
           set -uo pipefail
+          mkdir -p build
           set +e
           xcodebuild analyze \
             -project LiveContainer.xcodeproj \
@@ -96,6 +122,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          mkdir -p build
           set +e
           xcodebuild clean archive \
             -project LiveContainer.xcodeproj \
@@ -175,16 +202,21 @@ jobs:
           git add -- \
             Tools/patch_flekdeck_runtime_stability.py \
             Tools/patch_flekdeck_runtime_guardrails.py \
+            Tools/patch_flekdeck_ondevice_regressions.py \
+            Tools/patch_flekdeck_error_ui_parity.py \
             Tools/patch_flekdeck_shell_parity.py \
             .github/workflows/build-flekdeck-full-parity-temp.yml \
             .github/workflows/build-flekdeck-32bit-temp.yml \
             .github/workflows/build-flekdeck-32bit-parity-temp.yml \
+            .github/workflows/fix-flekdeck-runtime-stability-temp.yml \
             LiveContainer/LCSharedUtils.m \
             LiveContainer/LCMachOUtils.m \
             LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m \
             LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
             LiveContainerSwiftUI/Models/LCAppInfo.m \
-            LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+            LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
+            LiveContainerSwiftUI/Views/LCTabView.swift \
+            LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
 
           if git diff --cached --quiet; then
             echo 'Runtime stability fixes are already baked.'
@@ -193,5 +225,5 @@ jobs:
 
           git config user.name 'NightVibes33 Actions'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Harden parity runtime paths after on-device audit'
+          git commit -m 'Fix on-device parity regressions and preserve real errors'
           git push origin HEAD:temp/32bit-liveexec-data-folder
