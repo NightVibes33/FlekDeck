@@ -1,0 +1,197 @@
+name: FlekDeck Runtime Stability Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [temp/32bit-liveexec-data-folder]
+    paths:
+      - '.github/workflows/fix-flekdeck-runtime-stability-temp.yml'
+      - 'Tools/patch_flekdeck_runtime_stability.py'
+      - 'Tools/patch_flekdeck_runtime_guardrails.py'
+
+permissions:
+  contents: write
+
+jobs:
+  audit-build:
+    name: Runtime audit + Release archive
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      LIVEEXEC_RUNTIME_URL: https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/download/liveexec32-r89/LiveExec32-r89.zip
+      LIVEEXEC_RUNTIME_SHA256: 9d35d8d6d4c9c5188e6a53e797de307e6aab579ab43b8fdbb05c8e1b5e8cf7c2
+      LIVEEXEC_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
+
+    steps:
+      - name: Checkout temp branch
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Apply runtime stability guardrails
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile Tools/patch_flekdeck_runtime_stability.py Tools/patch_flekdeck_runtime_guardrails.py
+          python3 Tools/patch_flekdeck_runtime_guardrails.py
+
+          grep -q 'instancesRespondToSelector:modernInit' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q '_initWithApplicationProxy:(id)proxy overrideURL' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          ! grep -q 'NSCAssert(springBoard' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+          grep -q 'compatibility relaunch failed twice' LiveContainer/LCSharedUtils.m
+          grep -q 'if (shouldTerminate)' LiveContainer/LCSharedUtils.m
+          ! grep -q 'completionHandler(success);' LiveContainer/LCSharedUtils.m
+          grep -q 'groupID != "Unknown"' LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+          grep -q 'let groupUserDefaults = LCUtils.appGroupUserDefault' LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+          grep -q 'CPU_TYPE_ARM64 && cputype != CPU_TYPE_ARM' LiveContainer/LCMachOUtils.m
+          ! grep -q 'TextField("", text: \$liveExec32Path)' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          test "$(grep -c -- '- (NSUInteger)defaultClassicMode {' LiveContainerSwiftUI/Models/LCAppInfo.m)" = 1
+          test "$(grep -c -- '+ (BOOL)launchToGuestAppWithClassicMode' LiveContainer/LCSharedUtils.m)" = 1
+
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
+
+      - name: Preserve existing FlekDeck direct-build compatibility
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for script in \
+            Tools/patch_direct_multitask_host_bridge.py \
+            Tools/patch_stikdebug_pid_verification.py \
+            Tools/patch_guest_native_pip_bridge.py \
+            Tools/patch_youtube_native_pip_render.py \
+            Tools/patch_pip_state_separation.py; do
+            [ ! -f "$script" ] || python3 "$script"
+          done
+
+      - name: Static analyzer
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          xcodebuild analyze \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/analyze.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/analyze.log | tail -300 || true
+            exit "$status"
+          fi
+
+      - name: Build audited Release archive
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck-runtime-stable.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -350 || true
+            exit "$status"
+          fi
+
+      - name: Fetch and verify LiveExec32 r89
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf build/liveexec-source
+          mkdir -p build/liveexec-source
+          RUNTIME_ZIP="$RUNNER_TEMP/LiveExec32-r89.zip"
+          curl --fail --location --retry 3 --retry-all-errors -o "$RUNTIME_ZIP" "$LIVEEXEC_RUNTIME_URL"
+          echo "$LIVEEXEC_RUNTIME_SHA256  $RUNTIME_ZIP" | shasum -a 256 -c -
+          unzip -q "$RUNTIME_ZIP" -d build/liveexec-source
+          EMU="$(find build/liveexec-source -maxdepth 2 -type d -name 'LiveExec32.app' -print -quit)"
+          test -n "$EMU"
+          test -f "$EMU/$LIVEEXEC_LOAD_PATH"
+          test -d "$EMU/RootFS"
+          nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" > "$RUNNER_TEMP/liveexec32.symbols"
+          grep -q '_LC32RunGuest' "$RUNNER_TEMP/liveexec32.symbols"
+
+      - name: Embed runtime and package audited IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP="$(find build/FlekDeck-runtime-stable.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          EMU="$(find build/liveexec-source -maxdepth 2 -type d -name 'LiveExec32.app' -print -quit)"
+          test -n "$APP"; test -n "$EMU"; test -s Resources/universal.js
+          rm -rf "$APP/LiveExec32.app"
+          ditto "$EMU" "$APP/LiveExec32.app"
+          ditto Resources/universal.js "$APP/universal.js"
+          find "$APP" -type d -name _CodeSignature -prune -exec rm -rf {} + || true
+          find "$APP" -type f -name embedded.mobileprovision -delete || true
+          test -d "$APP/PlugIns/LiveProcess.appex"
+          test -f "$APP/LiveExec32.app/$LIVEEXEC_LOAD_PATH"
+          test -d "$APP/LiveExec32.app/RootFS"
+          test -s "$APP/universal.js"
+
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          ditto "$APP" "build/Payload/$(basename "$APP")"
+          cd build
+          zip -qry FlekDeck-runtime-stable-temp-unsigned.ipa Payload
+          unzip -t FlekDeck-runtime-stable-temp-unsigned.ipa >/dev/null
+          shasum -a 256 FlekDeck-runtime-stable-temp-unsigned.ipa | tee FlekDeck-runtime-stable-temp-unsigned.sha256
+
+      - name: Upload audited IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-runtime-stable-temp-unsigned
+          path: |
+            build/FlekDeck-runtime-stable-temp-unsigned.ipa
+            build/FlekDeck-runtime-stable-temp-unsigned.sha256
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Bake validated runtime stability fixes
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git reset --hard "$GITHUB_SHA"
+          git clean -fd
+          python3 Tools/patch_flekdeck_runtime_guardrails.py
+
+          git add -- \
+            Tools/patch_flekdeck_runtime_stability.py \
+            Tools/patch_flekdeck_runtime_guardrails.py \
+            Tools/patch_flekdeck_shell_parity.py \
+            .github/workflows/build-flekdeck-full-parity-temp.yml \
+            .github/workflows/build-flekdeck-32bit-temp.yml \
+            .github/workflows/build-flekdeck-32bit-parity-temp.yml \
+            LiveContainer/LCSharedUtils.m \
+            LiveContainer/LCMachOUtils.m \
+            LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m \
+            LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
+            LiveContainerSwiftUI/Models/LCAppInfo.m \
+            LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+
+          if git diff --cached --quiet; then
+            echo 'Runtime stability fixes are already baked.'
+            exit 0
+          fi
+
+          git config user.name 'NightVibes33 Actions'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'Harden parity runtime paths after on-device audit'
+          git push origin HEAD:temp/32bit-liveexec-data-folder
