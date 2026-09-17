@@ -2,7 +2,10 @@
 from pathlib import Path
 import runpy
 
-runpy.run_path("Tools/patch_flekdeck_runtime_stability.py", run_name="__main__")
+# The old runtime_stability pass rebuilt a private SpringBoard probe. That probe
+# is intentionally gone. Keep only its still-relevant defaults/settings duties
+# in an idempotent pass, then use the dedicated safe runtime passes below.
+runpy.run_path("Tools/patch_flekdeck_defaults_settings_stability.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_loader_guard.py", run_name="__main__")
@@ -129,6 +132,8 @@ if "self.is32bit && LCUtils.isTXMScriptRequired" not in final:
     raise SystemExit(f"{app_info}: ARM32 TXM automatic JIT script selection missing")
 if 'needsArchitectureClassification = (info[@"is32bit"] == nil)' not in final:
     raise SystemExit(f"{app_info}: existing-app ARM32 migration missing")
+if "if (!_autoSaveDisabled) [self save];" not in final[final.find("- (void)setSelected32BitEmulator:"):final.find("- (bool)is32bitEmulator", final.find("- (void)setSelected32BitEmulator:"))]:
+    raise SystemExit(f"{app_info}: ARM32 runtime override setter ignores bulk-save mode")
 
 bootstrap = Path("LiveContainer/LCBootstrap.m").read_text()
 for marker in (
@@ -156,6 +161,8 @@ if "let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode" not in a
 probe = Path("LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m").read_text()
 if "NSCAssert(" in probe or "assert(" in probe or "SBApplication" in probe or "SpringBoard.framework" in probe:
     raise SystemExit("process-fatal/private Compatibility probe survived")
+if "return @12;" not in probe or "return @1;" not in probe:
+    raise SystemExit("generic crash-safe Compatibility probe is missing")
 
 spring_drag = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift").read_text()
 spring_vc = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift").read_text()
@@ -172,6 +179,8 @@ for error_ui in (
 app_list_text = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift").read_text()
 if app_list_text.count("app.appInfo.dataUUID = container.folderName") < 2:
     raise SystemExit("Home quick-container selection is not persisted in both menu paths")
+if "finalNewApp.selected32BitEmulator = appToReplace.appInfo.selected32BitEmulator" not in app_list_text:
+    raise SystemExit("per-app ARM32 runtime override is not preserved across app replacement")
 
 shared = Path("LiveContainer/LCSharedUtils.m").read_text()
 classic_region = shared[shared.find("+ (BOOL)launchToGuestAppWithClassicMode"):shared.find("+ (BOOL)launchToGuestAppWithURL")]
@@ -184,5 +193,11 @@ if "if(!success)" not in normal_region or "keeping host alive" not in normal_reg
     raise SystemExit("Normal relaunch still terminates on a rejected openURL")
 if "exit(0);" in normal_region:
     raise SystemExit("Normal relaunch still exits when no relaunch URL can be opened")
+
+settings = Path("LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift").read_text()
+if 'TextField("", text: $liveExec32Path)' in settings:
+    raise SystemExit("unsafe raw ARM32 runtime field survived")
+if "Default 32-bit Runtime" not in settings:
+    raise SystemExit("validated ARM32 runtime picker is missing")
 
 print("FlekDeck runtime guardrails applied with user-reported regressions protected")
