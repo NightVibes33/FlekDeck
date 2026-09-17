@@ -8,7 +8,10 @@ on:
       - '.github/workflows/flekdeck-final-ondevice-audit.yml'
       - 'Tools/patch_flekdeck_runtime_guardrails.py'
       - 'Tools/patch_flekdeck_ondevice_regressions.py'
+      - 'Tools/patch_flekdeck_liveexec32_loader_guard.py'
       - 'Tools/patch_flekdeck_macho_contract.py'
+      - 'Tools/patch_flekdeck_macho_sdk_reader.py'
+      - 'Tools/patch_flekdeck_arm32_migration.py'
       - 'Tools/patch_flekdeck_liveexec32_txm.py'
       - 'Tools/patch_flekdeck_runtime_selection.py'
       - 'Tools/patch_flekdeck_classic_launch_isolation.py'
@@ -40,26 +43,30 @@ jobs:
           python3 -m py_compile \
             Tools/patch_flekdeck_runtime_guardrails.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
+            Tools/patch_flekdeck_liveexec32_loader_guard.py \
             Tools/patch_flekdeck_macho_contract.py \
+            Tools/patch_flekdeck_macho_sdk_reader.py \
+            Tools/patch_flekdeck_arm32_migration.py \
             Tools/patch_flekdeck_liveexec32_txm.py \
             Tools/patch_flekdeck_runtime_selection.py \
             Tools/patch_flekdeck_classic_launch_isolation.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
 
-          # Real errors only; no synthesized generic guest failure.
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -q 'let presentedGuestCrash = checkLastLaunchError()' LiveContainerSwiftUI/Views/LCTabView.swift
           grep -q 'ShareLink(item: errorInfo)' LiveContainerSwiftUI/Views/LCTabView.swift
 
-          # Compatibility Mode must be side-effect-free until a final single launch.
           ! sed -n '/- (void)setClassicMode:/,/- (NSUInteger)defaultClassicMode/p' LiveContainerSwiftUI/Models/LCAppInfo.m | grep -q 'defaultClassicMode]'
           grep -q 'let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -q 'instancesRespondToSelector:modernInit' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
           ! grep -q 'NSCAssert(springBoard' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
 
-          # ARM32 inspection, runtime selection, and TXM behavior must be real source.
+          grep -q 'guestExecutablePath.length == 0' LiveContainer/LCBootstrap.m
+          grep -q 'hasLoadPath != hasEntrySymbol' LiveContainer/LCBootstrap.m
           grep -q 'LCInspectMachOArchitectures' LiveContainer/LCMachOUtils.h
+          grep -q 'LCReadMachOSDKVersion' LiveContainer/LCMachOUtils.h
+          grep -q 'needsArchitectureClassification' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'is32bit = !has64bitSlice && has32bitSlice' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'Runtime seed failed without blocking app discovery' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
           grep -q 'Repaired stale default runtime' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
@@ -89,8 +96,6 @@ jobs:
           git fetch --no-tags origin main
           rm -rf /tmp/flek-main-switcher
           git worktree add --detach /tmp/flek-main-switcher origin/main
-
-          # Generate the exact switcher boundary main's build uses.
           (cd /tmp/flek-main-switcher && python3 Tools/patch_parallel_guest_viewport.py)
 
           protected=(
@@ -98,14 +103,9 @@ jobs:
             MultitaskSupport/DecoratedAppSceneViewController.m
             MultitaskSupport/MultitaskAppWindow.swift
           )
-          for p in "${protected[@]}"; do
-            cp "/tmp/flek-main-switcher/$p" "$p"
-          done
+          for p in "${protected[@]}"; do cp "/tmp/flek-main-switcher/$p" "$p"; done
 
-          # Apply the same compatibility adapter to current guest hooks. Because
-          # the host files already equal generated main, this must not drift them.
           python3 Tools/patch_parallel_guest_viewport.py
-
           for p in "${protected[@]}"; do
             ref_hash="$(git -C /tmp/flek-main-switcher hash-object "$p")"
             built_hash="$(git hash-object "$p")"
@@ -203,11 +203,15 @@ jobs:
             Tools/patch_flekdeck_runtime_guardrails.py \
             Tools/patch_flekdeck_runtime_stability.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
+            Tools/patch_flekdeck_liveexec32_loader_guard.py \
             Tools/patch_flekdeck_macho_contract.py \
+            Tools/patch_flekdeck_macho_sdk_reader.py \
+            Tools/patch_flekdeck_arm32_migration.py \
             Tools/patch_flekdeck_liveexec32_txm.py \
             Tools/patch_flekdeck_runtime_selection.py \
             Tools/patch_flekdeck_classic_launch_isolation.py \
             Tools/patch_flekdeck_error_ui_parity.py \
+            LiveContainer/LCBootstrap.m \
             LiveContainer/LCSharedUtils.m \
             LiveContainer/LCMachOUtils.h \
             LiveContainer/LCMachOUtils.m \
