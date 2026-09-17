@@ -2,21 +2,12 @@
 from pathlib import Path
 import runpy
 
-# Always run the primary stability hardening last.
 runpy.run_path("Tools/patch_flekdeck_runtime_stability.py", run_name="__main__")
-# TXM support used to exist only in transient parity builds. Make it part of the
-# canonical source transform so ARM32 JIT script selection is actually present.
 runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
-# Then apply the on-device regression fixes that preserve real guest errors,
-# keep distribution-signing diagnostics non-modal, and repair startup discovery.
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
-# ARM32 classification is inspection-only. Existing mutation callbacks remain
-# ARM64-only so adding 32-bit support cannot corrupt older Mach-O patch paths.
 runpy.run_path("Tools/patch_flekdeck_macho_contract.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_runtime_selection.py", run_name="__main__")
 
-# Old parity generators can append another Classic implementation because their
-# template no longer byte-matches the hardened one. Canonicalize the entire
-# model block after every parity pass so duplicate ObjC selectors can never ship.
 app_info = Path("LiveContainerSwiftUI/Models/LCAppInfo.m")
 text = app_info.read_text()
 start = text.find("- (bool)classicMode {")
@@ -28,10 +19,6 @@ canonical = '''- (bool)classicMode {
 }
 
 - (void)setClassicMode:(bool)classicMode {
-    // Persist the preference only. Do NOT run the private SpringBoard probe from
-    // a SwiftUI toggle setter: private-framework failures can terminate with a
-    // signal that Objective-C @try cannot catch. The guarded probe is deferred
-    // until an actual single-process launch requests the mode.
     _info[@"classicMode"] = @(classicMode);
     if(!classicMode) {
         [_info removeObjectForKey:@"LCClassicModeCache"];
@@ -71,9 +58,6 @@ canonical = '''- (bool)classicMode {
 text = text[:start] + canonical + text[end:]
 app_info.write_text(text)
 
-# Make every legacy temp workflow run this guardrail last, both for validation
-# and for any source bake. This prevents a later parity rebuild from restoring
-# the unsafe Compatibility Mode / defaults / Mach-O behavior.
 def add_trigger_path(text: str, anchor: str) -> str:
     marker = "      - 'Tools/patch_flekdeck_runtime_guardrails.py'\n"
     if marker in text:
@@ -120,7 +104,6 @@ if parity.exists():
     )
     parity.write_text(value)
 
-# Final duplicate/unsafe checks.
 final = app_info.read_text()
 if final.count("- (NSUInteger)defaultClassicMode {") != 1:
     raise SystemExit(f"{app_info}: duplicate defaultClassicMode implementations remain")
@@ -132,6 +115,10 @@ if "LCInspectMachOArchitectures" not in final:
     raise SystemExit(f"{app_info}: safe ARM32 inspection contract missing")
 if "self.is32bit && LCUtils.isTXMScriptRequired" not in final:
     raise SystemExit(f"{app_info}: ARM32 TXM automatic JIT script selection missing")
+
+app_entry = Path("LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift").read_text()
+if "Repaired stale default runtime" not in app_entry or "Cleared stale per-app runtime" not in app_entry:
+    raise SystemExit("ARM32 runtime-selection normalization missing")
 
 shared = Path("LiveContainer/LCSharedUtils.m").read_text()
 classic_region = shared[shared.find("+ (BOOL)launchToGuestAppWithClassicMode"):shared.find("+ (BOOL)launchToGuestAppWithURL")]
