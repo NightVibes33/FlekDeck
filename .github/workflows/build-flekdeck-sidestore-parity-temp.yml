@@ -40,15 +40,16 @@ jobs:
         with:
           xcode-version: '26.6'
 
-      - name: Apply canonical temp guardrails and preserve main SideStore identity
+      - name: Apply canonical temp guardrails and force FlekDeck SideStore identity
         run: |
           set -euxo pipefail
           python3 Tools/normalize_flekdeck_relaunch_guard.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           python3 Tools/patch_flekdeck_sidestore_identity.py
-          test "$(grep -Fc 'return @\"com.kdt.livecontainer\";' SideStoreSupport/SideStoreHooks.m)" -eq 2
-          grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
+          test "$(grep -Fc 'return @\"com.fs.flekdeck\";' SideStoreSupport/SideStoreHooks.m)" -eq 2
+          ! grep -q 'com.kdt.livecontainer' SideStoreSupport/SideStoreHooks.m
           ! grep -q 'NSUserDefaults.lcMainBundle.bundleIdentifier' SideStoreSupport/SideStoreHooks.m
+          grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
@@ -129,7 +130,7 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Apply exact main SideStore packaging contract
+      - name: Apply exact FlekDeck SideStore packaging contract
         run: |
           set -euxo pipefail
           APP="$(find "$PWD/build/FlekDeck-SideStore-temp.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
