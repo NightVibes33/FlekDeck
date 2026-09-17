@@ -115,6 +115,5 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add -A
           git status --short
-          git diff --cached --check
           git commit -m 'Rebuild temp from main plus proven LiveExec32 contract'
           git push origin HEAD:temp/32bit-liveexec-data-folder
