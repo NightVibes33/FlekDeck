@@ -217,6 +217,9 @@ class LCAppModel: ObservableObject, Hashable {
         }
         
         if uiContainers.isEmpty {
+            guard let appIdentifier = appInfo.bundleIdentifier(), !appIdentifier.isEmpty else {
+                throw "The selected app does not have a valid bundle identifier."
+            }
             let newName = NSUUID().uuidString
             let newContainer = LCContainer(folderName: newName, name: newName, isShared: uiIsShared)
             uiContainers.append(newContainer)
@@ -224,7 +227,7 @@ class LCAppModel: ObservableObject, Hashable {
                 uiSelectedContainer = newContainer;
             }
             appInfo.containers = uiContainers;
-            newContainer.makeLCContainerInfoPlist(appIdentifier: appInfo.bundleIdentifier()!, keychainGroupId: Int.random(in: 0..<SharedModel.keychainAccessGroupCount))
+            newContainer.makeLCContainerInfoPlist(appIdentifier: appIdentifier, keychainGroupId: Int.random(in: 0..<SharedModel.keychainAccessGroupCount))
             appInfo.dataUUID = newName
             uiDefaultDataFolder = newName
         }
@@ -273,8 +276,8 @@ class LCAppModel: ObservableObject, Hashable {
                     URLQueryItem(name: "url", value: Data(urlStr.utf8).base64EncodedString())
                 ]
             }
-            if await UIApplication.shared.canOpenURL(openURLComp.url!) {
-                await UIApplication.shared.open(openURLComp.url!)
+            if let openURL = openURLComp.url, await UIApplication.shared.canOpenURL(openURL) {
+                await UIApplication.shared.open(openURL)
                 return
             }
         }
@@ -331,6 +334,12 @@ class LCAppModel: ObservableObject, Hashable {
             }}
         }
         try await signApp(force: false)
+
+        // Start every guest attempt with a clean diagnostic slot. The bootstrap
+        // is the sole owner of the next guest error, so an app which dies before
+        // writing one cannot inherit the previous app's crash text or ARM32 log.
+        UserDefaults.standard.removeObject(forKey: "error")
+        UserDefaults.lcShared().removeObject(forKey: "LC32BitTranslationLayerLogFile")
         
         if let bundleIdOverride {
             UserDefaults.standard.set(bundleIdOverride, forKey: "selected")
@@ -383,13 +392,17 @@ class LCAppModel: ObservableObject, Hashable {
         } else if multitask, #available(iOS 16.0, *) {
             try await LCUtils.launchMultitaskGuestApp(appInfo.displayName())
         } else {
-            if #available(iOS 26.0, *), FileManager.default.fileExists(atPath: "\(appInfo.bundlePath()!)/Frameworks/MetalANGLE.framework/MetalANGLE") {
-                let fileContents = "\(appInfo.bundlePath()!)/Frameworks/MetalANGLE.framework/MetalANGLE".data(using: .utf8)
+            if #available(iOS 26.0, *),
+               let bundlePath = appInfo.bundlePath(),
+               FileManager.default.fileExists(atPath: "\(bundlePath)/Frameworks/MetalANGLE.framework/MetalANGLE") {
+                let fileContents = "\(bundlePath)/Frameworks/MetalANGLE.framework/MetalANGLE".data(using: .utf8)
                 let fileURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("preloadLibraries.txt")
                 try fileContents?.write(to: fileURL)
             }
             guard LCSharedUtils.launchToGuestApp(withClassicMode: classicMode) else {
-                throw "FlekDeck could not relaunch the selected app. The host launch URL or Compatibility Mode relaunch surface is unavailable."
+                // This is a host relaunch failure: the guest never started, so do
+                // not fabricate or reuse a guest crash report. Keep it explicit.
+                throw "Host relaunch was rejected before \(appInfo.displayName()) started. No guest crash report was produced."
             }
         }
         

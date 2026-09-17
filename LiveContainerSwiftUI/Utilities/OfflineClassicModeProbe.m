@@ -230,6 +230,32 @@ NSNumber *LCGetDefaultClassicMode(NSURL *appURL) {
         NSURL *executableURL = bundle.executableURL;
         if (!bundle || !executableURL) return @0;
 
+        if (@available(iOS 27.0, *)) {
+            // Avoid instantiating private SBApplication/SBApplicationInfo on iOS
+            // 27+. The private object graph can abort the host on ABI drift. The
+            // launch option itself remains supported by the guarded LS workspace
+            // path: 1 is the phone Classic mode, 12 is the iPad Classic mode.
+            NSArray *families = [bundle objectForInfoDictionaryKey:@"UIDeviceFamily"];
+            BOOL guestSupportsPad = [families isKindOfClass:NSArray.class] &&
+                                    [families containsObject:@2];
+            NSUInteger mode = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad &&
+                               guestSupportsPad) ? 12 : 1;
+            NSLog(@"[FlekDeck/ClassicMode] iOS 27+ safe mode=%lu for %@",
+                  (unsigned long)mode, bundle.bundleIdentifier ?: bundle.bundleURL.lastPathComponent);
+            return @(mode);
+        }
+
+        if (@available(iOS 27.0, *)) {
+            NSArray *families = [bundle objectForInfoDictionaryKey:@"UIDeviceFamily"];
+            BOOL guestSupportsPad = [families isKindOfClass:NSArray.class] && [families containsObject:@2];
+            NSUInteger safeClassicMode =
+                (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad && guestSupportsPad)
+                    ? 12u : 1u;
+            NSLog(@"[FlekDeck/ClassicMode] iOS 27 safe mode=%lu; private SpringBoard probe skipped",
+                  (unsigned long)safeClassicMode);
+            return @(safeClassicMode);
+        }
+
         static Class SBApplicationClass = Nil;
         static Class SBApplicationInfoClass = Nil;
         @synchronized([LCFakeApplicationProxy class]) {

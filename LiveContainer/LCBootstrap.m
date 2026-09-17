@@ -1165,6 +1165,9 @@ int LiveContainerMain(int argc, char *argv[]) {
         // Start a new guest-error epoch. Never attribute a previous app's stale
         // diagnostic to the guest we are about to launch.
         [lcUserDefaults removeObjectForKey:@"error"];
+        // Start a new guest-error epoch. Never attribute a previous app's stale
+        // diagnostic to the guest we are about to launch.
+        [lcUserDefaults removeObjectForKey:@"error"];
         NSSetUncaughtExceptionHandler(&exceptionHandler);
         NSString *appError = invokeAppMain(selectedApp, selectedContainer, argc, argv);
         if (appError) {

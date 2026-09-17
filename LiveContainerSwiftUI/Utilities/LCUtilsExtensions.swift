@@ -79,16 +79,15 @@ extension LCUtils {
         
         try await withUnsafeThrowingContinuation({ c in
             let progress = signFilesWithZSign(with: filesToSign) { success, error in
-                if(success) {
+                if success {
                     c.resume()
                     return
                 }
-                
-                guard let error else {
-                    c.resume()
-                    return
+                if let error {
+                    c.resume(throwing: error)
+                } else {
+                    c.resume(throwing: "Tweak signing failed without a signer diagnostic.")
                 }
-                c.resume(throwing: error)
             }
             if let progress {
                 progressHandler?(progress)

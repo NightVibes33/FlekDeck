@@ -306,18 +306,64 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         return;
     }
     NSFileManager* fm = NSFileManager.defaultManager;
-    NSString *execPath = [NSString stringWithFormat:@"%@/%@", appPath, _infoPlist[@"CFBundleExecutable"]];
+    NSString *execName = _infoPlist[@"CFBundleExecutable"];
+    if(![execName isKindOfClass:NSString.class] || execName.length == 0) {
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
+        completetionHandler(NO, @"The app bundle has no valid CFBundleExecutable.");
+        return;
+    }
+    NSString *execPath = [appPath stringByAppendingPathComponent:execName];
+    BOOL execIsDirectory = NO;
+    if(![fm fileExistsAtPath:execPath isDirectory:&execIsDirectory] || execIsDirectory) {
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
+        completetionHandler(NO, [NSString stringWithFormat:@"The app executable is missing: %@", execPath]);
+        return;
+    }
     
     // Update patch
     int currentPatchRev = 7;
     bool needPatch = [info[@"LCPatchRevision"] intValue] < currentPatchRev;
     if (needPatch || forceSign) {
-        // copy-delete-move to avoid EXC_BAD_ACCESS (SIGKILL - CODESIGNING)
-        NSString *backupPath = [NSString stringWithFormat:@"%@/%@_LiveContainerPatchBackUp", appPath, _infoPlist[@"CFBundleExecutable"]];
-        NSError *err;
-        [fm copyItemAtPath:execPath toPath:backupPath error:&err];
-        [fm removeItemAtPath:execPath error:&err];
-        [fm moveItemAtPath:backupPath toPath:execPath error:&err];
+        // copy-delete-move avoids EXC_BAD_ACCESS (SIGKILL - CODESIGNING), but
+        // it must be transactional: never delete the only executable unless the
+        // backup copy is known-good.
+        NSString *backupPath = [NSString stringWithFormat:@"%@/%@_LiveContainerPatchBackUp", appPath, execName];
+        NSError *err = nil;
+        if([fm fileExistsAtPath:backupPath]) {
+            if(![fm removeItemAtPath:backupPath error:&err]) {
+                [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
+                completetionHandler(NO, [NSString stringWithFormat:@"Could not clear stale executable backup: %@", err.localizedDescription ?: @"unknown filesystem error"]);
+                return;
+            }
+        }
+        err = nil;
+        if(![fm copyItemAtPath:execPath toPath:backupPath error:&err]) {
+            [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
+            completetionHandler(NO, [NSString stringWithFormat:@"Could not back up the app executable: %@", err.localizedDescription ?: @"unknown filesystem error"]);
+            return;
+        }
+        err = nil;
+        if(![fm removeItemAtPath:execPath error:&err]) {
+            [fm removeItemAtPath:backupPath error:nil];
+            [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
+            completetionHandler(NO, [NSString stringWithFormat:@"Could not replace the app executable: %@", err.localizedDescription ?: @"unknown filesystem error"]);
+            return;
+        }
+        err = nil;
+        if(![fm moveItemAtPath:backupPath toPath:execPath error:&err]) {
+            NSError *restoreError = nil;
+            if([fm fileExistsAtPath:backupPath]) {
+                [fm copyItemAtPath:backupPath toPath:execPath error:&restoreError];
+                if(!restoreError) [fm removeItemAtPath:backupPath error:nil];
+            }
+            [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
+            NSString *detail = err.localizedDescription ?: @"unknown filesystem error";
+            if(restoreError) {
+                detail = [detail stringByAppendingFormat:@"; restore also failed: %@", restoreError.localizedDescription];
+            }
+            completetionHandler(NO, [NSString stringWithFormat:@"Could not restore the app executable after patch preparation: %@", detail]);
+            return;
+        }
     }
     
 #if is32BitSupported

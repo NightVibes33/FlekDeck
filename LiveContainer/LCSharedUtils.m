@@ -227,8 +227,8 @@ extern NSBundle *lcMainBundle;
         return [self launchToGuestApp];
     }
 
-    configuration.frontBoardOptions = @{ @"__ActivateAsClassic": @(classicMode) };
     @try {
+        configuration.frontBoardOptions = @{ @"__ActivateAsClassic": @(classicMode) };
         [workspace openApplicationWithBundleIdentifier:bundleIdentifier
                                          configuration:configuration
                                      completionHandler:^(BOOL success, NSError *error) {

@@ -61,6 +61,9 @@ final class LCSpringboardDragManager: NSObject, UIGestureRecognizerDelegate {
     /// Installed-app holds belong to the icon UICollectionView context menu.
     /// Fail the parent edit/drag long press BEFORE it begins so UIKit can own
     /// the hold. Empty space/default apps still use the normal edit-mode path.
+    /// Installed-app holds belong to the icon UICollectionView context menu.
+    /// Fail the parent edit/drag long press BEFORE it begins so UIKit can own
+    /// the hold. Empty space/default apps still use the normal edit-mode path.
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let gesture = gestureRecognizer as? UILongPressGestureRecognizer,
               let vc = viewController,

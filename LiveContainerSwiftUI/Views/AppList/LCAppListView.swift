@@ -1754,10 +1754,18 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
     func homeCreateAppClip(_ app: LCAppModel) async {
         guard let style = await promptForGeneratedIconStyle() else { return }
+        guard let profile = app.appInfo.generateWebClipConfig(
+            withContainerId: app.uiSelectedContainer?.folderName,
+            iconStyle: style
+        ) else {
+            errorInfo = "Unable to generate a Home Screen profile for this app."
+            errorShow = true
+            return
+        }
         do {
             let data = try PropertyListSerialization.data(
-                fromPropertyList: app.appInfo.generateWebClipConfig(withContainerId: app.uiSelectedContainer?.folderName, iconStyle: style)!,
-                format: .xml, options: 0)
+                fromPropertyList: profile, format: .xml, options: 0
+            )
             installMdm(data: data)
         } catch {
             errorInfo = error.localizedDescription
@@ -1860,21 +1868,28 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     
     
     func openWebView(urlString: String) async {
-        guard var urlToOpen = URLComponents(string: urlString), urlToOpen.url != nil else {
+        guard var urlToOpen = URLComponents(string: urlString) else {
             errorInfo = "lc.appList.urlInvalidError".loc
             errorShow = true
             return
         }
-        if urlToOpen.scheme == nil || urlToOpen.scheme! == "" {
+        if (urlToOpen.scheme ?? "").isEmpty {
             urlToOpen.scheme = "https"
         }
+        guard let resolvedURL = urlToOpen.url,
+              let resolvedScheme = urlToOpen.scheme?.lowercased(),
+              !resolvedScheme.isEmpty else {
+            errorInfo = "lc.appList.urlInvalidError".loc
+            errorShow = true
+            return
+        }
         
-        if urlToOpen.scheme?.lowercased() == "itms-services" {
+        if resolvedScheme == "itms-services" {
             await installFromPlist(urlStr: urlString)
             return
         }
         
-        if urlToOpen.scheme != "https" && urlToOpen.scheme != "http" {
+        if resolvedScheme != "https" && resolvedScheme != "http" {
             var appToLaunch : LCAppModel? = nil
             var appListsToConsider = [sharedModel.apps]
             if sharedModel.isHiddenAppUnlocked || !LCUtils.appGroupUserDefault.bool(forKey: "LCStrictHiding") {
@@ -1885,7 +1900,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 for app in appList {
                     if let schemes = app.appInfo.urlSchemes() {
                         for scheme in schemes {
-                            if let scheme = scheme as? String, scheme == urlToOpen.scheme {
+                            if let scheme = scheme as? String, scheme.lowercased() == resolvedScheme {
                                 appToLaunch = app
                                 break appLoop
                             }
@@ -1896,7 +1911,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             
             
             guard let appToLaunch = appToLaunch else {
-                errorInfo = "lc.appList.schemeCannotOpenError %@".localizeWithFormat(urlToOpen.scheme!)
+                errorInfo = "lc.appList.schemeCannotOpenError %@".localizeWithFormat(resolvedScheme)
                 errorShow = true
                 return
             }
@@ -1914,7 +1929,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
             
             do {
-                try await appToLaunch.runApp(urlStr: urlToOpen.url!.absoluteString)
+                try await appToLaunch.runApp(urlStr: resolvedURL.absoluteString)
             } catch {
                 errorInfo = error.localizedDescription
                 errorShow = true
@@ -1922,7 +1937,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             
             return
         }
-        webViewURL = urlToOpen.url!
+        webViewURL = resolvedURL
         if webViewOpened {
             webViewOpened = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: {
@@ -2012,16 +2027,21 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         guard let newAppInfo = LCAppInfo(bundlePath: appFolderPath.path) else {
             throw "lc.appList.infoPlistCannotReadError".loc
         }
+        guard let newBundleIdentifier = newAppInfo.bundleIdentifier(),
+              !newBundleIdentifier.isEmpty, newBundleIdentifier != "Unknown" else {
+            throw "The IPA does not contain a valid CFBundleIdentifier."
+        }
 
-        var appRelativePath = "\(newAppInfo.bundleIdentifier()!.sanitizeNonACSII()).app"
+        var appRelativePath = "\(newBundleIdentifier.sanitizeNonACSII()).app"
         var outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)
         var appToReplace : LCAppModel? = nil
+        var replacementBackupURL: URL? = nil
         var sameBundleIdApp = sharedModel.apps.filter { app in
-            return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
+            return app.appInfo.bundleIdentifier() == newBundleIdentifier
         }
         if sameBundleIdApp.count == 0 {
             sameBundleIdApp = sharedModel.hiddenApps.filter { app in
-                return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
+                return app.appInfo.bundleIdentifier() == newBundleIdentifier
             }
             if sameBundleIdApp.count > 0 && !sharedModel.isHiddenAppUnlocked {
                 if !(try await LCUtils.authenticateUser()) {
@@ -2031,7 +2051,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
 
         if fm.fileExists(atPath: outputFolder.path) || sameBundleIdApp.count > 0 {
-            appRelativePath = "\(newAppInfo.bundleIdentifier()!)_\(Int(CFAbsoluteTimeGetCurrent())).app"
+            appRelativePath = "\(newBundleIdentifier)_\(Int(CFAbsoluteTimeGetCurrent())).app"
             self.installOptions = [AppReplaceOption(isReplace: false, nameOfFolderToInstall: appRelativePath)]
             for app in sameBundleIdApp {
                 self.installOptions.append(AppReplaceOption(isReplace: true, nameOfFolderToInstall: app.appInfo.relativeBundlePath, appToReplace: app))
@@ -2047,17 +2067,33 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             appRelativePath = installOptionChosen.nameOfFolderToInstall
             appToReplace = installOptionChosen.appToReplace
             if installOptionChosen.isReplace {
-                try fm.removeItem(at: outputFolder)
+                let backup = URL(fileURLWithPath: outputFolder.path + LCPath.replacingSuffix, isDirectory: true)
+                if fm.fileExists(atPath: backup.path) {
+                    try fm.removeItem(at: backup)
+                }
+                // Preserve the known-good app until the replacement has parsed and
+                // completed patch/sign successfully. Same-volume move is atomic.
+                try fm.moveItem(at: outputFolder, to: backup)
+                replacementBackupURL = backup
             }
         }
 
-        try fm.moveItem(at: appFolderPath, to: outputFolder)
+        do {
+            try fm.moveItem(at: appFolderPath, to: outputFolder)
+        } catch {
+            if let backup = replacementBackupURL, fm.fileExists(atPath: backup.path) {
+                try? fm.moveItem(at: backup, to: outputFolder)
+            }
+            throw error
+        }
         let finalNewApp = LCAppInfo(bundlePath: outputFolder.path)
         finalNewApp?.relativeBundlePath = appRelativePath
         guard let finalNewApp else {
-            errorInfo = "lc.appList.appInfoInitError".loc
-            errorShow = true
-            return
+            try? fm.removeItem(at: outputFolder)
+            if let backup = replacementBackupURL, fm.fileExists(atPath: backup.path) {
+                try? fm.moveItem(at: backup, to: outputFolder)
+            }
+            throw "lc.appList.appInfoInitError".loc
         }
 
         var signError : String? = nil
@@ -2071,16 +2107,23 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 signSuccess = success
                 c.resume()
             }, progressHandler: { signProgress in
-                installProgress.addChild(signProgress!, withPendingUnitCount: 20)
+                if let signProgress {
+                    installProgress.addChild(signProgress, withPendingUnitCount: 20)
+                }
             }, forceSign: false)
         })
 
-        if let signError {
-            if signSuccess {
-                errorInfo = "\("lc.appList.signSuccessWithError".loc)\n\n\(signError)"
-            } else {
-                errorInfo = signError.loc
+        if !signSuccess {
+            try? fm.removeItem(at: outputFolder)
+            if let backup = replacementBackupURL, fm.fileExists(atPath: backup.path) {
+                try? fm.moveItem(at: backup, to: outputFolder)
             }
+            throw signError?.loc ?? "App patch/sign failed without a diagnostic."
+        }
+        if let signError {
+            // The signer can succeed with a non-fatal warning. Preserve that
+            // exact warning without turning it into a failed install.
+            errorInfo = "\("lc.appList.signSuccessWithError".loc)\n\n\(signError)"
             errorShow = true
         }
 
@@ -2119,6 +2162,17 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             finalNewApp.spoofSDKVersion = true
         }
         finalNewApp.installationDate = Date.now
+
+        if let backup = replacementBackupURL, fm.fileExists(atPath: backup.path) {
+            do {
+                try fm.removeItem(at: backup)
+            } catch {
+                // The new app is valid and active. A leftover backup is recoverable
+                // by LCPath.recoverInterruptedReplaces on a later launch, so log it
+                // rather than destroying the successful install.
+                NSLog("[FlekDeck/Install] could not remove replacement backup: %@", error.localizedDescription)
+            }
+        }
 
         await MainActor.run {
             if let appToReplace {
@@ -2365,7 +2419,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     sharedModel.hiddenApps.append(app)
                 }
                 UserDefaults.lcShared().mutableArrayValue(forKey: "LCGuestURLSchemes")
-                    .removeObjects(in: app.appInfo.urlSchemes() as! [Any])
+                    .removeObjects(in: ((app.appInfo.urlSchemes() as? [String]) ?? []).map { $0 as Any })
             } else {
                 sharedModel.hiddenApps.removeAll { now in
                     return app == now
@@ -2374,7 +2428,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     sharedModel.apps.append(app)
                 }
                 UserDefaults.lcShared().mutableArrayValue(forKey: "LCGuestURLSchemes")
-                    .addObjects(from: app.appInfo.urlSchemes() as! [Any])
+                    .addObjects(from: ((app.appInfo.urlSchemes() as? [String]) ?? []).map { $0 as Any })
             }
             
         }
