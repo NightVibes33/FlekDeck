@@ -74,25 +74,46 @@ jobs:
       - name: Fetch pinned working LiveExec32 runtime
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           mkdir -p build/liveexec-source
           curl --fail --location --retry 4 --retry-all-errors \
             "$LIVEEXEC_IPA_URL" \
             --output build/liveexec-source/LiveContainer.ipa
           echo "$LIVEEXEC_IPA_SHA256  build/liveexec-source/LiveContainer.ipa" | shasum -a 256 -c -
           unzip -q build/liveexec-source/LiveContainer.ipa -d build/liveexec-source/extracted
-          EMU="$(find build/liveexec-source/extracted/Payload -maxdepth 2 -type d -name 'LiveExec32.app' -print -quit)"
-          test -n "$EMU"
+          unzip -l build/liveexec-source/LiveContainer.ipa | grep -E 'LiveExec32|LiveExec32Shared|RootFS' | head -80 || true
+
+          EMU="$(find build/liveexec-source/extracted -type d -name 'LiveExec32.app' -print -quit)"
+          if [ -z "$EMU" ]; then
+            echo 'LiveExec32.app was not found in the pinned IPA. Extracted app layout:'
+            find build/liveexec-source/extracted/Payload -maxdepth 4 -type d -print | head -120
+            exit 1
+          fi
+          echo "LiveExec32 runtime: $EMU"
+          find "$EMU" -maxdepth 2 -print | head -120
+
           test -f "$EMU/Info.plist"
-          test -f "$EMU/LiveExec32"
+          EXEC_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$EMU/Info.plist")"
+          echo "LiveExec32 executable: $EXEC_NAME"
+          test -f "$EMU/$EXEC_NAME"
           test -d "$EMU/RootFS"
-          test -f "$EMU/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC_SOURCE_COMMIT"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC_BUILD_REVISION"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$EMU/Info.plist")" = "Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorEntrySymbol' "$EMU/Info.plist")" = "LC32RunGuest"
-          nm -gU "$EMU/Frameworks/LiveExec32Shared.framework/LiveExec32Shared" | grep -q '_LC32RunGuest'
+
+          LOAD_PATH="$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$EMU/Info.plist")"
+          ENTRY_SYMBOL="$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorEntrySymbol' "$EMU/Info.plist")"
+          SOURCE_COMMIT="$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")"
+          BUILD_REVISION="$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")"
+          IS_TRANSLATOR="$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")"
+          printf 'translator=%s\nsource=%s\nrevision=%s\nload=%s\nentry=%s\n' \
+            "$IS_TRANSLATOR" "$SOURCE_COMMIT" "$BUILD_REVISION" "$LOAD_PATH" "$ENTRY_SYMBOL"
+
+          test "$IS_TRANSLATOR" = "true"
+          test "$SOURCE_COMMIT" = "$LIVEEXEC_SOURCE_COMMIT"
+          test "$BUILD_REVISION" = "$LIVEEXEC_BUILD_REVISION"
+          test "$LOAD_PATH" = "Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          test "$ENTRY_SYMBOL" = "LC32RunGuest"
+          test -f "$EMU/$LOAD_PATH"
+          nm -gU "$EMU/$LOAD_PATH" | tee build/liveexec-source/exported-symbols.txt | grep -q '_LC32RunGuest'
+
           rm -rf build/LiveExec32.app
           ditto "$EMU" build/LiveExec32.app
 
@@ -130,11 +151,10 @@ jobs:
           test -n "$APP"
           rm -rf "$APP/LiveExec32.app"
           ditto build/LiveExec32.app "$APP/LiveExec32.app"
-          test -f "$APP/LiveExec32.app/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          LOAD_PATH="$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$APP/LiveExec32.app/Info.plist")"
+          test -f "$APP/LiveExec32.app/$LOAD_PATH"
           test -d "$APP/LiveExec32.app/RootFS"
 
-          # The distributable artifact stays unsigned. Remove stale signature folders
-          # and profiles from the host and the nested runtime before packaging.
           find "$APP" -type d -name '_CodeSignature' -prune -exec rm -rf {} +
           find "$APP" -type f -name 'embedded.mobileprovision' -delete
 
@@ -148,10 +168,11 @@ jobs:
           file "$APP/$EXECUTABLE" | grep -q 'arm64'
 
           EMU="$APP/LiveExec32.app"
+          LOAD_PATH="$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$EMU/Info.plist")"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC_SOURCE_COMMIT"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC_BUILD_REVISION"
-          nm -gU "$EMU/Frameworks/LiveExec32Shared.framework/LiveExec32Shared" | grep -q '_LC32RunGuest'
+          nm -gU "$EMU/$LOAD_PATH" | grep -q '_LC32RunGuest'
           test -f "$EMU/RootFS/usr/lib/libstdc++.6.dylib"
           test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$EMU/RootFS/usr/lib/libcharset.1.dylib"
