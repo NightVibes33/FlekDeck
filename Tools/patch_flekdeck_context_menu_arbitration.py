@@ -49,26 +49,21 @@ if "func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) 
     if anchor not in s:
         raise SystemExit(f"{drag}: handleLongPress anchor missing")
     s = s.replace(anchor, method + anchor, 1)
-
-# If an older parity pass installed the late cancel block, leave it harmless as a
-# fallback; the delegate above prevents installed-app holds from ever reaching it.
 drag.write_text(s)
 
 vc = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift")
 s = vc.read_text()
-anchor = '''        longPressGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
-        longPressGesture.minimumPressDuration = 0.3
-        view.addGestureRecognizer(longPressGesture)'''
-replacement = '''        longPressGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
-        longPressGesture.minimumPressDuration = 0.3
-        // Delegate only arbitrates the parent EDIT/DRAG long press. It does not
-        // participate in FlekDeck's bottom-swipe App Switcher pan gesture.
-        longPressGesture.delegate = dragManager
-        view.addGestureRecognizer(longPressGesture)'''
-if anchor in s:
-    s = s.replace(anchor, replacement, 1)
-elif replacement not in s:
-    raise SystemExit(f"{vc}: long-press setup anchor missing")
+if "longPressGesture.delegate = dragManager" not in s:
+    # Comments around this setup have changed several times. Bind the delegate
+    # structurally immediately before the recognizer is added to the root view.
+    anchor = "        view.addGestureRecognizer(longPressGesture)\n"
+    if anchor not in s:
+        raise SystemExit(f"{vc}: long-press addGestureRecognizer anchor missing")
+    s = s.replace(
+        anchor,
+        "        longPressGesture.delegate = dragManager\n" + anchor,
+        1,
+    )
 vc.write_text(s)
 
 # Invariants: context-menu arbitration must be present, and it must be scoped to
