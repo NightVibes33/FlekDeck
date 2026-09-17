@@ -19,7 +19,7 @@ on:
       - 'TweakLoader/**'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -224,3 +224,50 @@ jobs:
             build/FlekDeck-32bit-temp-unsigned.sha256
           if-no-files-found: error
           compression-level: 0
+
+      - name: Bake validated ARM32 integration into temp source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Discard all CI-time transforms first. In particular, do not commit
+          # direct-build Parallel/PiP compatibility patches as part of ARM32 work.
+          git reset --hard "$GITHUB_SHA"
+          git clean -fd
+
+          python3 Tools/patch_flekdeck_liveexec32.py
+          python3 Tools/patch_flekdeck_liveexec32_appinfo.py
+          python3 Tools/patch_flekdeck_liveexec32_txm.py
+          python3 Tools/patch_flekdeck_livecontainer_parity.py
+          python3 Tools/patch_flekdeck_jitless_parity.py
+          python3 Tools/patch_flekdeck_classic_mode_parity.py
+
+          git add -- \
+            LiveContainer/LCBootstrap.m \
+            LiveContainer/LCSharedUtils.h \
+            LiveContainer/LCSharedUtils.m \
+            LiveContainer/LCMachOUtils.h \
+            LiveContainer/LCMachOUtils.m \
+            LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift \
+            LiveContainerSwiftUI/Utilities/Shared.swift \
+            LiveContainerSwiftUI/Utilities/LCUtils.h \
+            LiveContainerSwiftUI/Utilities/LCUtils.m \
+            LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
+            LiveContainerSwiftUI/Models/LCAppInfo.h \
+            LiveContainerSwiftUI/Models/LCAppInfo.m \
+            LiveContainerSwiftUI/Models/LCAppModel.swift \
+            LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift \
+            LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift \
+            LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
+            LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
+            LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift \
+            LiveContainerSwiftUI/Views/LCTabView.swift
+
+          if git diff --cached --quiet; then
+            echo 'ARM32 integration is already baked into source.'
+            exit 0
+          fi
+
+          git config user.name 'NightVibes33 Actions'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'Bake validated ARM32 integration into FlekDeck source'
+          git push origin HEAD:temp/32bit-liveexec-data-folder
