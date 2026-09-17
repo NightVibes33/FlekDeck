@@ -287,12 +287,8 @@ extern NSBundle *lcMainBundle;
         NSUInteger classicMode = 0;
         if([appInfo[@"classicMode"] boolValue]) {
             NSNumber *cachedClassicMode = appInfo[@"LCClassicModeCache"][@"defaultClassicMode"];
-            if([cachedClassicMode isKindOfClass:NSNumber.class] && cachedClassicMode.unsignedIntegerValue > 0) {
+            if([cachedClassicMode isKindOfClass:NSNumber.class]) {
                 classicMode = cachedClassicMode.unsignedIntegerValue;
-            } else {
-                NSArray *families = appBundle.infoDictionary[@"UIDeviceFamily"];
-                BOOL guestSupportsPad = [families isKindOfClass:NSArray.class] && [families containsObject:@2];
-                classicMode = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad && guestSupportsPad) ? 12 : 1;
             }
         }
         return [self launchToGuestAppWithClassicMode:classicMode];

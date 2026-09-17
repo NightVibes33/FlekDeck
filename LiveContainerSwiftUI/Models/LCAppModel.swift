@@ -388,7 +388,9 @@ class LCAppModel: ObservableObject, Hashable {
                 let fileURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("preloadLibraries.txt")
                 try fileContents?.write(to: fileURL)
             }
-            LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
+            guard LCSharedUtils.launchToGuestApp(withClassicMode: classicMode) else {
+                throw "FlekDeck could not relaunch the selected app. The host launch URL or Compatibility Mode relaunch surface is unavailable."
+            }
         }
         
         // Record the launch time

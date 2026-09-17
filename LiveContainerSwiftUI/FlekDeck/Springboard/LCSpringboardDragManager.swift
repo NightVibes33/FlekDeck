@@ -42,7 +42,7 @@ final class LCDragOperation {
 
 // MARK: - Drag manager
 
-final class LCSpringboardDragManager {
+final class LCSpringboardDragManager: NSObject, UIGestureRecognizerDelegate {
 
     weak var viewController: LCSpringboardViewController?
 
@@ -57,6 +57,32 @@ final class LCSpringboardDragManager {
     var isDragging: Bool { currentOperation != nil }
 
     // MARK: - Gesture handler
+
+    /// Installed-app holds belong to the icon UICollectionView context menu.
+    /// Fail the parent edit/drag long press BEFORE it begins so UIKit can own
+    /// the hold. Empty space/default apps still use the normal edit-mode path.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let gesture = gestureRecognizer as? UILongPressGestureRecognizer,
+              let vc = viewController,
+              !vc.isInEditMode else {
+            return true
+        }
+
+        let touchInView = gesture.location(in: vc.view)
+        guard let (_, pageCell) = vc.pageCellAtPoint(touchInView) else {
+            return true
+        }
+        let touchInPage = gesture.location(in: pageCell.collectionView)
+        guard let indexPath = pageCell.collectionView.indexPathForItem(at: touchInPage),
+              indexPath.item < pageCell.items.count else {
+            return true
+        }
+
+        if case .installed = pageCell.items[indexPath.item] {
+            return false
+        }
+        return true
+    }
 
     func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         switch gesture.state {

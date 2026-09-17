@@ -187,7 +187,7 @@ static void LCInstallLegacyWindowSceneBridgeIfNeeded(NSBundle *appBundle) {
     return lcUserDefaults;
 }
 + (instancetype)lcSharedDefaults {
-    if(!lcUserDefaults) {
+    if(!lcSharedDefaults) {
         NSString *groupID = [LCSharedUtils appGroupID];
         lcSharedDefaults = (!groupID.length || [groupID isEqualToString:@"Unknown"])
             ? NSUserDefaults.standardUserDefaults
@@ -1162,6 +1162,9 @@ int LiveContainerMain(int argc, char *argv[]) {
             lcLaunchURL = launchUrl;
             [lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
         }
+        // Start a new guest-error epoch. Never attribute a previous app's stale
+        // diagnostic to the guest we are about to launch.
+        [lcUserDefaults removeObjectForKey:@"error"];
         NSSetUncaughtExceptionHandler(&exceptionHandler);
         NSString *appError = invokeAppMain(selectedApp, selectedContainer, argc, argv);
         if (appError) {

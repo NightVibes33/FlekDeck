@@ -204,6 +204,9 @@ final class LCSpringboardViewController: UIViewController {
 
         longPressGesture = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPressGesture.minimumPressDuration = 0.3
+        // Delegate only arbitrates the parent EDIT/DRAG long press. It does not
+        // participate in FlekDeck's bottom-swipe App Switcher pan gesture.
+        longPressGesture.delegate = dragManager
         view.addGestureRecognizer(longPressGesture)
     }
 

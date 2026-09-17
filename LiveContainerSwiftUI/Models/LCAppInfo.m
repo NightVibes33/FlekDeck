@@ -483,7 +483,9 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     }
 
     NSNumber *mode = LCGetDefaultClassicMode([NSURL fileURLWithPath:self.bundlePath]);
-    if(![mode isKindOfClass:NSNumber.class]) mode = @0;
+    if(![mode isKindOfClass:NSNumber.class] || mode.unsignedIntegerValue == 0) {
+        return 0;
+    }
     _info[@"LCClassicModeCache"] = @{
         @"defaultClassicMode": mode,
         @"systemMajorVersion": @(systemMajorVersion),
