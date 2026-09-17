@@ -34,7 +34,7 @@ jobs:
         with:
           xcode-version: '26.6'
 
-      - name: Apply runtime and error guardrails
+      - name: Apply audited parity guardrails
         run: |
           set -euxo pipefail
           python3 -m py_compile \
@@ -45,14 +45,20 @@ jobs:
             Tools/patch_flekdeck_runtime_selection.py \
             Tools/patch_flekdeck_classic_launch_isolation.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
+
+          # Real errors only; no synthesized generic guest failure.
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -q 'let presentedGuestCrash = checkLastLaunchError()' LiveContainerSwiftUI/Views/LCTabView.swift
           grep -q 'ShareLink(item: errorInfo)' LiveContainerSwiftUI/Views/LCTabView.swift
+
+          # Compatibility Mode must be side-effect-free until a final single launch.
           ! sed -n '/- (void)setClassicMode:/,/- (NSUInteger)defaultClassicMode/p' LiveContainerSwiftUI/Models/LCAppInfo.m | grep -q 'defaultClassicMode]'
           grep -q 'let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -q 'instancesRespondToSelector:modernInit' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
           ! grep -q 'NSCAssert(springBoard' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+
+          # ARM32 inspection, runtime selection, and TXM behavior must be real source.
           grep -q 'LCInspectMachOArchitectures' LiveContainer/LCMachOUtils.h
           grep -q 'is32bit = !has64bitSlice && has32bitSlice' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'Runtime seed failed without blocking app discovery' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
@@ -60,6 +66,7 @@ jobs:
           grep -q 'isTXMScriptRequired' LiveContainerSwiftUI/Utilities/LCUtils.m
           grep -q 'pathForResource:@"universal"' LiveContainerSwiftUI/Utilities/LCUtils.m
           grep -q 'self.is32bit && LCUtils.isTXMScriptRequired' LiveContainerSwiftUI/Models/LCAppInfo.m
+
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
@@ -76,32 +83,44 @@ jobs:
             [ ! -f "$script" ] || python3 "$script"
           done
 
-      - name: Restore exact main Home switcher boundary
+      - name: Restore exact generated main Home switcher
         run: |
           set -euxo pipefail
           git fetch --no-tags origin main
+          rm -rf /tmp/flek-main-switcher
+          git worktree add --detach /tmp/flek-main-switcher origin/main
+
+          # Generate the exact switcher boundary main's build uses.
+          (cd /tmp/flek-main-switcher && python3 Tools/patch_parallel_guest_viewport.py)
+
           protected=(
             MultitaskSupport/MultitaskDockView.swift
             MultitaskSupport/DecoratedAppSceneViewController.m
             MultitaskSupport/MultitaskAppWindow.swift
           )
           for p in "${protected[@]}"; do
-            git show origin/main:"$p" > "$p"
+            cp "/tmp/flek-main-switcher/$p" "$p"
           done
+
+          # Apply the same compatibility adapter to current guest hooks. Because
+          # the host files already equal generated main, this must not drift them.
           python3 Tools/patch_parallel_guest_viewport.py
+
           for p in "${protected[@]}"; do
-            main_hash="$(git show origin/main:"$p" | git hash-object --stdin)"
+            ref_hash="$(git -C /tmp/flek-main-switcher hash-object "$p")"
             built_hash="$(git hash-object "$p")"
-            test "$built_hash" = "$main_hash" || {
-              echo "SWITCHER REGRESSION: $p differs from proven main" >&2
-              git diff --no-index <(git show origin/main:"$p") "$p" || true
+            test "$built_hash" = "$ref_hash" || {
+              echo "SWITCHER REGRESSION: $p differs from generated main" >&2
+              diff -u "/tmp/flek-main-switcher/$p" "$p" || true
               exit 1
             }
           done
+
           grep -q 'FlekHomeSingleSwitcherGestureBridge' MultitaskSupport/MultitaskDockView.swift
           grep -q 'FlekSingleGuestSwitcherGestureRequested' MultitaskSupport/MultitaskDockView.swift
           grep -q 'MultitaskSwipeZone' MultitaskSupport/MultitaskDockView.swift
           grep -q 'LCSingleGuestSwitcherGestureBridge' TweakLoader/UIKit+GuestHooks.m
+          grep -q '!hasForegroundAppWindow()' MultitaskSupport/MultitaskDockView.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
 
       - name: Static analyzer
@@ -116,7 +135,10 @@ jobs:
             CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee build/analyze.log | xcpretty
           status=${PIPESTATUS[0]}
-          [ "$status" -eq 0 ] || { grep -nE 'error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/analyze.log | tail -300 || true; exit "$status"; }
+          [ "$status" -eq 0 ] || {
+            grep -nE 'error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/analyze.log | tail -300 || true
+            exit "$status"
+          }
 
       - name: Release archive
         run: |
@@ -131,7 +153,10 @@ jobs:
             CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee build/archive.log | xcpretty
           status=${PIPESTATUS[0]}
-          [ "$status" -eq 0 ] || { grep -nE 'error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/archive.log | tail -350 || true; exit "$status"; }
+          [ "$status" -eq 0 ] || {
+            grep -nE 'error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/archive.log | tail -350 || true
+            exit "$status"
+          }
 
       - name: Embed verified LiveExec32 and package IPA
         run: |
