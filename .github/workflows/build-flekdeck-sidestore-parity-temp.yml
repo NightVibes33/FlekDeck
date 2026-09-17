@@ -1,0 +1,200 @@
+name: FlekDeck Temp SideStore-Parity IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [temp/32bit-liveexec-data-folder]
+    paths:
+      - '.github/workflows/build-flekdeck-sidestore-parity-temp.yml'
+      - 'Tools/patch_flekdeck_runtime_guardrails.py'
+      - 'LiveContainer/**'
+      - 'LiveContainerSwiftUI/**'
+      - 'MultitaskSupport/**'
+      - 'TweakLoader/**'
+      - 'Resources/**'
+      - 'entitlements.xml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      LIVEEXEC_RUNTIME_URL: https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/download/liveexec32-r89/LiveExec32-r89.zip
+      LIVEEXEC_RUNTIME_SHA256: 9d35d8d6d4c9c5188e6a53e797de307e6aab579ab43b8fdbb05c8e1b5e8cf7c2
+      LIVEEXEC_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Apply canonical temp guardrails
+        run: |
+          set -euxo pipefail
+          python3 Tools/patch_flekdeck_runtime_guardrails.py
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+
+      - name: Restore main App Switcher build boundary
+        run: |
+          set -euxo pipefail
+          git fetch --no-tags origin main
+          rm -rf /tmp/flek-main-switcher
+          git worktree add --detach /tmp/flek-main-switcher origin/main
+          (cd /tmp/flek-main-switcher && python3 Tools/patch_direct_multitask_host_bridge.py)
+          (cd /tmp/flek-main-switcher && python3 Tools/patch_parallel_guest_viewport.py)
+          protected=(
+            MultitaskSupport/MultitaskDockView.swift
+            MultitaskSupport/DecoratedAppSceneViewController.m
+            MultitaskSupport/MultitaskAppWindow.swift
+          )
+          for p in "${protected[@]}"; do
+            cp "/tmp/flek-main-switcher/$p" "$p"
+          done
+          python3 Tools/patch_parallel_guest_viewport.py
+          for p in "${protected[@]}"; do
+            test "$(git hash-object "$p")" = "$(git -C /tmp/flek-main-switcher hash-object "$p")"
+          done
+
+      - name: Reapply non-switcher compatibility layers
+        run: |
+          set -euxo pipefail
+          for script in \
+            Tools/patch_stikdebug_pid_verification.py \
+            Tools/patch_guest_native_pip_bridge.py \
+            Tools/patch_youtube_native_pip_render.py \
+            Tools/patch_pip_state_separation.py; do
+            [ ! -f "$script" ] || python3 "$script"
+          done
+
+      - name: Build unsigned Release archive
+        run: |
+          set -uo pipefail
+          mkdir -p build
+          xcodebuild clean archive \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -archivePath "$PWD/build/FlekDeck-SideStore-temp.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/xcodebuild.log | xcpretty
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -300 || true
+            exit "$status"
+          fi
+
+      - name: Embed verified LiveExec32 r89
+        run: |
+          set -euxo pipefail
+          ZIP="$RUNNER_TEMP/LiveExec32-r89.zip"
+          curl --fail --location --retry 3 --retry-all-errors -o "$ZIP" "$LIVEEXEC_RUNTIME_URL"
+          echo "$LIVEEXEC_RUNTIME_SHA256  $ZIP" | shasum -a 256 -c -
+          rm -rf build/liveexec-source
+          mkdir -p build/liveexec-source
+          unzip -q "$ZIP" -d build/liveexec-source
+          EMU="$(find build/liveexec-source -maxdepth 2 -type d -name LiveExec32.app -print -quit)"
+          APP="$(find build/FlekDeck-SideStore-temp.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$EMU"; test -n "$APP"
+          test -f "$EMU/$LIVEEXEC_LOAD_PATH"
+          test -d "$EMU/RootFS"
+          test -s Resources/universal.js
+          nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" > "$RUNNER_TEMP/liveexec32.symbols"
+          grep -q '_LC32RunGuest' "$RUNNER_TEMP/liveexec32.symbols"
+          rm -rf "$APP/LiveExec32.app"
+          ditto "$EMU" "$APP/LiveExec32.app"
+          ditto Resources/universal.js "$APP/universal.js"
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Apply exact main SideStore packaging contract
+        run: |
+          set -euxo pipefail
+          APP="$(find "$PWD/build/FlekDeck-SideStore-temp.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
+          EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$APP/Info.plist")"
+          BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")"
+          test -n "$EXECUTABLE"
+          test "$BUNDLE_ID" = "com.fs.flekdeck"
+
+          # SideStore uses this to resolve FlekDeck's shared container contract.
+          /usr/libexec/PlistBuddy -c 'Delete :ALTAppGroups' "$APP/Info.plist" >/dev/null 2>&1 || true
+          /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups array' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups:0 string group.com.SideStore.SideStore' "$APP/Info.plist"
+
+          cp entitlements.xml build/FlekDeck-SideStore.entitlements
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build/FlekDeck-SideStore.entitlements')
+          s = p.read_text()
+          replacements = {
+              '$(DEVELOPMENT_TEAM)': 'AAAAA11111',
+              '$(PRODUCT_BUNDLE_IDENTIFIER)': 'com.fs.flekdeck',
+              '$(APP_GROUP_SIDESTORE)': 'group.com.SideStore.SideStore',
+              '$(APP_GROUP_ALTSTORE)': 'group.com.rileytestut.AltStore',
+              '$(AppIdentifierPrefix)': 'AAAAA11111.',
+          }
+          for old, new in replacements.items():
+              s = s.replace(old, new)
+          if '$(' in s:
+              raise SystemExit('unresolved entitlement build variable remains')
+          p.write_text(s)
+          PY
+          plutil -lint build/FlekDeck-SideStore.entitlements
+          ldid -S"$PWD/build/FlekDeck-SideStore.entitlements" "$APP/$EXECUTABLE"
+          ldid -e "$APP/$EXECUTABLE" > "$PWD/build/FlekDeck-host-entitlements.plist"
+          plutil -lint "$PWD/build/FlekDeck-host-entitlements.plist"
+
+          test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$PWD/build/FlekDeck-host-entitlements.plist")" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$PWD/build/FlekDeck-host-entitlements.plist")" = "AAAAA11111.com.fs.flekdeck"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ALTAppGroups:0' "$APP/Info.plist")" = "group.com.SideStore.SideStore"
+          test "$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")" = "com.fs.flekdeck"
+
+          # Embedded extensions must remain in FlekDeck's namespace as well.
+          while IFS= read -r PLIST; do
+            ID="$(plutil -extract CFBundleIdentifier raw "$PLIST")"
+            case "$ID" in
+              com.fs.flekdeck.*) ;;
+              *) echo "Unexpected embedded bundle identifier: $ID ($PLIST)" >&2; exit 1 ;;
+            esac
+          done < <(find "$APP/PlugIns" -name Info.plist -type f 2>/dev/null || true)
+
+      - name: Package SideStore-compatible IPA
+        run: |
+          set -euxo pipefail
+          APP="$(find "$PWD/build/FlekDeck-SideStore-temp.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          find "$APP" -type d -name _CodeSignature -prune -exec rm -rf {} + || true
+          find "$APP" -type f -name embedded.mobileprovision -delete || true
+          # Reapply the host placeholder signature after removing stale nested signatures.
+          EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$APP/Info.plist")"
+          ldid -S"$PWD/build/FlekDeck-SideStore.entitlements" "$APP/$EXECUTABLE"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build
+          zip -qry FlekDeck-temp-SideStore.ipa Payload
+          unzip -t FlekDeck-temp-SideStore.ipa >/dev/null
+          shasum -a 256 FlekDeck-temp-SideStore.ipa | tee FlekDeck-temp-SideStore.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-temp-SideStore
+          path: |
+            build/FlekDeck-temp-SideStore.ipa
+            build/FlekDeck-temp-SideStore.sha256
+            build/FlekDeck-host-entitlements.plist
+          compression-level: 0
+          if-no-files-found: error
