@@ -177,7 +177,28 @@ text = text.replace(
 )
 app_list.write_text(text)
 
-# 4) Runtime seeding must never take normal app discovery down with it. Also do
+# 4) Give every direct guest attempt a clean error epoch. Without this, a stale
+# value left by an earlier guest/host diagnostic can survive a relaunch directly
+# into another guest. If the new guest then dies by signal before returning its
+# own diagnostic, the UI can incorrectly blame the old string on the new app.
+# Clear ONLY before invokeAppMain; diagnostics generated during this attempt
+# (including the bookmark watchdog sentinel) are still preserved.
+bootstrap = Path("LiveContainer/LCBootstrap.m")
+boot = bootstrap.read_text()
+old_launch = '''        NSSetUncaughtExceptionHandler(&exceptionHandler);
+        NSString *appError = invokeAppMain(selectedApp, selectedContainer, argc, argv);'''
+new_launch = '''        // Start a new guest-error epoch. Never attribute a previous app's stale
+        // diagnostic to the guest we are about to launch.
+        [lcUserDefaults removeObjectForKey:@"error"];
+        NSSetUncaughtExceptionHandler(&exceptionHandler);
+        NSString *appError = invokeAppMain(selectedApp, selectedContainer, argc, argv);'''
+if old_launch in boot:
+    boot = boot.replace(old_launch, new_launch, 1)
+elif new_launch not in boot:
+    raise SystemExit(f"{bootstrap}: guest launch error-epoch anchor missing")
+bootstrap.write_text(boot)
+
+# 5) Runtime seeding must never take normal app discovery down with it. Also do
 # not force-unwrap arbitrary .app directories: one malformed import should be
 # skipped and logged rather than crashing FlekDeck at startup.
 app_entry = Path("LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift")
@@ -276,7 +297,7 @@ elif new_shared not in text:
     raise SystemExit(f"{app_entry}: shared app discovery anchor missing")
 app_entry.write_text(text)
 
-# 5) Keep the old error-ui generator from putting the synthetic fallback back
+# 6) Keep the old error-ui generator from putting the synthetic fallback back
 # the next time the full parity workflow runs.
 error_gen = Path("Tools/patch_flekdeck_error_ui_parity.py")
 if error_gen.exists():
@@ -300,6 +321,8 @@ if "get-task-allow=false; keeping this as a diagnostic" not in tab.read_text():
     raise SystemExit(f"{tab}: distribution-signing diagnostic guard missing")
 if "guard let groupID = LCSharedUtils.appGroupID()" not in utils.read_text():
     raise SystemExit(f"{utils}: nullable app-group identifier is still unsafe")
+if 'removeObjectForKey:@"error"' not in bootstrap.read_text()[bootstrap.read_text().find('if (selectedApp || isSideStore) {'):]:
+    raise SystemExit(f"{bootstrap}: previous launch error is not cleared before a new guest attempt")
 entry_value = app_entry.read_text()
 if "Runtime seed failed without blocking app discovery" not in entry_value:
     raise SystemExit(f"{app_entry}: runtime seeding is still coupled to app discovery")
@@ -308,4 +331,4 @@ if 'LCAppInfo(bundlePath: "\\(LCPath.bundlePath.path)/\\(appDir)")!' in entry_va
 if 'LCAppInfo(bundlePath: "\\(LCPath.lcGroupBundlePath.path)/\\(appDir)")!' in entry_value:
     raise SystemExit(f"{app_entry}: shared app discovery still force-unwraps LCAppInfo")
 
-print("FlekDeck on-device regression fixes applied: real errors preserved, startup/runtime discovery hardened")
+print("FlekDeck on-device regression fixes applied: real errors preserved, stale errors isolated, startup/runtime discovery hardened")
