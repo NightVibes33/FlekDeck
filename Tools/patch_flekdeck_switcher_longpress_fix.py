@@ -80,7 +80,7 @@ delegate_method = '''    /// Installed app holds belong to UICollectionView's co
         }
 
         let item = pageCell.items[indexPath.item]
-        if item.isInstalledApp {
+        if case .installed = item {
             return false
         }
         return true
