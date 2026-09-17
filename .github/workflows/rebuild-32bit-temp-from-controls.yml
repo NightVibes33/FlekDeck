@@ -82,12 +82,38 @@ jobs:
           p.write_text(s)
           PY
 
+          # FlekDeck main has a legacy UIKit window-to-scene bridge for native
+          # LiveProcess guests. LiveExec32 owns the ARM32 render/window lifecycle
+          # itself, and the known-good ARM32 control repo does not install this
+          # bridge. Preserve main behavior for ARM64 while leaving ARM32 entirely
+          # to LC32RunGuest.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('LiveContainer/LCBootstrap.m')
+          s = p.read_text()
+          old = '''    LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);'''
+          new = '''#if is32BitSupported
+    if(!is32bit) {
+        LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);
+    }
+#else
+    LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);
+#endif'''
+          if new not in s:
+              if s.count(old) != 1:
+                  raise SystemExit('legacy window scene bridge call anchor missing or duplicated')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
           # Hard boundaries: native guests retain main ABI and Parallel stays out
-          # of the ARM32 single-process route.
+          # of the proven ARM32 Classic/single-process route.
           grep -Fq 'static int (*appMain)(int, char**);' LiveContainer/LCBootstrap.m
           grep -Fq 'int (*emulatorMain)(int, char **, char **) = NULL;' LiveContainer/LCBootstrap.m
           grep -Fq 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
           grep -Fq 'ret = emulatorMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);' LiveContainer/LCBootstrap.m
+          grep -Fq 'if(!is32bit) {' LiveContainer/LCBootstrap.m
+          grep -Fq 'LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);' LiveContainer/LCBootstrap.m
           grep -Fq 'self.classicMode = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -Fq 'appInfo.is32bit ? false' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -Fq 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
