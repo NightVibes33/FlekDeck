@@ -3,8 +3,8 @@ import Foundation
 protocol LCAppModelDelegate {
     func closeNavigationView()
     func changeAppVisibility(app : LCAppModel)
-    func jitLaunch(appName: String) async
-    func jitLaunch(withScript script: String, appName: String) async
+    func jitLaunch(appName: String, classicMode: UInt) async
+    func jitLaunch(withScript script: String, appName: String, classicMode: UInt) async
     func jitLaunch(withPID pid: Int, withScript script: String?, appName: String) async
     func showRunWhenMultitaskAlert() async -> Bool?
 }
@@ -23,6 +23,11 @@ class LCAppModel: ObservableObject, Hashable {
             appInfo.isJITNeeded = uiIsJITNeeded
         }
     }
+    @Published var uiClassicMode : Bool {
+        didSet {
+            appInfo.classicMode = uiClassicMode
+        }
+    }
     @Published var uiIsHidden : Bool
     @Published var uiIsLocked : Bool
     @Published var uiIsShared : Bool
@@ -31,6 +36,10 @@ class LCAppModel: ObservableObject, Hashable {
     @Published var uiSelectedContainer : LCContainer?
 #if is32BitSupported
     @Published var uiIs32bit : Bool
+    @Published var uiIs32bitEmulator : Bool
+    @Published var uiSelected32BitEmulator : String {
+        didSet { appInfo.selected32BitEmulator = uiSelected32BitEmulator }
+    }
 #endif
     @Published var uiTweakFolder : String? {
         didSet {
@@ -158,6 +167,7 @@ class LCAppModel: ObservableObject, Hashable {
         }
         
         self.uiIsJITNeeded = appInfo.isJITNeeded
+        self.uiClassicMode = appInfo.classicMode
         self.uiIsHidden = appInfo.isHidden
         self.uiIsLocked = appInfo.isLocked
         self.uiIsShared = appInfo.isShared
@@ -181,6 +191,8 @@ class LCAppModel: ObservableObject, Hashable {
         self.uiRemark = appInfo.remark ?? ""
 #if is32BitSupported
         self.uiIs32bit = appInfo.is32bit
+        self.uiIs32bitEmulator = appInfo.is32bitEmulator
+        self.uiSelected32BitEmulator = appInfo.selected32BitEmulator ?? ""
 #endif
         for container in uiContainers {
             if container.folderName == uiDefaultDataFolder {
@@ -221,7 +233,13 @@ class LCAppModel: ObservableObject, Hashable {
         }
         let currentDataFolder = containerFolderName ?? uiSelectedContainer?.folderName
         
-        let multitask = multitask ?? shouldLaunchInMultitaskMode;
+        let classicMode = appInfo.defaultClassicMode
+#if is32BitSupported
+        // LiveExec32 and Classic Mode both require the single-process host path.
+        let multitask = (appInfo.is32bit || classicMode != 0) ? false : (multitask ?? shouldLaunchInMultitaskMode)
+#else
+        let multitask = classicMode == 0 ? (multitask ?? shouldLaunchInMultitaskMode) : false
+#endif
         
         if MultitaskManager.isMultitasking() || multitask,
            let currentDataFolder {
@@ -353,9 +371,9 @@ class LCAppModel: ObservableObject, Hashable {
             } else {
                 // Non-multitask JIT flow remains unchanged
                 if let scriptData = jitLaunchScriptJs, !scriptData.isEmpty {
-                    await delegate?.jitLaunch(withScript: scriptData, appName: self.appInfo.displayName())
+                    await delegate?.jitLaunch(withScript: scriptData, appName: self.appInfo.displayName(), classicMode: classicMode)
                 } else {
-                    await delegate?.jitLaunch(appName: self.appInfo.displayName())
+                    await delegate?.jitLaunch(appName: self.appInfo.displayName(), classicMode: classicMode)
                 }
             }
         } else if multitask, #available(iOS 16.0, *) {
@@ -366,7 +384,7 @@ class LCAppModel: ObservableObject, Hashable {
                 let fileURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("preloadLibraries.txt")
                 try fileContents?.write(to: fileURL)
             }
-            LCSharedUtils.launchToGuestApp()
+            LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
         }
         
         // Record the launch time

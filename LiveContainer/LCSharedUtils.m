@@ -200,6 +200,40 @@ extern NSBundle *lcMainBundle;
     return NO;
 }
 
++ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode {
+    if(classicMode == 0) {
+        return [self launchToGuestApp];
+    }
+
+    void (^completionHandler)(BOOL) = ^(BOOL success) {
+        __asm__ __volatile__ (
+            "mov x0, #31\n"
+            "mov x16, #26\n"
+            "svc #0x80\n"
+        );
+        raise(SIGKILL);
+    };
+
+    _LSOpenConfiguration *configuration = [[PrivClass(_LSOpenConfiguration) alloc] init];
+    NSMutableDictionary *frontBoardOptions = [NSMutableDictionary new];
+    // Match current LiveContainer's private FrontBoard key without introducing
+    // a link-time dependency on FrontBoardServices in FlekDeck's shared target.
+    frontBoardOptions[@"__ActivateAsClassic"] = @(classicMode);
+    configuration.frontBoardOptions = frontBoardOptions;
+
+    NSString *bundleIdentifier = lcMainBundle.bundleIdentifier ?: NSBundle.mainBundle.bundleIdentifier;
+    LSApplicationWorkspace *workspace = [PrivClass(LSApplicationWorkspace) defaultWorkspace];
+    for(int i = 0; i < 2; i++) {
+        [workspace openApplicationWithBundleIdentifier:bundleIdentifier
+                                         configuration:configuration
+                                     completionHandler:^(BOOL success, NSError *error) {
+            NSLog(@"[FlekDeck/ClassicMode] success=%d mode=%lu error=%@", success, (unsigned long)classicMode, error);
+            completionHandler(success);
+        }];
+    }
+    return YES;
+}
+
 + (BOOL)launchToGuestAppWithURL:(NSURL *)url {
     NSURLComponents* components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
     if(![components.host isEqualToString:@"livecontainer-launch"]) return NO;
@@ -225,7 +259,14 @@ extern NSBundle *lcMainBundle;
         // Attempt to restart LiveContainer with the selected guest app
         [lcUserDefaults setObject:launchBundleId forKey:@"selected"];
         [lcUserDefaults setObject:containerFolderName forKey:@"selectedContainer"];
-        return [self launchToGuestApp];
+        bool isSharedApp = false;
+        NSBundle *appBundle = [self findBundleWithBundleId:launchBundleId isSharedAppOut:&isSharedApp];
+        NSDictionary *appInfo = [NSDictionary dictionaryWithContentsOfFile:
+            [appBundle.bundlePath stringByAppendingPathComponent:@"LCAppInfo.plist"]];
+        NSUInteger classicMode = [appInfo[@"classicMode"] boolValue]
+            ? [appInfo[@"LCClassicModeCache"][@"defaultClassicMode"] unsignedIntegerValue]
+            : 0;
+        return [self launchToGuestAppWithClassicMode:classicMode];
     }
     
     return NO;

@@ -83,7 +83,7 @@ struct LCSettingsView: View {
     @AppStorage("LCLoadTweaksToSelf") var injectToLCItelf = false
     @AppStorage("LCIgnoreJITOnLaunch") var ignoreJITOnLaunch = false
     #if is32BitSupported
-    @AppStorage("selected32BitLayer", store: LCUtils.appGroupUserDefault) var liveExec32Path : String = ""
+    @AppStorage("LCSelected32BitEmulator", store: LCUtils.appGroupUserDefault) var liveExec32Path : String = "LiveExec32.app"
     #endif
     @AppStorage("LCKeepSelectedWhenQuit") var keepSelectedWhenQuit = false
     @AppStorage("LCWaitForDebugger") var waitForDebugger = false
@@ -507,9 +507,15 @@ struct LCSettingsView: View {
                         } label: {
                             Text("Reset Symbol Offsets")
                         }
+                        Button {
+                            presentFLEXOverlay()
+                        } label: {
+                            Text("Show FLEX Overlay")
+                        }
+                        .disabled(NSClassFromString("FLEXManager") == nil)
                         #if is32BitSupported
                         HStack {
-                            Text("LiveExec32 .app path")
+                            Text("32-bit Runtime")
                             Spacer()
                             TextField("", text: $liveExec32Path)
                                 .multilineTextAlignment(.trailing)
@@ -835,7 +841,27 @@ struct LCSettingsView: View {
                 } footer: {
                     Text("lc.settings.JitDesc".loc)
                 }
-                
+
+#if is32BitSupported
+                Section {
+                    Picker(selection: $liveExec32Path) {
+                        Text("Bundled LiveExec32 (r89)").tag("LiveExec32.app")
+                        ForEach(sharedModel.arm32EmuApps.filter { $0.appInfo.relativeBundlePath != "LiveExec32.app" }, id: \.self) { app in
+                            Text(app.appInfo.displayName()).tag(app.appInfo.relativeBundlePath ?? "")
+                        }
+                    } label: {
+                        Text("Default 32-bit Runtime")
+                    }
+                    HStack {
+                        Text("Runtime Revision")
+                        Spacer()
+                        Text("89")
+                            .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Used for ARM32 apps. Per-app settings can override this selection.")
+                }
+#endif
                 
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -886,10 +912,22 @@ struct LCSettingsView: View {
                 }
                 
                 Section {
+                    if sharedModel.multiLCStatus != 2 {
+                        NavigationLink {
+                            LCStorageManagementView()
+                        } label: {
+                            Text("lc.settings.storageManagement".loc)
+                        }
+                    }
                     NavigationLink {
                         LCDataManagementView()
                     } label: {
                         Text("lc.settings.dataManagement".loc)
+                    }
+                    Button {
+                        clearNotifications()
+                    } label: {
+                        Text("lc.settings.clearNotifications".loc)
                     }
                 }
                 
@@ -944,6 +982,13 @@ struct LCSettingsView: View {
     
     func openTwitter() {
         UIApplication.shared.open(URL(string: "https://x.com/khanhduytran0")!)
+    }
+
+    func presentFLEXOverlay() {
+        let manager = (NSClassFromString("FLEXManager") as? NSObject.Type)?
+            .perform(NSSelectorFromString("sharedManager"))?
+            .takeUnretainedValue() as? NSObject
+        _ = manager?.perform(NSSelectorFromString("showExplorer"))
     }
 
     func clearNotifications() {

@@ -147,7 +147,8 @@ struct LCAppSettingsView: View {
                 Toggle(isOn: $model.uiIsJITNeeded) {
                     Text("lc.appSettings.launchWithJit".loc)
                 }
-                if #available(iOS 26.0, *), model.uiIsJITNeeded {
+                .disabled(model.uiIs32bit)
+                if #available(iOS 26.0, *), model.uiIsJITNeeded, !model.uiIs32bit {
                     HStack {
                         Text("lc.appSettings.jit26.script".loc)
                         Spacer()
@@ -194,6 +195,16 @@ struct LCAppSettingsView: View {
                         }
                     }
                 }
+                if model.uiIs32bit {
+                    Picker(selection: $model.uiSelected32BitEmulator) {
+                        Text("lc.common.default".loc).tag("")
+                        ForEach(sharedModel.arm32EmuApps, id: \.self) { app in
+                            Text(app.appInfo.displayName()).tag(app.appInfo.relativeBundlePath ?? "")
+                        }
+                    } label: {
+                        Text("32-bit Runtime")
+                    }
+                }
             } footer: {
 
                     if #available(iOS 26.0, *), model.uiIsJITNeeded {
@@ -205,6 +216,16 @@ struct LCAppSettingsView: View {
                 
             }
 
+            if #available(iOS 16.0, *) {
+                Section {
+                    Toggle(isOn: $model.uiClassicMode) {
+                        Text("lc.appSettings.classicMode".loc)
+                    }
+                } footer: {
+                    Text("lc.appSettings.classicModeDesc".loc)
+                }
+            }
+            
             Section {
                 Toggle(isOn: $model.uiIsLocked) {
                     Text("lc.appSettings.lockApp".loc)

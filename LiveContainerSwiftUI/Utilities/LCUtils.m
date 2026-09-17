@@ -3,6 +3,9 @@
 @import UIKit;
 @import UniformTypeIdentifiers;
 @import Security;
+#if is32BitSupported
+#import <dlfcn.h>
+#endif
 
 #import "LCUtils.h"
 #import "../../LiveContainer/LCSharedUtils.h"
@@ -211,6 +214,68 @@
     int ans = [NSClassFromString(@"ZSigner") checkCert:certData pass:[LCSharedUtils certificatePassword] completionHandler:completionHandler];
     return ans;
 }
+
+#if is32BitSupported
+#pragma mark ARM32 TXM JIT compatibility
+
+typedef uint32_t FlekIOObject;
+typedef FlekIOObject (*FlekIORegistryEntryFromPathFn)(uint32_t masterPort, const char *path);
+typedef CFTypeRef (*FlekIORegistryEntryCreateCFPropertyFn)(FlekIOObject entry, CFStringRef key, CFAllocatorRef allocator, uint32_t options);
+typedef int32_t (*FlekIOObjectReleaseFn)(FlekIOObject object);
+
++ (BOOL)isTXMScriptRequired {
+    if (@available(iOS 19.0, *)) {
+        // IOKit is private to iOS SDK consumers even though the runtime symbols
+        // exist. Resolve only the three functions we need instead of importing
+        // or linking the framework, so the normal FlekDeck target keeps building.
+        void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
+        if (!handle) {
+            return NO;
+        }
+
+        FlekIORegistryEntryFromPathFn entryFromPath =
+            (FlekIORegistryEntryFromPathFn)dlsym(handle, "IORegistryEntryFromPath");
+        FlekIORegistryEntryCreateCFPropertyFn createProperty =
+            (FlekIORegistryEntryCreateCFPropertyFn)dlsym(handle, "IORegistryEntryCreateCFProperty");
+        FlekIOObjectReleaseFn releaseObject =
+            (FlekIOObjectReleaseFn)dlsym(handle, "IOObjectRelease");
+        if (!entryFromPath || !createProperty || !releaseObject) {
+            dlclose(handle);
+            return NO;
+        }
+
+        FlekIOObject memoryMap = entryFromPath(0, "IODeviceTree:/chosen/memory-map");
+        if (memoryMap == 0) {
+            dlclose(handle);
+            return NO;
+        }
+
+        CFTypeRef value = createProperty(
+            memoryMap, CFSTR("IORegistryEntryPropertyKeys"), kCFAllocatorDefault, 0
+        );
+        releaseObject(memoryMap);
+        dlclose(handle);
+
+        NSArray *keys = CFBridgingRelease(value);
+        return [keys isKindOfClass:NSArray.class] && [keys containsObject:@"TXM"];
+    }
+    return NO;
+}
+
++ (NSString *)base64EncodedUniversalJITScript {
+    static dispatch_once_t onceToken;
+    static NSString *script;
+    dispatch_once(&onceToken, ^{
+        NSString *path = [NSBundle.mainBundle pathForResource:@"universal" ofType:@"js"];
+        NSData *data = path.length ? [NSData dataWithContentsOfFile:path] : nil;
+        script = data ? [data base64EncodedStringWithOptions:0] : @"";
+        if(script.length == 0) {
+            NSLog(@"[FlekDeck/LC32] universal.js is missing; TXM JIT bootstrap is unavailable");
+        }
+    });
+    return script;
+}
+#endif
 
 #pragma mark Setup
 

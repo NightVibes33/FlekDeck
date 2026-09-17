@@ -320,7 +320,12 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         [fm moveItemAtPath:backupPath toPath:execPath error:&err];
     }
     
+#if is32BitSupported
+    // Once an ARM32 guest has been identified, keep that fact on later launches.
+    bool is32bit = self.is32bit;
+#else
     bool is32bit = false;
+#endif
     if (needPatch) {
         __block bool has64bitSlice = NO;
         __block bool isEncrypted = false;
@@ -339,7 +344,19 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
             isEncrypted |= LCIsMachOEncrypted(header);
         });
         is32bit = !has64bitSlice;
-        LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
+#if is32BitSupported
+        self.is32bit = is32bit;
+#endif
+        if (!is32bit) {
+            LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
+        } else {
+#if is32BitSupported
+            // LiveExec32 owns ARM32 execution. It requires JIT and SDK spoofing.
+            self.isJITNeeded = YES;
+            self.classicMode = YES;
+            self.spoofSDKVersion = YES;
+#endif
+        }
         if (isEncrypted) {
             error = @"The app you tried to install is encrypted. Please provide decrypted app.";
         }
@@ -358,11 +375,9 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         completetionHandler(NO, @"32-bit app is NOT supported!");
         return;
     }
-#else
-    self.is32Bit = is32bit;
 #endif
 
-    if (!LCSharedUtils.certificatePassword || is32bit || self.dontSign) {
+    if (!LCSharedUtils.certificatePassword || self.is32bit || self.dontSign) {
         [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
         completetionHandler(YES, nil);
         return;
@@ -423,6 +438,42 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     _info[@"isJITNeeded"] = [NSNumber numberWithBool:isJITNeeded];
     [self save];
     
+}
+
+- (bool)classicMode {
+    return [_info[@"classicMode"] boolValue];
+}
+
+- (void)setClassicMode:(bool)classicMode {
+    _info[@"classicMode"] = @(classicMode);
+    if(classicMode) {
+        (void)[self defaultClassicMode];
+    } else {
+        [_info removeObjectForKey:@"LCClassicModeCache"];
+        [self save];
+    }
+}
+
+- (NSUInteger)defaultClassicMode {
+    if(!self.classicMode) return 0;
+
+    NSInteger systemMajorVersion = NSProcessInfo.processInfo.operatingSystemVersion.majorVersion;
+    NSDictionary *cache = _info[@"LCClassicModeCache"];
+    NSNumber *cachedMode = cache[@"defaultClassicMode"];
+    NSNumber *cachedSystemMajorVersion = cache[@"systemMajorVersion"];
+    if([cachedMode isKindOfClass:NSNumber.class] &&
+       [cachedSystemMajorVersion isKindOfClass:NSNumber.class] &&
+       cachedSystemMajorVersion.integerValue == systemMajorVersion) {
+        return cachedMode.unsignedIntegerValue;
+    }
+
+    NSNumber *mode = LCGetDefaultClassicMode([NSURL fileURLWithPath:self.bundlePath]);
+    _info[@"LCClassicModeCache"] = @{
+        @"defaultClassicMode": mode ?: @0,
+        @"systemMajorVersion": @(systemMajorVersion),
+    };
+    [self save];
+    return mode.unsignedIntegerValue;
 }
 
 - (bool)isLocked {
@@ -650,7 +701,20 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 - (void)setIs32bit:(bool)is32bit {
     _info[@"is32bit"] = [NSNumber numberWithBool:is32bit];
     [self save];
-    
+}
+- (NSString *)selected32BitEmulator {
+    return _info[@"selected32BitEmulator"];
+}
+- (void)setSelected32BitEmulator:(NSString *)selected32BitEmulator {
+    if(selected32BitEmulator.length > 0) {
+        _info[@"selected32BitEmulator"] = selected32BitEmulator;
+    } else {
+        [_info removeObjectForKey:@"selected32BitEmulator"];
+    }
+    [self save];
+}
+- (bool)is32bitEmulator {
+    return [_infoPlist[@"LC32BitTranslationLayer"] boolValue];
 }
 #endif
 - (bool)dontSign {
@@ -667,6 +731,14 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 }
 
 - (NSString *)jitLaunchScriptJs {
+#if is32BitSupported
+    if (self.is32bit && LCUtils.isTXMScriptRequired) {
+        NSString *universalScript = LCUtils.base64EncodedUniversalJITScript;
+        if (universalScript.length > 0) {
+            return universalScript;
+        }
+    }
+#endif
     return _info[@"jitLaunchScriptJs"];
 }
 
@@ -696,6 +768,17 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         LCParseMachO(execPath.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
             sdkVersion = dyld_get_sdk_version((const struct mach_header *)header);
         });
+#if is32BitSupported
+        // Keep the same compatibility floor as the proven LiveExec32 integration.
+        uint32_t minSDK = self.is32bit ? 0x20000 : 0xb0000;
+        if ((self.is32bit || sdkVersion) && sdkVersion < minSDK) {
+            sdkVersion = minSDK;
+        }
+#else
+        if (sdkVersion && sdkVersion < 0xb0000) {
+            sdkVersion = 0xb0000;
+        }
+#endif
         NSLog(@"[LC] sdkversion = %8x", sdkVersion);
         _info[@"spoofSDKVersion"] = [NSNumber numberWithUnsignedInt:sdkVersion];
     }

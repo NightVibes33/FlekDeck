@@ -18,6 +18,7 @@
 #import "Tweaks/Tweaks.h"
 #include <mach-o/ldsyms.h>
 
+extern char **environ;
 static int (*appMain)(int, char**);
 NSUserDefaults *lcUserDefaults;
 NSUserDefaults *lcSharedDefaults;
@@ -551,6 +552,9 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     
     // Overwrite @executable_path
     const char *appExecPath = appBundle.executablePath.fileSystemRepresentation;
+    NSString *emulatorLauncherPath = nil;
+    NSString *emulatorEntrySymbol = nil;
+    int (*emulatorMain)(int, char **, char **) = NULL;
     *path = appExecPath;
     overwriteExecPath(appExecPath);
     
@@ -739,29 +743,76 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         }
     }
     
+    // Keep the flag in function scope so native builds/targets that do not
+    // define is32BitSupported still compile the shared loader code below.
+    bool is32bit = false;
 #if is32BitSupported
-    bool is32bit = [guestAppInfo[@"is32bit"] boolValue];
+    is32bit = [guestAppInfo[@"is32bit"] boolValue];
     if(is32bit) {
         if (!isJitEnabled) {
             return @"JIT is required to run 32-bit apps.";
         }
-        
-        NSString *selected32BitLayer = [lcUserDefaults stringForKey:@"selected32BitLayer"];
-        if(!selected32BitLayer || [selected32BitLayer length] == 0) {
-            appError = @"No 32-bit translation layer installed";
-            NSLog(@"[LCBootstrap] %@", appError);
-            *path = oldPath;
-            return appError;
+
+        // Prefer an app-specific emulator, then the shared default. Keep the old
+        // selected32BitLayer key as a migration fallback for existing FlekDeck installs.
+        NSString *selected32BitLayer = guestAppInfo[@"selected32BitEmulator"];
+        if(selected32BitLayer.length == 0) {
+            selected32BitLayer = [lcSharedDefaults stringForKey:@"LCSelected32BitEmulator"];
         }
-        NSBundle *selected32bitLayerBundle = [NSBundle bundleWithPath:[docPath stringByAppendingPathComponent:selected32BitLayer]]; //TODO make it user friendly;
+        if(selected32BitLayer.length == 0) {
+            selected32BitLayer = [lcUserDefaults stringForKey:@"selected32BitLayer"];
+        }
+        if(selected32BitLayer.length == 0) {
+            selected32BitLayer = @"LiveExec32.app";
+        }
+        selected32BitLayer = selected32BitLayer.lastPathComponent;
+
+        NSMutableArray<NSString *> *runtimeCandidates = [NSMutableArray array];
+        [runtimeCandidates addObject:[docPath stringByAppendingPathComponent:[@"Applications" stringByAppendingPathComponent:selected32BitLayer]]];
+        [runtimeCandidates addObject:[docPath stringByAppendingPathComponent:selected32BitLayer]];
+
+        NSURL *runtimeGroupRoot = [LCSharedUtils appGroupPath];
+        if(runtimeGroupRoot) {
+            NSString *groupRuntime = [[runtimeGroupRoot.path stringByAppendingPathComponent:@"LiveContainer/Applications"] stringByAppendingPathComponent:selected32BitLayer];
+            [runtimeCandidates addObject:groupRuntime];
+        }
+
+        NSBundle *selected32bitLayerBundle = nil;
+        for(NSString *candidate in runtimeCandidates) {
+            selected32bitLayerBundle = [NSBundle bundleWithPath:candidate];
+            if(selected32bitLayerBundle) break;
+        }
         if(!selected32bitLayerBundle) {
-            appError = @"The specified LiveExec32.app path is not found";
+            appError = [NSString stringWithFormat:@"The selected 32-bit runtime %@ was not found", selected32BitLayer];
             NSLog(@"[LCBootstrap] %@", appError);
             *path = oldPath;
             return appError;
         }
-        // maybe need to save selected32bitLayerBundle to static variable?
-        appExecPath = strdup(selected32bitLayerBundle.executablePath.UTF8String);
+        if(![selected32bitLayerBundle.infoDictionary[@"LC32BitTranslationLayer"] boolValue]) {
+            appError = @"The selected app is not a valid LiveExec32 translation layer";
+            NSLog(@"[LCBootstrap] %@", appError);
+            *path = oldPath;
+            return appError;
+        }
+
+        emulatorLauncherPath = selected32bitLayerBundle.executablePath;
+        NSString *emulatorLoadPath = selected32bitLayerBundle.infoDictionary[@"LC32BitEmulatorLoadPath"];
+        emulatorEntrySymbol = selected32bitLayerBundle.infoDictionary[@"LC32BitEmulatorEntrySymbol"];
+        if(emulatorLoadPath.length > 0 && emulatorEntrySymbol.length > 0) {
+            NSString *resolvedLoadPath = [selected32bitLayerBundle.bundlePath stringByAppendingPathComponent:emulatorLoadPath];
+            if(![fm fileExistsAtPath:resolvedLoadPath]) {
+                appError = [NSString stringWithFormat:@"32-bit runtime load image is missing: %@", resolvedLoadPath];
+                NSLog(@"[LCBootstrap] %@", appError);
+                *path = oldPath;
+                return appError;
+            }
+            appExecPath = strdup(resolvedLoadPath.fileSystemRepresentation);
+            overwriteExecPath(emulatorLauncherPath.fileSystemRepresentation);
+        } else {
+            // Compatibility fallback for older LiveExec32 bundles.
+            appExecPath = strdup(selected32bitLayerBundle.executablePath.fileSystemRepresentation);
+            overwriteExecPath(appExecPath);
+        }
     }
 #endif
     if(![guestAppInfo[@"dontInjectTweakLoader"] boolValue]) {
@@ -771,8 +822,11 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     // Preload executable to bypass RT_NOLOAD
     appMainImageIndex = _dyld_image_count();
     __block void *appHandle = 0;
+    int appDlopenFlags = (is32bit && emulatorEntrySymbol.length > 0)
+        ? (RTLD_NOW | RTLD_GLOBAL)
+        : (RTLD_LAZY | RTLD_GLOBAL | RTLD_FIRST);
     void (^dlopenBlock)(void) = ^{
-        appHandle = dlopen_nolock(appExecPath, RTLD_LAZY|RTLD_GLOBAL|RTLD_FIRST);
+        appHandle = dlopen_nolock(appExecPath, appDlopenFlags);
     };
     
     BOOL is27up = false;
@@ -832,9 +886,21 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     }
     NSLog(@"[LCBootstrap] loaded bundle");
 
-    // Find main()
-    appMain = getAppEntryPoint(appHandle);
-    if (!appMain) {
+    // Find the exported LiveExec32 entry point for ARM32 guests, or normal main().
+    if(is32bit && emulatorEntrySymbol.length > 0) {
+        dlerror();
+        emulatorMain = (int (*)(int, char **, char **))dlsym(appHandle, emulatorEntrySymbol.UTF8String);
+        const char *entryError = dlerror();
+        if(entryError != NULL) {
+            appError = [NSString stringWithFormat:@"Could not resolve 32-bit runtime entry point %@: %s", emulatorEntrySymbol, entryError];
+            NSLog(@"[LCBootstrap] %@", appError);
+            *path = oldPath;
+            return appError;
+        }
+    } else {
+        appMain = getAppEntryPoint(appHandle);
+    }
+    if((is32bit && emulatorEntrySymbol.length > 0) ? (emulatorMain == NULL) : (appMain == NULL)) {
         appError = @"Could not find the main entry point";
         NSLog(@"[LCBootstrap] %@", appError);
         *path = oldPath;
@@ -853,8 +919,17 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         ret = appMain(argc, argv);
 #if is32BitSupported
     } else {
-        char *argv32[] = {(char*)appExecPath, (char*)*path, NULL};
-        ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32);
+        const char *emulatorArgv0 = emulatorLauncherPath.length > 0
+            ? emulatorLauncherPath.fileSystemRepresentation
+            : appExecPath;
+        char *argv32[] = {(char*)emulatorArgv0, (char*)*path, NULL};
+        if(emulatorMain) {
+            ret = emulatorMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);
+        } else {
+            // Compatibility fallback for an older LiveExec32 bundle without the
+            // shared-framework entrypoint contract.
+            ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32);
+        }
     }
 #endif
     return [NSString stringWithFormat:@"App returned from its main function with code %d.", ret];

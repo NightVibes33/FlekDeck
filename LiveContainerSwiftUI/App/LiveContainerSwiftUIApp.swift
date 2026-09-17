@@ -9,6 +9,54 @@ import SwiftUI
 @main
 struct LiveContainerSwiftUIApp : SwiftUI.App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    private static let bundled32BitRuntimeName = "LiveExec32.app"
+    private static let bundled32BitRuntimeCommit = "3f0390e1b2725a2d3c9ab6f3976650a5a295ffba"
+    private static let bundled32BitRuntimeRevision = "89"
+
+    private static func seedBundled32BitRuntime(using fm: FileManager) throws {
+        let bundledURL = Bundle.main.bundleURL.appendingPathComponent(bundled32BitRuntimeName, isDirectory: true)
+        guard fm.fileExists(atPath: bundledURL.path) else { return }
+
+        let bundledInfoURL = bundledURL.appendingPathComponent("Info.plist")
+        guard let bundledInfo = NSDictionary(contentsOf: bundledInfoURL),
+              bundledInfo["LC32BitTranslationLayer"] as? Bool == true,
+              bundledInfo["LCBundledSourceCommit"] as? String == bundled32BitRuntimeCommit,
+              bundledInfo["LCBundledBuildRevision"] as? String == bundled32BitRuntimeRevision else {
+            NSLog("[FlekDeck/LC32] Embedded LiveExec32 metadata is invalid or stale")
+            return
+        }
+
+        try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
+        let installedURL = LCPath.bundlePath.appendingPathComponent(bundled32BitRuntimeName, isDirectory: true)
+        let installedInfo = NSDictionary(contentsOf: installedURL.appendingPathComponent("Info.plist"))
+        let installedCommit = installedInfo?["LCBundledSourceCommit"] as? String
+        let installedRevision = installedInfo?["LCBundledBuildRevision"] as? String
+        if installedCommit != bundled32BitRuntimeCommit || installedRevision != bundled32BitRuntimeRevision {
+            if fm.fileExists(atPath: installedURL.path) {
+                try fm.removeItem(at: installedURL)
+            }
+            try fm.copyItem(at: bundledURL, to: installedURL)
+
+            // Keep the runtime out of the normal app list. It is an implementation
+            // detail, not a user-launchable guest.
+            let runtimeAppInfo: [String: Any] = [
+                "isHidden": true,
+                "isLocked": true,
+                "dontSign": true
+            ]
+            let runtimeAppInfoData = try PropertyListSerialization.data(
+                fromPropertyList: runtimeAppInfo, format: .binary, options: 0
+            )
+            try runtimeAppInfoData.write(to: installedURL.appendingPathComponent("LCAppInfo.plist"))
+            NSLog("[FlekDeck/LC32] Installed bundled LiveExec32 revision %@", bundled32BitRuntimeRevision)
+        }
+
+        let defaults = LCUtils.appGroupUserDefault
+        if (defaults.string(forKey: "LCSelected32BitEmulator") ?? "").isEmpty {
+            defaults.set(bundled32BitRuntimeName, forKey: "LCSelected32BitEmulator")
+        }
+    }
     
     // appDataFolderNames and tweakFolderNames used to be @State here and were
     // threaded down as bindings. Upstream moved them onto DataManager's shared
@@ -35,10 +83,15 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         var tempTweakFolderNames : [String] = []
         
         var tempApps: [LCAppModel] = []
+#if is32BitSupported
+        var tempArm32EmuApps: [LCAppModel] = []
+#endif
         var tempHiddenApps: [LCAppModel] = []
         var tempURLSchemes: Set<String>? = DataManager.shared.model.multiLCStatus != 2 ? Set() : nil
 
         do {
+            try Self.seedBundled32BitRuntime(using: fm)
+
             // load apps
             try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
             var appDirs = try fm.contentsOfDirectory(atPath: LCPath.bundlePath.path)
@@ -61,6 +114,11 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
                     tempApps.append(LCAppModel(appInfo: newApp))
                     tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
                 }
+#if is32BitSupported
+                if newApp.is32bitEmulator {
+                    tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
+                }
+#endif
             }
             if LCPath.lcGroupDocPath != LCPath.docPath {
                 try fm.createDirectory(at: LCPath.lcGroupBundlePath, withIntermediateDirectories: true)
@@ -82,6 +140,11 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
                         tempApps.append(LCAppModel(appInfo: newApp))
                         tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
                     }
+#if is32BitSupported
+                    if newApp.is32bitEmulator {
+                        tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
+                    }
+#endif
                 }
             }
             // load document folders
@@ -111,6 +174,9 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         }
         
         DataManager.shared.model.apps = tempApps
+#if is32BitSupported
+        DataManager.shared.model.arm32EmuApps = tempArm32EmuApps
+#endif
         DataManager.shared.model.hiddenApps = tempHiddenApps
         DataManager.shared.model.appDataFolderNames = tempAppDataFolderNames
         DataManager.shared.model.tweakFolderNames = tempTweakFolderNames

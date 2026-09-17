@@ -170,6 +170,87 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     // types, and an opaque return type would bake them into this property's static
     // type. The runtime resolves that type before it ever runs the availability
     // check, so on iOS 17.x the lookup fails and the Swift runtime traps.
+
+    /// LiveContainer utility actions retained by FlekDeck's Springboard shell.
+    @ViewBuilder
+    private var homeUtilitiesMenuContent: some View {
+        Picker("Sort by", selection: $sharedAppSortManager.appSortType) {
+            ForEach(AppSortType.allCases, id: \.self) { sortType in
+                Label(sortType.displayName, systemImage: sortType.systemImage)
+                    .tag(sortType)
+            }
+        }
+        .onChange(of: sharedAppSortManager.appSortType) { newValue in
+            if newValue == .custom {
+                customSortViewPresent = true
+            } else {
+                rebuildOrderedHomeItems()
+            }
+        }
+
+        if sharedAppSortManager.appSortType == .custom {
+            Button {
+                customSortViewPresent = true
+            } label: {
+                Label("lc.appList.sort.customManage".loc, systemImage: "slider.horizontal.3")
+            }
+        }
+
+        Divider()
+
+        Button {
+            Task { await onOpenWebViewTapped() }
+        } label: {
+            Label("lc.appList.openLink".loc, systemImage: "link")
+        }
+
+        Button {
+            helpPresent = true
+        } label: {
+            Label("Help", systemImage: "questionmark.circle")
+        }
+
+        if UserDefaults.sideStoreExist() {
+            Button {
+                LCUtils.openSideStore(delegate: self)
+            } label: {
+                Label("SideStore", systemImage: "shippingbox")
+            }
+        }
+    }
+
+    private var homeUtilitiesButton: AnyView {
+        if #available(iOS 26.0, *) {
+            return AnyView(
+                Menu {
+                    homeUtilitiesMenuContent
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: FlekTheme.bottomBarGlyphSize, weight: .regular))
+                        .foregroundStyle(Color.primary.opacity(0.6))
+                        .frame(width: FlekTheme.bottomBarControlSize, height: FlekTheme.bottomBarControlSize)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(in: .circle)
+                .installerBarShadow()
+            )
+        }
+
+        return AnyView(
+            Menu {
+                homeUtilitiesMenuContent
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: FlekTheme.bottomBarGlyphSize, weight: .regular))
+                    .foregroundStyle(Color.primary.opacity(0.6))
+                    .frame(width: FlekTheme.bottomBarControlSize, height: FlekTheme.bottomBarControlSize)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .installerBarShadow()
+        )
+    }
+
     private var homeBottomBar: AnyView {
         if #available(iOS 26.0, *) {
             return AnyView(
@@ -180,6 +261,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                                 .transition(.scale(scale: 0.6, anchor: .trailing).combined(with: .opacity))
                                 .installerBarShadow()
                         }
+                        homeUtilitiesButton
                         Button {
                             showSearch = true
                         } label: {
@@ -203,6 +285,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                         .transition(.scale(scale: 0.6, anchor: .trailing).combined(with: .opacity))
                         .installerBarShadow()
                 }
+                homeUtilitiesButton
                 FlekGlassCircleButton(systemImage: "magnifyingglass") {
                     showSearch = true
                 }
@@ -1349,6 +1432,38 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             launchGroup.preferredElementSize = .medium
         }
 
+        var dataActions: [UIMenuElement] = []
+        if app.uiContainers.count > 1 {
+            let containerActions = app.uiContainers.map { container in
+                UIAction(
+                    title: container.name,
+                    image: UIImage(systemName: "internaldrive"),
+                    state: container.folderName == app.uiSelectedContainer?.folderName ? .on : .off
+                ) { _ in
+                    app.uiSelectedContainer = container
+                    LCSpringboardPageCell.refreshActiveContextMenu()
+                }
+            }
+            dataActions.append(
+                UIMenu(
+                    title: "lc.common.container".loc,
+                    image: UIImage(systemName: "internaldrive"),
+                    options: [.singleSelection],
+                    children: containerActions
+                )
+            )
+        }
+        if app.uiSelectedContainer != nil {
+            dataActions.append(
+                UIAction(
+                    title: "lc.appBanner.openDataFolder".loc,
+                    image: UIImage(systemName: "folder")
+                ) { [self] _ in
+                    homeOpenDataFolder(app)
+                }
+            )
+        }
+
         let copyUrl = UIAction(
             title: "lc.appBanner.copyLaunchUrl".loc,
             image: UIImage(systemName: "link")
@@ -1410,7 +1525,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             Task { await requestUninstall(app) }
         }
 
-        let children: [UIMenuElement] = [launchGroup, addToHomeScreen, lockToggle, settings, moveCards, uninstall]
+        let children: [UIMenuElement] = [launchGroup] + dataActions + [addToHomeScreen, lockToggle, settings, moveCards, uninstall]
 
         return UIMenu(title: "", children: children)
     }
@@ -1481,6 +1596,33 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         // Fixed grid symbols; the menu stays open on tap (launchModeVersion +
         // menuActionDismissBehavior) so multiple picks behave like the grid.
         launchModeControls(app)
+
+        if app.uiContainers.count > 1 {
+            Menu {
+                ForEach(app.uiContainers, id: \.folderName) { container in
+                    Button {
+                        app.uiSelectedContainer = container
+                    } label: {
+                        Label(
+                            container.name,
+                            systemImage: app.uiSelectedContainer?.folderName == container.folderName
+                                ? "checkmark.circle.fill"
+                                : "circle"
+                        )
+                    }
+                }
+            } label: {
+                Label("lc.common.container".loc, systemImage: "internaldrive")
+            }
+        }
+
+        if app.uiSelectedContainer != nil {
+            Button {
+                homeOpenDataFolder(app)
+            } label: {
+                Label("lc.appBanner.openDataFolder".loc, systemImage: "folder")
+            }
+        }
 
         Menu {
             Button {
@@ -1566,6 +1708,27 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         showSearch = false
         openNavigationView(view: AnyView(LCAppSettingsView(model: app)))
+    }
+
+
+    func homeOpenDataFolder(_ app: LCAppModel) {
+        guard let container = app.uiSelectedContainer else {
+            errorInfo = "No data container is selected."
+            errorShow = true
+            return
+        }
+        guard let url = container.filesAppURL else {
+            errorInfo = "Unable to create a Files URL for this data container."
+            errorShow = true
+            return
+        }
+        UIApplication.shared.open(url, options: [:]) { success in
+            guard !success else { return }
+            DispatchQueue.main.async {
+                errorInfo = "Files could not open this data container."
+                errorShow = true
+            }
+        }
     }
 
     func homeCopyLaunchUrl(_ app: LCAppModel) {
@@ -1938,6 +2101,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             finalNewApp.lastLaunched = appToReplace.appInfo.lastLaunched
             finalNewApp.jitLaunchScriptJs = appToReplace.appInfo.jitLaunchScriptJs
             finalNewApp.multitaskSpecified = appToReplace.appInfo.multitaskSpecified
+            finalNewApp.classicMode = appToReplace.appInfo.classicMode
             finalNewApp.autoSaveDisabled = false
             finalNewApp.save()
         } else {
@@ -2291,7 +2455,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         let enableJITTask = Task {
             
-            let _ = await LCUtils.askForJIT(withScript: script, appName: appName) { newMsg in
+            let _ = await LCUtils.askForJIT(withScript: script, appName: appName, classicMode: classicMode) { newMsg in
                 Task { await MainActor.run {
                     self.jitLog += "\(newMsg)\n"
                 }}
@@ -2305,7 +2469,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             enableJITTask.cancel()
             return
         }
-        LCSharedUtils.launchToGuestApp()
+        LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
 
     }
     
@@ -2438,6 +2602,24 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 }
                 if let bundleId, bundleId != "ui"{
                     Task { await launchAppWithBundleId(bundleId: bundleId, container: containerName, urlStr: urlStr, forceJIT: forceJIT) }
+                }
+            }
+        } else if url.host == "source" {
+            if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+               let sourceURL = components.queryItems?.first(where: { $0.name == "url" })?.value,
+               !sourceURL.isEmpty {
+                Task {
+                    do {
+                        try await FlekInstallerView.addRepositoryFromDeepLink(sourceURL)
+                        await MainActor.run {
+                            openInstaller(atRepo: sourceURL)
+                        }
+                    } catch {
+                        await MainActor.run {
+                            errorInfo = error.localizedDescription
+                            errorShow = true
+                        }
+                    }
                 }
             }
         } else if url.host == "install" {

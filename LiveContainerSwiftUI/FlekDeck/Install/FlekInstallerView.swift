@@ -1030,6 +1030,46 @@ struct FlekInstallerView: View {
         isFlekstore(repo) ? .flekstore : .custom(url: repo.sourceURL)
     }
 
+
+    @MainActor
+    static func addRepositoryFromDeepLink(_ rawValue: String) async throws {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), !trimmed.isEmpty else {
+            throw NSError(domain: "FlekDeck.Source", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "lc.appList.urlInvalidError".loc])
+        }
+
+        var repos = loadRepos()
+        if repos.contains(where: { $0.sourceURL == trimmed }) {
+            sessionSelectedRepoURL = trimmed
+            return
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw NSError(domain: "FlekDeck.Source", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "FlekDeck.Source", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "lc.flek.invalidSource".loc])
+        }
+
+        let name = (json["name"] as? String) ?? url.host ?? trimmed
+        var iconURL = (json["iconURL"] as? String) ?? ""
+        if iconURL.isEmpty, let meta = json["META"] as? [String: Any] {
+            iconURL = (meta["repoIcon"] as? String) ?? ""
+        }
+
+        repos.append(AppRepository(name: name, iconUrl: iconURL, sourceURL: trimmed, isSelected: false))
+        guard let encoded = try? JSONEncoder().encode(repos) else {
+            throw NSError(domain: "FlekDeck.Source", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Unable to save repository."])
+        }
+        UserDefaults.standard.set(encoded, forKey: "savedRepositories")
+        sessionSelectedRepoURL = trimmed
+    }
+
     static func loadRepos() -> [AppRepository] {
         guard let data = UserDefaults.standard.data(forKey: "savedRepositories"),
               let decoded = try? JSONDecoder().decode([AppRepository].self, from: data) else {
