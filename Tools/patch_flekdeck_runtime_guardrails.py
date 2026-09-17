@@ -7,6 +7,7 @@ runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_macho_contract.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_runtime_selection.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_classic_launch_isolation.py", run_name="__main__")
 
 app_info = Path("LiveContainerSwiftUI/Models/LCAppInfo.m")
 text = app_info.read_text()
@@ -119,6 +120,10 @@ if "self.is32bit && LCUtils.isTXMScriptRequired" not in final:
 app_entry = Path("LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift").read_text()
 if "Repaired stale default runtime" not in app_entry or "Cleared stale per-app runtime" not in app_entry:
     raise SystemExit("ARM32 runtime-selection normalization missing")
+
+app_model = Path("LiveContainerSwiftUI/Models/LCAppModel.swift").read_text()
+if "let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode" not in app_model:
+    raise SystemExit("Compatibility Mode is not isolated from Parallel launch routing")
 
 shared = Path("LiveContainer/LCSharedUtils.m").read_text()
 classic_region = shared[shared.find("+ (BOOL)launchToGuestAppWithClassicMode"):shared.find("+ (BOOL)launchToGuestAppWithURL")]
