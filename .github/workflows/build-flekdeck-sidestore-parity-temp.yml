@@ -40,15 +40,15 @@ jobs:
         with:
           xcode-version: '26.6'
 
-      - name: Apply canonical temp guardrails and SideStore identity
+      - name: Apply canonical temp guardrails and preserve main SideStore identity
         run: |
           set -euxo pipefail
           python3 Tools/normalize_flekdeck_relaunch_guard.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           python3 Tools/patch_flekdeck_sidestore_identity.py
-          grep -q 'com.fs.flekdeck' SideStoreSupport/SideStoreHooks.m
+          test "$(grep -Fc 'return @\"com.kdt.livecontainer\";' SideStoreSupport/SideStoreHooks.m)" -eq 2
           grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
-          ! grep -q 'return @"com.kdt.livecontainer";' SideStoreSupport/SideStoreHooks.m
+          ! grep -q 'NSUserDefaults.lcMainBundle.bundleIdentifier' SideStoreSupport/SideStoreHooks.m
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
@@ -136,7 +136,11 @@ jobs:
           test -n "$APP"
           EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$APP/Info.plist")"
           BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")"
-          test -n "$EXECUTABLE"
+          DISPLAY_NAME="$(plutil -extract CFBundleDisplayName raw "$APP/Info.plist")"
+          BUNDLE_NAME="$(plutil -extract CFBundleName raw "$APP/Info.plist")"
+          test "$EXECUTABLE" = "FlekDeck"
+          test "$DISPLAY_NAME" = "FlekDeck"
+          test "$BUNDLE_NAME" = "FlekDeck"
           test "$BUNDLE_ID" = "com.fs.flekdeck"
 
           /usr/libexec/PlistBuddy -c 'Delete :ALTAppGroups' "$APP/Info.plist" >/dev/null 2>&1 || true
@@ -170,6 +174,8 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$PWD/build/FlekDeck-host-entitlements.plist")" = "AAAAA11111.com.fs.flekdeck"
           test "$(/usr/libexec/PlistBuddy -c 'Print :ALTAppGroups:0' "$APP/Info.plist")" = "group.com.SideStore.SideStore"
           test "$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")" = "com.fs.flekdeck"
+          test "$(plutil -extract CFBundleDisplayName raw "$APP/Info.plist")" = "FlekDeck"
+          test "$(plutil -extract CFBundleName raw "$APP/Info.plist")" = "FlekDeck"
 
           while IFS= read -r PLIST; do
             ID="$(plutil -extract CFBundleIdentifier raw "$PLIST")"
