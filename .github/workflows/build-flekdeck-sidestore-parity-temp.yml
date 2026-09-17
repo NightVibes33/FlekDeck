@@ -1,4 +1,4 @@
-name: FlekDeck Temp SideStore-Parity IPA
+name: FlekDeck Temp 32-bit IPA
 
 on:
   workflow_call:
@@ -7,13 +7,12 @@ on:
     branches: [temp/32bit-liveexec-data-folder]
     paths:
       - '.github/workflows/build-flekdeck-sidestore-parity-temp.yml'
-      - 'Tools/patch_flekdeck_runtime_guardrails.py'
-      - 'Tools/normalize_flekdeck_relaunch_guard.py'
-      - 'Tools/patch_flekdeck_sidestore_identity.py'
+      - 'LiveContainer.xcodeproj/**'
       - 'LiveContainer/**'
       - 'LiveContainerSwiftUI/**'
-      - 'SideStoreSupport/**'
+      - 'LiveProcess/**'
       - 'MultitaskSupport/**'
+      - 'SideStoreSupport/**'
       - 'TweakLoader/**'
       - 'Resources/**'
       - 'entitlements.xml'
@@ -40,50 +39,41 @@ jobs:
         with:
           xcode-version: '26.6'
 
-      - name: Apply canonical temp guardrails and preserve main SideStore identity
-        run: |
-          set -euxo pipefail
-          python3 Tools/normalize_flekdeck_relaunch_guard.py
-          python3 Tools/patch_flekdeck_runtime_guardrails.py
-          python3 Tools/patch_flekdeck_sidestore_identity.py
-          test "$(grep -Fc 'return @\"com.kdt.livecontainer\";' SideStoreSupport/SideStoreHooks.m)" -eq 2
-          grep -q 'flekdeck-side-source.json' SideStoreSupport/SideStoreHooks.m
-          ! grep -q 'NSUserDefaults.lcMainBundle.bundleIdentifier' SideStoreSupport/SideStoreHooks.m
-          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
-          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
-          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
-
-      - name: Restore main App Switcher build boundary
+      - name: Validate checked-in main and LiveExec32 boundaries
         run: |
           set -euxo pipefail
           git fetch --no-tags origin main
-          rm -rf /tmp/flek-main-switcher
-          git worktree add --detach /tmp/flek-main-switcher origin/main
-          (cd /tmp/flek-main-switcher && python3 Tools/patch_direct_multitask_host_bridge.py)
-          (cd /tmp/flek-main-switcher && python3 Tools/patch_parallel_guest_viewport.py)
+
+          # Parallel/LiveProcess host implementation must be the exact proven main source.
           protected=(
             MultitaskSupport/MultitaskDockView.swift
             MultitaskSupport/DecoratedAppSceneViewController.m
             MultitaskSupport/MultitaskAppWindow.swift
+            LiveContainerSwiftUI/Utilities/LCUtils.m
           )
           for p in "${protected[@]}"; do
-            cp "/tmp/flek-main-switcher/$p" "$p"
-          done
-          python3 Tools/patch_parallel_guest_viewport.py
-          for p in "${protected[@]}"; do
-            test "$(git hash-object "$p")" = "$(git -C /tmp/flek-main-switcher hash-object "$p")"
+            test "$(git hash-object "$p")" = "$(git rev-parse origin/main:"$p")"
           done
 
-      - name: Reapply non-switcher compatibility layers
-        run: |
-          set -euxo pipefail
-          for script in \
-            Tools/patch_stikdebug_pid_verification.py \
-            Tools/patch_guest_native_pip_bridge.py \
-            Tools/patch_youtube_native_pip_render.py \
-            Tools/patch_pip_state_separation.py; do
-            [ ! -f "$script" ] || python3 "$script"
-          done
+          # ARM32 is the only intentional execution delta from main.
+          grep -Fq 'static int (*appMain)(int, char**);' LiveContainer/LCBootstrap.m
+          grep -Fq 'int (*emulatorMain)(int, char **, char **) = NULL;' LiveContainer/LCBootstrap.m
+          grep -Fq 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
+          grep -Fq 'ret = emulatorMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);' LiveContainer/LCBootstrap.m
+          grep -Fq 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
+          grep -Fq 'LC32BitEmulatorLoadPath' LiveContainer/LCBootstrap.m
+          grep -Fq 'LC32BitEmulatorEntrySymbol' LiveContainer/LCBootstrap.m
+          grep -Fq 'self.isJITNeeded = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
+          grep -Fq 'self.classicMode = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
+          grep -Fq 'self.spoofSDKVersion = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
+          grep -Fq 'appInfo.is32bit ? false' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -Fq 'is32BitSupported=1' LiveContainer.xcodeproj/project.pbxproj
+
+          # Build directly from checked-in source. Nothing may mutate it here.
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/LCTabView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          git diff --exit-code
 
       - name: Build unsigned Release archive
         run: |
@@ -93,7 +83,7 @@ jobs:
             -project LiveContainer.xcodeproj \
             -scheme LiveContainer \
             -configuration Release \
-            -archivePath "$PWD/build/FlekDeck-SideStore-temp.xcarchive" \
+            -archivePath "$PWD/build/FlekDeck-32bit-temp.xcarchive" \
             -destination 'generic/platform=iOS' \
             CODE_SIGN_IDENTITY='' \
             CODE_SIGNING_REQUIRED=NO \
@@ -115,11 +105,18 @@ jobs:
           mkdir -p build/liveexec-source
           unzip -q "$ZIP" -d build/liveexec-source
           EMU="$(find build/liveexec-source -maxdepth 2 -type d -name LiveExec32.app -print -quit)"
-          APP="$(find build/FlekDeck-SideStore-temp.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
+          APP="$(find build/FlekDeck-32bit-temp.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$EMU"; test -n "$APP"
           test -f "$EMU/$LIVEEXEC_LOAD_PATH"
           test -d "$EMU/RootFS"
+          test -f "$EMU/RootFS/usr/lib/libstdc++.6.dylib"
+          test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
+          test -f "$EMU/RootFS/usr/lib/libcharset.1.dylib"
           test -s Resources/universal.js
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = true
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = 89
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$EMU/Info.plist")" = "$LIVEEXEC_LOAD_PATH"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorEntrySymbol' "$EMU/Info.plist")" = LC32RunGuest
           nm -gU "$EMU/$LIVEEXEC_LOAD_PATH" > "$RUNNER_TEMP/liveexec32.symbols"
           grep -q '_LC32RunGuest' "$RUNNER_TEMP/liveexec32.symbols"
           rm -rf "$APP/LiveExec32.app"
@@ -129,10 +126,10 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Apply exact main SideStore packaging contract
+      - name: Apply FlekDeck packaging contract
         run: |
           set -euxo pipefail
-          APP="$(find "$PWD/build/FlekDeck-SideStore-temp.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          APP="$(find "$PWD/build/FlekDeck-32bit-temp.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$APP"
           EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$APP/Info.plist")"
           BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")"
@@ -147,10 +144,10 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups array' "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Add :ALTAppGroups:0 string group.com.SideStore.SideStore' "$APP/Info.plist"
 
-          cp entitlements.xml build/FlekDeck-SideStore.entitlements
+          cp entitlements.xml build/FlekDeck-32bit.entitlements
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('build/FlekDeck-SideStore.entitlements')
+          p = Path('build/FlekDeck-32bit.entitlements')
           s = p.read_text()
           replacements = {
               '$(DEVELOPMENT_TEAM)': 'AAAAA11111',
@@ -165,14 +162,13 @@ jobs:
               raise SystemExit('unresolved entitlement build variable remains')
           p.write_text(s)
           PY
-          plutil -lint build/FlekDeck-SideStore.entitlements
-          ldid -S"$PWD/build/FlekDeck-SideStore.entitlements" "$APP/$EXECUTABLE"
+          plutil -lint build/FlekDeck-32bit.entitlements
+          ldid -S"$PWD/build/FlekDeck-32bit.entitlements" "$APP/$EXECUTABLE"
           ldid -e "$APP/$EXECUTABLE" > "$PWD/build/FlekDeck-host-entitlements.plist"
           plutil -lint "$PWD/build/FlekDeck-host-entitlements.plist"
 
           test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$PWD/build/FlekDeck-host-entitlements.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$PWD/build/FlekDeck-host-entitlements.plist")" = "AAAAA11111.com.fs.flekdeck"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :ALTAppGroups:0' "$APP/Info.plist")" = "group.com.SideStore.SideStore"
           test "$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")" = "com.fs.flekdeck"
           test "$(plutil -extract CFBundleDisplayName raw "$APP/Info.plist")" = "FlekDeck"
           test "$(plutil -extract CFBundleName raw "$APP/Info.plist")" = "FlekDeck"
@@ -185,28 +181,28 @@ jobs:
             esac
           done < <(find "$APP/PlugIns" -name Info.plist -type f 2>/dev/null || true)
 
-      - name: Package SideStore-compatible IPA
+      - name: Package FlekDeck IPA
         run: |
           set -euxo pipefail
-          APP="$(find "$PWD/build/FlekDeck-SideStore-temp.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          APP="$(find "$PWD/build/FlekDeck-32bit-temp.xcarchive/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit)"
           find "$APP" -type d -name _CodeSignature -prune -exec rm -rf {} + || true
           find "$APP" -type f -name embedded.mobileprovision -delete || true
           EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$APP/Info.plist")"
-          ldid -S"$PWD/build/FlekDeck-SideStore.entitlements" "$APP/$EXECUTABLE"
+          ldid -S"$PWD/build/FlekDeck-32bit.entitlements" "$APP/$EXECUTABLE"
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
           cd build
-          zip -qry FlekDeck-temp-SideStore.ipa Payload
-          unzip -t FlekDeck-temp-SideStore.ipa >/dev/null
-          shasum -a 256 FlekDeck-temp-SideStore.ipa | tee FlekDeck-temp-SideStore.sha256
+          zip -qry FlekDeck-temp-32bit.ipa Payload
+          unzip -t FlekDeck-temp-32bit.ipa >/dev/null
+          shasum -a 256 FlekDeck-temp-32bit.ipa | tee FlekDeck-temp-32bit.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: FlekDeck-temp-SideStore
+          name: FlekDeck-temp-32bit
           path: |
-            build/FlekDeck-temp-SideStore.ipa
-            build/FlekDeck-temp-SideStore.sha256
+            build/FlekDeck-temp-32bit.ipa
+            build/FlekDeck-temp-32bit.sha256
             build/FlekDeck-host-entitlements.plist
           compression-level: 0
           if-no-files-found: error
