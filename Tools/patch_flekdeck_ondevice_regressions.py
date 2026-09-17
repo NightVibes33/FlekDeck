@@ -162,7 +162,106 @@ text = text.replace(
 )
 app_list.write_text(text)
 
-# 4) Keep the old error-ui generator from putting the synthetic fallback back
+# 4) Runtime seeding must never take normal app discovery down with it. Also do
+# not force-unwrap arbitrary .app directories: one malformed import should be
+# skipped and logged rather than crashing FlekDeck at startup.
+app_entry = Path("LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift")
+text = app_entry.read_text()
+old_seed = '''        do {
+            try Self.seedBundled32BitRuntime(using: fm)
+
+            // load apps
+            try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)'''
+new_seed = '''        do {
+            try Self.seedBundled32BitRuntime(using: fm)
+        } catch {
+            NSLog("[FlekDeck/LC32] Runtime seed failed without blocking app discovery: \\(error)")
+        }
+
+        do {
+            // load apps
+            try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)'''
+if old_seed in text:
+    text = text.replace(old_seed, new_seed, 1)
+elif new_seed not in text:
+    raise SystemExit(f"{app_entry}: runtime seed/app discovery anchor missing")
+
+old_private = '''                let newApp = LCAppInfo(bundlePath: "\\(LCPath.bundlePath.path)/\\(appDir)")!
+                newApp.relativeBundlePath = appDir
+                newApp.isShared = false
+                if newApp.isHidden {
+                    tempHiddenApps.append(LCAppModel(appInfo: newApp))
+                } else {
+                    tempApps.append(LCAppModel(appInfo: newApp))
+                    tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
+                }
+#if is32BitSupported
+                if newApp.is32bitEmulator {
+                    tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
+                }
+#endif'''
+new_private = '''                guard let newApp = LCAppInfo(bundlePath: "\\(LCPath.bundlePath.path)/\\(appDir)") else {
+                    NSLog("[FlekDeck] Skipping malformed app bundle: %@", appDir)
+                    continue
+                }
+                newApp.relativeBundlePath = appDir
+                newApp.isShared = false
+#if is32BitSupported
+                if newApp.is32bitEmulator {
+                    tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
+                    continue
+                }
+#endif
+                if newApp.isHidden {
+                    tempHiddenApps.append(LCAppModel(appInfo: newApp))
+                } else {
+                    tempApps.append(LCAppModel(appInfo: newApp))
+                    tempURLSchemes?.formUnion((newApp.urlSchemes() as? [String]) ?? [])
+                }'''
+if old_private in text:
+    text = text.replace(old_private, new_private, 1)
+elif new_private not in text:
+    raise SystemExit(f"{app_entry}: private app discovery anchor missing")
+
+old_shared = '''                    let newApp = LCAppInfo(bundlePath: "\\(LCPath.lcGroupBundlePath.path)/\\(appDir)")!
+                    newApp.relativeBundlePath = appDir
+                    newApp.isShared = true
+                    if newApp.isHidden {
+                        tempHiddenApps.append(LCAppModel(appInfo: newApp))
+                    } else {
+                        tempApps.append(LCAppModel(appInfo: newApp))
+                        tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
+                    }
+#if is32BitSupported
+                    if newApp.is32bitEmulator {
+                        tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
+                    }
+#endif'''
+new_shared = '''                    guard let newApp = LCAppInfo(bundlePath: "\\(LCPath.lcGroupBundlePath.path)/\\(appDir)") else {
+                        NSLog("[FlekDeck] Skipping malformed shared app bundle: %@", appDir)
+                        continue
+                    }
+                    newApp.relativeBundlePath = appDir
+                    newApp.isShared = true
+#if is32BitSupported
+                    if newApp.is32bitEmulator {
+                        tempArm32EmuApps.append(LCAppModel(appInfo: newApp))
+                        continue
+                    }
+#endif
+                    if newApp.isHidden {
+                        tempHiddenApps.append(LCAppModel(appInfo: newApp))
+                    } else {
+                        tempApps.append(LCAppModel(appInfo: newApp))
+                        tempURLSchemes?.formUnion((newApp.urlSchemes() as? [String]) ?? [])
+                    }'''
+if old_shared in text:
+    text = text.replace(old_shared, new_shared, 1)
+elif new_shared not in text:
+    raise SystemExit(f"{app_entry}: shared app discovery anchor missing")
+app_entry.write_text(text)
+
+# 5) Keep the old error-ui generator from putting the synthetic fallback back
 # the next time the full parity workflow runs.
 error_gen = Path("Tools/patch_flekdeck_error_ui_parity.py")
 if error_gen.exists():
@@ -186,5 +285,12 @@ if "get-task-allow=false; keeping this as a diagnostic" not in tab.read_text():
     raise SystemExit(f"{tab}: distribution-signing diagnostic guard missing")
 if "guard let groupID = LCSharedUtils.appGroupID()" not in utils.read_text():
     raise SystemExit(f"{utils}: nullable app-group identifier is still unsafe")
+entry_value = app_entry.read_text()
+if "Runtime seed failed without blocking app discovery" not in entry_value:
+    raise SystemExit(f"{app_entry}: runtime seeding is still coupled to app discovery")
+if 'LCAppInfo(bundlePath: "\\(LCPath.bundlePath.path)/\\(appDir)")!' in entry_value:
+    raise SystemExit(f"{app_entry}: private app discovery still force-unwraps LCAppInfo")
+if 'LCAppInfo(bundlePath: "\\(LCPath.lcGroupBundlePath.path)/\\(appDir)")!' in entry_value:
+    raise SystemExit(f"{app_entry}: shared app discovery still force-unwraps LCAppInfo")
 
-print("FlekDeck on-device regression fixes applied: real errors preserved, host diagnostics isolated")
+print("FlekDeck on-device regression fixes applied: real errors preserved, startup/runtime discovery hardened")
