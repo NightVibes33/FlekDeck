@@ -5,6 +5,7 @@ import runpy
 runpy.run_path("Tools/patch_flekdeck_runtime_stability.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_liveexec32_loader_guard.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_macho_contract.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_macho_sdk_reader.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_arm32_migration.py", run_name="__main__")
@@ -122,6 +123,15 @@ if "self.is32bit && LCUtils.isTXMScriptRequired" not in final:
     raise SystemExit(f"{app_info}: ARM32 TXM automatic JIT script selection missing")
 if 'needsArchitectureClassification = (info[@"is32bit"] == nil)' not in final:
     raise SystemExit(f"{app_info}: existing-app ARM32 migration missing")
+
+bootstrap = Path("LiveContainer/LCBootstrap.m").read_text()
+for marker in (
+    "guestExecutablePath.length == 0",
+    "hasLoadPath != hasEntrySymbol",
+    "runtime launcher executable is missing or not executable",
+):
+    if marker not in bootstrap:
+        raise SystemExit(f"LiveExec32 loader hardening missing: {marker}")
 
 app_entry = Path("LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift").read_text()
 if "Repaired stale default runtime" not in app_entry or "Cleared stale per-app runtime" not in app_entry:
