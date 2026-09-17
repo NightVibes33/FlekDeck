@@ -2,9 +2,8 @@
 from pathlib import Path
 import runpy
 
-# The old runtime_stability pass rebuilt a private SpringBoard probe. That probe
-# is intentionally gone. Keep only its still-relevant defaults/settings duties
-# in an idempotent pass, then use the dedicated safe runtime passes below.
+# Keep the established defaults/settings/runtime passes, then apply the final
+# post-scan hardening after every older parity generator has finished.
 runpy.run_path("Tools/patch_flekdeck_defaults_settings_stability.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_liveexec32_txm.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_ondevice_regressions.py", run_name="__main__")
@@ -13,8 +12,7 @@ runpy.run_path("Tools/patch_flekdeck_error_transport.py", run_name="__main__")
 
 # The migration-aware ARM32 classifier is a stronger final form than the older
 # Mach-O contract transform knows how to generate. If it is already present,
-# do not force the old exact-template rewrite over it. Legacy layouts still run
-# through the transformer normally.
+# preserve it; legacy layouts still run through the transformer normally.
 app_info_path = Path("LiveContainerSwiftUI/Models/LCAppInfo.m")
 macho_path = Path("LiveContainer/LCMachOUtils.m")
 app_info_before_macho = app_info_path.read_text()
@@ -85,11 +83,12 @@ canonical = '''- (bool)classicMode {
 text = text[:start] + canonical + text[end:]
 app_info.write_text(text)
 
-# These layers intentionally run LAST. They own the user-reported regressions
-# and prevent earlier parity generators from restoring unsafe behavior.
+# These layers own the earlier user-reported regressions and must run after old
+# parity transforms. The post-scan pass is deliberately the final owner.
 runpy.run_path("Tools/patch_flekdeck_user_regressions.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_relaunch_safety.py", run_name="__main__")
 runpy.run_path("Tools/patch_flekdeck_context_runtime.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_postscan_runtime.py", run_name="__main__")
 
 
 def add_trigger_path(text: str, anchor: str) -> str:
@@ -165,9 +164,10 @@ for marker in (
     "runtime launcher executable is missing or not executable",
     "Bookmark resolution failed without an NSError.",
     "Security-scoped access denied for data container:",
+    "if(!lcSharedDefaults)",
 ):
     if marker not in bootstrap:
-        raise SystemExit(f"LiveExec32/error transport hardening missing: {marker}")
+        raise SystemExit(f"LiveExec32/error/defaults hardening missing: {marker}")
 if "The security-scoped resource denied access." in bootstrap:
     raise SystemExit("generic external-container failure survived")
 if "stringByAppendingString:err.localizedDescription" in bootstrap:
@@ -180,12 +180,23 @@ if "Repaired stale default runtime" not in app_entry or "Cleared stale per-app r
 app_model = Path("LiveContainerSwiftUI/Models/LCAppModel.swift").read_text()
 if "let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode" not in app_model:
     raise SystemExit("Compatibility Mode is not isolated from Parallel launch routing")
+if "guard LCSharedUtils.launchToGuestApp(withClassicMode: classicMode) else" not in app_model:
+    raise SystemExit("Immediate single-process relaunch failure is still ignored")
 
 probe = Path("LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m").read_text()
-if "NSCAssert(" in probe or "assert(" in probe or "SBApplication" in probe or "SpringBoard.framework" in probe:
-    raise SystemExit("process-fatal/private Compatibility probe survived")
-if "return @12;" not in probe or "return @1;" not in probe:
-    raise SystemExit("generic crash-safe Compatibility probe is missing")
+if "NSCAssert(" in probe or "assert(" in probe:
+    raise SystemExit("process-fatal Compatibility probe survived")
+for marker in (
+    "_defaultClassicMode",
+    "instancesRespondToSelector:modernInit",
+    "LCInspectMachOArchitectures",
+    "LCReadMachOSDKVersion",
+    "probe failed safely",
+):
+    if marker not in probe:
+        raise SystemExit(f"real crash-safe Compatibility probe missing: {marker}")
+if "return @12;" in probe or "return @1;" in probe:
+    raise SystemExit("hard-coded Compatibility Mode heuristic survived")
 
 spring_drag = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardDragManager.swift").read_text()
 spring_vc = Path("LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift").read_text()
@@ -211,6 +222,8 @@ if classic_region.count("+ (BOOL)launchToGuestAppWithClassicMode") != 1:
     raise SystemExit("Duplicate Classic relaunch methods remain")
 if "if(success)" not in classic_region or "falling back" not in classic_region:
     raise SystemExit("Classic relaunch is not fail-safe")
+if "guestSupportsPad" in shared:
+    raise SystemExit("deep-link Compatibility path still invents a generic classic mode")
 normal_region = shared[shared.find("+ (BOOL)launchToGuestApp {"):shared.find("+ (BOOL)launchToGuestAppWithClassicMode")]
 if "if(!success)" not in normal_region or "keeping host alive" not in normal_region:
     raise SystemExit("Normal relaunch still terminates on a rejected openURL")
@@ -223,4 +236,4 @@ if 'TextField("", text: $liveExec32Path)' in settings:
 if "Default 32-bit Runtime" not in settings:
     raise SystemExit("validated ARM32 runtime picker is missing")
 
-print("FlekDeck runtime guardrails applied with user-reported regressions protected")
+print("FlekDeck runtime guardrails applied with full post-scan protections")
