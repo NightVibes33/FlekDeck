@@ -727,7 +727,7 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     } else {
         [_info removeObjectForKey:@"selected32BitEmulator"];
     }
-    [self save];
+    if (!_autoSaveDisabled) [self save];
 }
 - (bool)is32bitEmulator {
     return [_infoPlist[@"LC32BitTranslationLayer"] boolValue];

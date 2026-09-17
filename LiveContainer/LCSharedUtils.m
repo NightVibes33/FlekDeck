@@ -162,7 +162,7 @@ extern NSBundle *lcMainBundle;
     NSString *urlScheme = nil;
     NSString *tsPath = [NSString stringWithFormat:@"%@/../_TrollStore", NSBundle.mainBundle.bundlePath];
     UIApplication *application = [NSClassFromString(@"UIApplication") sharedApplication];
-    
+
     int tries = 1;
     if (!self.certificatePassword) {
         if (!access(tsPath.UTF8String, F_OK)) {
@@ -177,27 +177,38 @@ extern NSBundle *lcMainBundle;
         tries = 2;
         urlScheme = [NSString stringWithFormat:@"%@://livecontainer-relaunch", lcAppUrlScheme];
     }
-    NSURL *launchURL = [NSURL URLWithString:[NSString stringWithFormat:urlScheme, NSBundle.mainBundle.bundleIdentifier]];
 
-    if ([application canOpenURL:launchURL]) {
-        //[UIApplication.sharedApplication suspend];
-        for (int i = 0; i < tries; i++) {
-            [application openURL:launchURL options:@{} completionHandler:^(BOOL b) {
-                // syscall(SYS_ptrace, PT_DENY_ATTACH, 0, 0, 0);
-                __asm__ __volatile__ (
-                    "mov x0, #31\n"
-                    "mov x16, #26\n"
-                    "svc #0x80\n"
-                );
-                raise(SIGKILL);
-            }];
-        }
-        return YES;
-    } else {
-        // none of the ways work somehow (e.g. LC itself was hidden), we just exit and wait for user to manually launch it
-        exit(0);
+    NSURL *launchURL = [NSURL URLWithString:[NSString stringWithFormat:urlScheme, NSBundle.mainBundle.bundleIdentifier]];
+    if(!launchURL) {
+        NSLog(@"[FlekDeck/Relaunch] could not construct relaunch URL from scheme %@", urlScheme);
+        return NO;
     }
-    return NO;
+    if(![application canOpenURL:launchURL]) {
+        // This is a host relaunch failure, not a guest-app crash. Keep FlekDeck
+        // alive so the caller can recover instead of exiting and later showing
+        // a misleading guest crash report.
+        NSLog(@"[FlekDeck/Relaunch] iOS cannot open relaunch URL %@; keeping host alive", launchURL);
+        return NO;
+    }
+
+    for (int i = 0; i < tries; i++) {
+        [application openURL:launchURL options:@{} completionHandler:^(BOOL success) {
+            if(!success) {
+                NSLog(@"[FlekDeck/Relaunch] openURL rejected %@; keeping host alive", launchURL);
+                return;
+            }
+
+            // The replacement process was accepted. Only now terminate this
+            // incarnation so the newly launched host can take ownership.
+            __asm__ __volatile__ (
+                "mov x0, #31\n"
+                "mov x16, #26\n"
+                "svc #0x80\n"
+            );
+            raise(SIGKILL);
+        }];
+    }
+    return YES;
 }
 
 + (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode {
@@ -208,7 +219,10 @@ extern NSBundle *lcMainBundle;
     _LSOpenConfiguration *configuration = [[PrivClass(_LSOpenConfiguration) alloc] init];
     LSApplicationWorkspace *workspace = [PrivClass(LSApplicationWorkspace) defaultWorkspace];
     NSString *bundleIdentifier = lcMainBundle.bundleIdentifier ?: NSBundle.mainBundle.bundleIdentifier;
-    if(!configuration || !workspace || bundleIdentifier.length == 0) {
+    SEL openSelector = @selector(openApplicationWithBundleIdentifier:configuration:completionHandler:);
+    SEL optionsSelector = @selector(setFrontBoardOptions:);
+    if(!configuration || !workspace || bundleIdentifier.length == 0 ||
+       ![workspace respondsToSelector:openSelector] || ![configuration respondsToSelector:optionsSelector]) {
         NSLog(@"[FlekDeck/ClassicMode] private launch surface unavailable; falling back to normal launch");
         return [self launchToGuestApp];
     }
@@ -270,9 +284,17 @@ extern NSBundle *lcMainBundle;
         NSBundle *appBundle = [self findBundleWithBundleId:launchBundleId isSharedAppOut:&isSharedApp];
         NSDictionary *appInfo = [NSDictionary dictionaryWithContentsOfFile:
             [appBundle.bundlePath stringByAppendingPathComponent:@"LCAppInfo.plist"]];
-        NSUInteger classicMode = [appInfo[@"classicMode"] boolValue]
-            ? [appInfo[@"LCClassicModeCache"][@"defaultClassicMode"] unsignedIntegerValue]
-            : 0;
+        NSUInteger classicMode = 0;
+        if([appInfo[@"classicMode"] boolValue]) {
+            NSNumber *cachedClassicMode = appInfo[@"LCClassicModeCache"][@"defaultClassicMode"];
+            if([cachedClassicMode isKindOfClass:NSNumber.class] && cachedClassicMode.unsignedIntegerValue > 0) {
+                classicMode = cachedClassicMode.unsignedIntegerValue;
+            } else {
+                NSArray *families = appBundle.infoDictionary[@"UIDeviceFamily"];
+                BOOL guestSupportsPad = [families isKindOfClass:NSArray.class] && [families containsObject:@2];
+                classicMode = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad && guestSupportsPad) ? 12 : 1;
+            }
+        }
         return [self launchToGuestAppWithClassicMode:classicMode];
     }
     

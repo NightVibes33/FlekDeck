@@ -1442,6 +1442,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     state: container.folderName == app.uiSelectedContainer?.folderName ? .on : .off
                 ) { _ in
                     app.uiSelectedContainer = container
+                    app.uiDefaultDataFolder = container.folderName
+                    app.appInfo.dataUUID = container.folderName
                     LCSpringboardPageCell.refreshActiveContextMenu()
                 }
             }
@@ -1603,6 +1605,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 ForEach(app.uiContainers, id: \.folderName) { container in
                     Button {
                         app.uiSelectedContainer = container
+                        app.uiDefaultDataFolder = container.folderName
+                        app.appInfo.dataUUID = container.folderName
                     } label: {
                         Label(
                             container.name,
@@ -2102,6 +2106,12 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             finalNewApp.lastLaunched = appToReplace.appInfo.lastLaunched
             finalNewApp.jitLaunchScriptJs = appToReplace.appInfo.jitLaunchScriptJs
             finalNewApp.multitaskSpecified = appToReplace.appInfo.multitaskSpecified
+#if is32BitSupported
+            // Preserve an app-specific translation runtime across IPA updates.
+            // The new executable is reclassified during patch/sign; only the
+            // user's runtime override belongs to the old app configuration.
+            finalNewApp.selected32BitEmulator = appToReplace.appInfo.selected32BitEmulator
+#endif
             finalNewApp.classicMode = appToReplace.appInfo.classicMode
             finalNewApp.autoSaveDisabled = false
             finalNewApp.save()
