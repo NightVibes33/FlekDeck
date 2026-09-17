@@ -37,4 +37,4 @@ if value.find("appInfo.defaultClassicMode") < value.find("let multitask"):
 
 print("FlekDeck Compatibility Mode isolated to final single-process launches")
 
-# Audit trigger marker: regression-chain repair validated after main-switcher restore.
+# Audit trigger marker: structural gesture-chain repair, pass 2.
