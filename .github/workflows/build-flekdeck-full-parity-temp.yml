@@ -8,6 +8,7 @@ on:
       - '.github/workflows/build-flekdeck-full-parity-temp.yml'
       - 'Tools/patch_flekdeck_liveexec32.py'
       - 'Tools/patch_flekdeck_liveexec32_appinfo.py'
+      - 'Tools/patch_flekdeck_liveexec32_scope.py'
       - 'Tools/patch_flekdeck_liveexec32_txm.py'
       - 'Tools/patch_flekdeck_livecontainer_parity.py'
       - 'Tools/patch_flekdeck_jitless_parity.py'
@@ -91,6 +92,7 @@ jobs:
           scripts=(
             Tools/patch_flekdeck_liveexec32.py
             Tools/patch_flekdeck_liveexec32_appinfo.py
+            Tools/patch_flekdeck_liveexec32_scope.py
             Tools/patch_flekdeck_liveexec32_txm.py
             Tools/patch_flekdeck_livecontainer_parity.py
             Tools/patch_flekdeck_jitless_parity.py
@@ -102,6 +104,7 @@ jobs:
 
           grep -q 'LCGetDefaultClassicMode' LiveContainerSwiftUI/Utilities/LCUtils.h
           grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
+          grep -q 'bool is32bit = false;' LiveContainer/LCBootstrap.m
           grep -q 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
           grep -q 'uiSelected32BitEmulator' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -q 'Default 32-bit Runtime' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
@@ -213,6 +216,7 @@ jobs:
           scripts=(
             Tools/patch_flekdeck_liveexec32.py
             Tools/patch_flekdeck_liveexec32_appinfo.py
+            Tools/patch_flekdeck_liveexec32_scope.py
             Tools/patch_flekdeck_liveexec32_txm.py
             Tools/patch_flekdeck_livecontainer_parity.py
             Tools/patch_flekdeck_jitless_parity.py
