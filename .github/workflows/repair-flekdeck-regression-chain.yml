@@ -26,19 +26,35 @@ jobs:
 
           user = Path('Tools/patch_flekdeck_user_regressions.py')
           s = user.read_text()
-          anchor = 's = vc.read_text()\n'
-          fix = 's = vc.read_text()\ns = s.replace("        longPressGesture.delegate = dragManager\\n", "", 1)\n'
-          if fix not in s:
-              if anchor not in s:
+
+          # Current Springboard comments have changed several times. Remove the
+          # temporary pre-arbitration method structurally instead of matching a
+          # particular comment block. The canonical context-menu pass runs later
+          # and re-adds the final long-press-only delegate behavior.
+          drag_anchor = 's = drag.read_text()\n'
+          drag_fix = '''s = drag.read_text()\nmethod_start = s.find("    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {")\nif method_start >= 0:\n    method_end = s.find("    func handleLongPress(_ gesture: UILongPressGestureRecognizer) {", method_start)\n    if method_end < 0:\n        raise SystemExit(f"{drag}: gesture arbitration block has no handleLongPress boundary")\n    s = s[:method_start] + s[method_end:]\n'''
+          if drag_fix not in s:
+              if drag_anchor not in s:
+                  raise SystemExit('user regression drag anchor missing')
+              s = s.replace(drag_anchor, drag_fix, 1)
+
+          vc_anchor = 's = vc.read_text()\n'
+          vc_fix = 's = vc.read_text()\ns = s.replace("        longPressGesture.delegate = dragManager\\n", "", 1)\n'
+          if vc_fix not in s:
+              if vc_anchor not in s:
                   raise SystemExit('user regression VC anchor missing')
-              s = s.replace(anchor, fix, 1)
+              s = s.replace(vc_anchor, vc_fix, 1)
+
           user.write_text(s)
 
           text = user.read_text()
+          if 'method_start = s.find("    func gestureRecognizerShouldBegin' not in text:
+              raise SystemExit('structural gesture cleanup missing')
           if 's = s.replace("        longPressGesture.delegate = dragManager\\n", "", 1)' not in text:
               raise SystemExit('line-based long-press cleanup missing')
           PY
 
+          python3 -m py_compile Tools/patch_flekdeck_user_regressions.py
           git diff --check
           git diff -- Tools/patch_flekdeck_user_regressions.py
 
@@ -51,5 +67,5 @@ jobs:
           fi
           git config user.name 'NightVibes33 Actions'
           git config user.email 'actions@users.noreply.github.com'
-          git commit -m 'Fix regression guardrail ordering conflict'
+          git commit -m 'Make gesture reset structural before context arbitration'
           git push origin HEAD:temp/32bit-liveexec-data-folder
