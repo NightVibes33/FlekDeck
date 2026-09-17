@@ -10,6 +10,8 @@ on:
       - 'Tools/patch_flekdeck_ondevice_regressions.py'
       - 'Tools/patch_flekdeck_macho_contract.py'
       - 'Tools/patch_flekdeck_liveexec32_txm.py'
+      - 'Tools/patch_flekdeck_runtime_selection.py'
+      - 'Tools/patch_flekdeck_classic_launch_isolation.py'
 
 permissions:
   contents: write
@@ -39,18 +41,22 @@ jobs:
             Tools/patch_flekdeck_runtime_guardrails.py \
             Tools/patch_flekdeck_ondevice_regressions.py \
             Tools/patch_flekdeck_macho_contract.py \
-            Tools/patch_flekdeck_liveexec32_txm.py
+            Tools/patch_flekdeck_liveexec32_txm.py \
+            Tools/patch_flekdeck_runtime_selection.py \
+            Tools/patch_flekdeck_classic_launch_isolation.py
           python3 Tools/patch_flekdeck_runtime_guardrails.py
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/LCTabView.swift
           ! grep -q 'No diagnostic text was provided' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -q 'let presentedGuestCrash = checkLastLaunchError()' LiveContainerSwiftUI/Views/LCTabView.swift
           grep -q 'ShareLink(item: errorInfo)' LiveContainerSwiftUI/Views/LCTabView.swift
           ! sed -n '/- (void)setClassicMode:/,/- (NSUInteger)defaultClassicMode/p' LiveContainerSwiftUI/Models/LCAppInfo.m | grep -q 'defaultClassicMode]'
+          grep -q 'let classicMode: UInt = multitask ? 0 : appInfo.defaultClassicMode' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -q 'instancesRespondToSelector:modernInit' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
           ! grep -q 'NSCAssert(springBoard' LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
           grep -q 'LCInspectMachOArchitectures' LiveContainer/LCMachOUtils.h
           grep -q 'is32bit = !has64bitSlice && has32bitSlice' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'Runtime seed failed without blocking app discovery' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          grep -q 'Repaired stale default runtime' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
           grep -q 'isTXMScriptRequired' LiveContainerSwiftUI/Utilities/LCUtils.m
           grep -q 'pathForResource:@"universal"' LiveContainerSwiftUI/Utilities/LCUtils.m
           grep -q 'self.is32bit && LCUtils.isTXMScriptRequired' LiveContainerSwiftUI/Models/LCAppInfo.m
@@ -174,6 +180,8 @@ jobs:
             Tools/patch_flekdeck_ondevice_regressions.py \
             Tools/patch_flekdeck_macho_contract.py \
             Tools/patch_flekdeck_liveexec32_txm.py \
+            Tools/patch_flekdeck_runtime_selection.py \
+            Tools/patch_flekdeck_classic_launch_isolation.py \
             Tools/patch_flekdeck_error_ui_parity.py \
             LiveContainer/LCSharedUtils.m \
             LiveContainer/LCMachOUtils.h \
@@ -184,6 +192,7 @@ jobs:
             LiveContainerSwiftUI/Utilities/LCUtils.m \
             LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
             LiveContainerSwiftUI/Models/LCAppInfo.m \
+            LiveContainerSwiftUI/Models/LCAppModel.swift \
             LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift \
             LiveContainerSwiftUI/Views/LCTabView.swift \
             LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
