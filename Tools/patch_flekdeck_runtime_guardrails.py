@@ -23,13 +23,15 @@ canonical = '''- (bool)classicMode {
 }
 
 - (void)setClassicMode:(bool)classicMode {
+    // Persist the preference only. Do NOT run the private SpringBoard probe from
+    // a SwiftUI toggle setter: private-framework failures can terminate with a
+    // signal that Objective-C @try cannot catch. The guarded probe is deferred
+    // until an actual single-process launch requests the mode.
     _info[@"classicMode"] = @(classicMode);
-    if(classicMode) {
-        (void)[self defaultClassicMode];
-    } else {
+    if(!classicMode) {
         [_info removeObjectForKey:@"LCClassicModeCache"];
-        [self save];
     }
+    [self save];
 }
 
 - (NSUInteger)defaultClassicMode {
@@ -119,6 +121,8 @@ if final.count("- (NSUInteger)defaultClassicMode {") != 1:
     raise SystemExit(f"{app_info}: duplicate defaultClassicMode implementations remain")
 if final.count("- (bool)classicMode {") != 1:
     raise SystemExit(f"{app_info}: duplicate classicMode implementations remain")
+if "(void)[self defaultClassicMode]" in final[final.find("- (void)setClassicMode:"):final.find("- (NSUInteger)defaultClassicMode")]:
+    raise SystemExit(f"{app_info}: Compatibility Mode toggle still executes the private probe")
 
 shared = Path("LiveContainer/LCSharedUtils.m").read_text()
 classic_region = shared[shared.find("+ (BOOL)launchToGuestAppWithClassicMode"):shared.find("+ (BOOL)launchToGuestAppWithURL")]
