@@ -1,0 +1,120 @@
+name: Rebuild 32-bit Temp From Proven Controls
+
+on:
+  push:
+    branches: [temp/32bit-liveexec-data-folder]
+    paths:
+      - '.github/workflows/rebuild-32bit-temp-from-controls.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: temp/32bit-liveexec-data-folder
+
+      - name: Restore proven FlekDeck host and Parallel implementation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git fetch --no-tags origin main
+
+          # Main is the control for every host/Parallel/UI path. ARM32 support is
+          # re-applied below as a deliberately small delta.
+          git checkout origin/main -- \
+            MultitaskSupport \
+            LiveProcess \
+            LiveContainer/LCBootstrap.m \
+            LiveContainer/LCMachOUtils.h \
+            LiveContainer/LCMachOUtils.m \
+            LiveContainer/LCSharedUtils.h \
+            LiveContainer/LCSharedUtils.m \
+            LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift \
+            LiveContainerSwiftUI/Models/LCAppInfo.h \
+            LiveContainerSwiftUI/Models/LCAppInfo.m \
+            LiveContainerSwiftUI/Models/LCAppModel.swift \
+            LiveContainerSwiftUI/Utilities/LCUtils.h \
+            LiveContainerSwiftUI/Utilities/LCUtils.m \
+            LiveContainerSwiftUI/Utilities/LCUtilsExtensions.swift \
+            LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m \
+            LiveContainerSwiftUI/Utilities/Shared.swift \
+            LiveContainerSwiftUI/Views/AppList/AppSettings/LCAppSettingsView.swift \
+            LiveContainerSwiftUI/Views/AppList/LCAppBanner/LCAppBannerViewController.swift \
+            LiveContainerSwiftUI/Views/AppList/LCAppListView.swift \
+            LiveContainerSwiftUI/Views/LCTabView.swift \
+            LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift \
+            LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+
+          # Prove Parallel sources are byte-for-byte main before ARM32 work.
+          for p in \
+            MultitaskSupport/MultitaskDockView.swift \
+            MultitaskSupport/DecoratedAppSceneViewController.m \
+            MultitaskSupport/MultitaskAppWindow.swift \
+            LiveContainerSwiftUI/Utilities/LCUtils.m; do
+            test "$(git hash-object "$p")" = "$(git rev-parse origin/main:"$p")"
+          done
+
+      - name: Apply only proven LiveExec32 integration
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 Tools/patch_flekdeck_liveexec32.py
+          python3 Tools/patch_flekdeck_liveexec32_appinfo.py
+
+          # The known-working 32-bit LiveContainer contract requires all three:
+          # JIT, Classic Mode, and SDK spoofing for ARM32 guests.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('LiveContainerSwiftUI/Models/LCAppInfo.m')
+          s = p.read_text()
+          anchor = '''            self.isJITNeeded = YES;\n            self.spoofSDKVersion = YES;'''
+          fixed = '''            self.isJITNeeded = YES;\n            self.classicMode = YES;\n            self.spoofSDKVersion = YES;'''
+          if fixed not in s:
+              if anchor not in s:
+                  raise SystemExit('ARM32 JIT/SDK compatibility anchor missing')
+              s = s.replace(anchor, fixed, 1)
+          p.write_text(s)
+          PY
+
+          # Hard boundaries: native guests retain main ABI and Parallel stays out
+          # of the ARM32 single-process route.
+          grep -Fq 'static int (*appMain)(int, char**);' LiveContainer/LCBootstrap.m
+          grep -Fq 'int (*emulatorMain)(int, char **, char **) = NULL;' LiveContainer/LCBootstrap.m
+          grep -Fq 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
+          grep -Fq 'ret = emulatorMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);' LiveContainer/LCBootstrap.m
+          grep -Fq 'self.classicMode = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
+          grep -Fq 'appInfo.is32bit ? false' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -Fq 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
+          grep -Fq 'LC32BitEmulatorLoadPath' LiveContainer/LCBootstrap.m
+          grep -Fq 'LC32BitEmulatorEntrySymbol' LiveContainer/LCBootstrap.m
+
+          # The Xcode project must keep the compile-time ARM32 integration flag.
+          grep -Fq 'is32BitSupported=1' LiveContainer.xcodeproj/project.pbxproj
+          grep -Fq 'is32BitSupported' LiveContainer.xcodeproj/project.pbxproj
+
+          # Parallel implementation itself must remain exact main.
+          for p in \
+            MultitaskSupport/MultitaskDockView.swift \
+            MultitaskSupport/DecoratedAppSceneViewController.m \
+            MultitaskSupport/MultitaskAppWindow.swift \
+            LiveContainerSwiftUI/Utilities/LCUtils.m; do
+            test "$(git hash-object "$p")" = "$(git rev-parse origin/main:"$p")"
+          done
+
+      - name: Commit clean control-based rebuild
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name 'NightVibes33 Actions'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git status --short
+          git diff --cached --check
+          git commit -m 'Rebuild temp from main plus proven LiveExec32 contract'
+          git push origin HEAD:temp/32bit-liveexec-data-folder
