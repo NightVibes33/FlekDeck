@@ -61,4 +61,4 @@ if not (
 ):
     raise SystemExit(f"{path}: bookmark resolution diagnostic missing")
 
-print("FlekDeck external-container failures preserve real non-crashing diagnostics")
+print("FlekDeck external-container failures preserve real non-crashing diagnostics; final runtime audit requested")
