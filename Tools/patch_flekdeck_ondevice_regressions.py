@@ -80,10 +80,25 @@ new_last_error = '''    @discardableResult
         crashReportShow = true
         return true
     }'''
+current_real_error_markers = (
+    '@discardableResult\n    func checkLastLaunchError() -> Bool {',
+    'let signingWasInterrupted = defaults.bool(forKey: "SigningInProgress")',
+    'backend recorded an empty error; not showing a synthetic app error',
+    'errorInfo = raw',
+    'crashReportShow = true',
+    'return true',
+)
 if old_last_error in text:
     text = text.replace(old_last_error, new_last_error, 1)
-elif new_last_error not in text:
-    raise SystemExit(f"{tab}: checkLastLaunchError anchor missing")
+elif new_last_error in text:
+    pass
+elif all(marker in text for marker in current_real_error_markers):
+    # Newer canonical implementation is stricter than the older generated one:
+    # stale SigningInProgress never becomes a fake app crash, and empty backend
+    # errors are ignored rather than replaced with a generic message.
+    pass
+else:
+    raise SystemExit(f"{tab}: checkLastLaunchError implementation is unknown")
 
 old_startup = '''        sharedModel.selectedTab = .apps
         closeDuplicatedWindow()
