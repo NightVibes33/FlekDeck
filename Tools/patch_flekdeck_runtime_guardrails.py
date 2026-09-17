@@ -59,9 +59,10 @@ canonical = '''- (bool)classicMode {
 text = text[:start] + canonical + text[end:]
 app_info.write_text(text)
 
-# This layer is intentionally LAST. It owns the user-reported regressions and
-# prevents any earlier parity generator from restoring them.
+# These layers intentionally run LAST. They own the user-reported regressions
+# and prevent earlier parity generators from restoring unsafe behavior.
 runpy.run_path("Tools/patch_flekdeck_user_regressions.py", run_name="__main__")
+runpy.run_path("Tools/patch_flekdeck_relaunch_safety.py", run_name="__main__")
 
 
 def add_trigger_path(text: str, anchor: str) -> str:
@@ -173,5 +174,10 @@ if classic_region.count("+ (BOOL)launchToGuestAppWithClassicMode") != 1:
     raise SystemExit("Duplicate Classic relaunch methods remain")
 if "if(success)" not in classic_region or "falling back" not in classic_region:
     raise SystemExit("Classic relaunch is not fail-safe")
+normal_region = shared[shared.find("+ (BOOL)launchToGuestApp {"):shared.find("+ (BOOL)launchToGuestAppWithClassicMode")]
+if "if(!success)" not in normal_region or "keeping host alive" not in normal_region:
+    raise SystemExit("Normal relaunch still terminates on a rejected openURL")
+if "exit(0);" in normal_region:
+    raise SystemExit("Normal relaunch still exits when no relaunch URL can be opened")
 
 print("FlekDeck runtime guardrails applied with user-reported regressions protected")
