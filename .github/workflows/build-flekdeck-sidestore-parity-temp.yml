@@ -1,4 +1,5 @@
 name: FlekDeck Temp 32-bit IPA
+# fixed-head validation trigger: bfe9c2ca ARM32 Classic/JIT + main Parallel
 
 on:
   workflow_call:
