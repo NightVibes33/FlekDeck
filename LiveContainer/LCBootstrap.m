@@ -743,8 +743,9 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         }
     }
     
+bool is32bit = false;
 #if is32BitSupported
-    bool is32bit = [guestAppInfo[@"is32bit"] boolValue];
+    is32bit = [guestAppInfo[@"is32bit"] boolValue];
     if(is32bit) {
         if (!isJitEnabled) {
             return @"JIT is required to run 32-bit apps.";
@@ -904,7 +905,13 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         return appError;
     }
 
+#if is32BitSupported
+    if(!is32bit) {
+        LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);
+    }
+#else
     LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);
+#endif
 
     // Go!
     NSLog(@"[LCBootstrap] jumping to main %p", appMain);
