@@ -5,6 +5,8 @@ protocol LCAppModelDelegate {
     func changeAppVisibility(app : LCAppModel)
     func jitLaunch(appName: String) async
     func jitLaunch(withScript script: String, appName: String) async
+    func jitLaunch(appName: String, classicMode: UInt) async
+    func jitLaunch(withScript script: String, appName: String, classicMode: UInt) async
     func jitLaunch(withPID pid: Int, withScript script: String?, appName: String) async
     func showRunWhenMultitaskAlert() async -> Bool?
 }
@@ -222,8 +224,12 @@ class LCAppModel: ObservableObject, Hashable {
         let currentDataFolder = containerFolderName ?? uiSelectedContainer?.folderName
         
 #if is32BitSupported
+        // LiveExec32 requires the Compatibility/Classic relaunch contract.
+        // Native ARM64 guests keep FlekDeck main's exact Parallel decision.
+        let classicMode: UInt = appInfo.is32bit ? appInfo.defaultClassicMode : 0
         let multitask = appInfo.is32bit ? false : (multitask ?? shouldLaunchInMultitaskMode)
 #else
+        let classicMode: UInt = 0
         let multitask = multitask ?? shouldLaunchInMultitaskMode
 #endif
         
@@ -357,9 +363,9 @@ class LCAppModel: ObservableObject, Hashable {
             } else {
                 // Non-multitask JIT flow remains unchanged
                 if let scriptData = jitLaunchScriptJs, !scriptData.isEmpty {
-                    await delegate?.jitLaunch(withScript: scriptData, appName: self.appInfo.displayName())
+                    await delegate?.jitLaunch(withScript: scriptData, appName: self.appInfo.displayName(), classicMode: classicMode)
                 } else {
-                    await delegate?.jitLaunch(appName: self.appInfo.displayName())
+                    await delegate?.jitLaunch(appName: self.appInfo.displayName(), classicMode: classicMode)
                 }
             }
         } else if multitask, #available(iOS 16.0, *) {

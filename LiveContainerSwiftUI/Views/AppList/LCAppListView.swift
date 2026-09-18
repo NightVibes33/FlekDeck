@@ -2291,7 +2291,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         let enableJITTask = Task {
             
-            let _ = await LCUtils.askForJIT(withScript: script, appName: appName) { newMsg in
+            let _ = await LCUtils.askForJIT(withScript: script, appName: appName, classicMode: classicMode) { newMsg in
                 Task { await MainActor.run {
                     self.jitLog += "\(newMsg)\n"
                 }}
@@ -2305,7 +2305,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             enableJITTask.cancel()
             return
         }
-        LCSharedUtils.launchToGuestApp()
+        LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
 
     }
     

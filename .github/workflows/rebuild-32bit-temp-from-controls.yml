@@ -5,6 +5,7 @@ on:
     branches: [temp/32bit-liveexec-data-folder]
     paths:
       - '.github/workflows/rebuild-32bit-temp-from-controls.yml'
+      - 'Tools/patch_flekdeck_arm32_classic_jit.py'
   workflow_dispatch:
 
 permissions:
@@ -66,6 +67,7 @@ jobs:
           set -euxo pipefail
           python3 Tools/patch_flekdeck_liveexec32.py
           python3 Tools/patch_flekdeck_liveexec32_appinfo.py
+          python3 Tools/patch_flekdeck_arm32_classic_jit.py
 
           # The known-working 32-bit LiveContainer contract requires all three:
           # JIT, Classic Mode, and SDK spoofing for ARM32 guests.
@@ -152,5 +154,9 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add -A
           git status --short
+          if git diff --cached --quiet; then
+            echo 'Control rebuild already matches checked-in source; nothing to commit.'
+            exit 0
+          fi
           git commit -m 'Rebuild temp from main plus proven LiveExec32 contract'
           git push origin HEAD:temp/32bit-liveexec-data-folder

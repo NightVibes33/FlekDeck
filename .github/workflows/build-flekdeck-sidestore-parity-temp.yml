@@ -69,6 +69,9 @@ jobs:
           grep -Fq 'self.classicMode = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -Fq 'self.spoofSDKVersion = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -Fq 'appInfo.is32bit ? false' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -Fq 'appInfo.is32bit ? appInfo.defaultClassicMode : 0' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -Fq 'launchToGuestAppWithClassicMode' LiveContainer/LCSharedUtils.h
+          grep -Fq 'launchToGuestApp(withClassicMode: classicMode)' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -Fq 'is32BitSupported=1' LiveContainer.xcodeproj/project.pbxproj
 
           # Build directly from checked-in source. Nothing may mutate it here.
@@ -94,6 +97,8 @@ jobs:
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -300 || true
+            echo '--- raw xcodebuild tail ---'
+            tail -400 build/xcodebuild.log || true
             exit "$status"
           fi
 

@@ -200,6 +200,49 @@ extern NSBundle *lcMainBundle;
     return NO;
 }
 
+
++ (BOOL)launchToGuestAppWithClassicMode:(NSUInteger)classicMode {
+    // Native guests keep FlekDeck main's exact relaunch path.
+    if(classicMode == 0) {
+        return [self launchToGuestApp];
+    }
+
+    void (^completionHandler)(BOOL) = ^(BOOL success) {
+        __asm__ __volatile__ (
+            "mov x0, #31\n"
+            "mov x16, #26\n"
+            "svc #0x80"
+        );
+        raise(SIGKILL);
+    };
+
+    // Match the proven LiveExec32 path for TrollStore-hosted ARM32 guests.
+    if (!self.certificatePassword) {
+        NSString *tsPath = [NSString stringWithFormat:@"%@/../_TrollStore", NSBundle.mainBundle.bundlePath];
+        if (!access(tsPath.UTF8String, F_OK)) {
+            NSURL *launchURL = [NSURL URLWithString:[NSString stringWithFormat:
+                @"apple-magnifier://enable-jit?bundle-id=%@", NSBundle.mainBundle.bundleIdentifier]];
+            UIApplication *application = [NSClassFromString(@"UIApplication") sharedApplication];
+            [application openURL:launchURL options:@{} completionHandler:completionHandler];
+            return YES;
+        }
+    }
+
+    _LSOpenConfiguration *configuration = [[PrivClass(_LSOpenConfiguration) alloc] init];
+    configuration.frontBoardOptions = @{ @"__ActivateAsClassic": @(classicMode) };
+    LSApplicationWorkspace *workspace = [PrivClass(LSApplicationWorkspace) defaultWorkspace];
+
+    for (int i = 0; i < 2; i++) {
+        [workspace openApplicationWithBundleIdentifier:NSUserDefaults.lcMainBundle.bundleIdentifier
+                                         configuration:configuration
+                                     completionHandler:^(BOOL success, NSError *error) {
+            NSLog(@"[LC32] classic relaunch success=%d error=%@", success, error);
+            completionHandler(success);
+        }];
+    }
+    return YES;
+}
+
 + (BOOL)launchToGuestAppWithURL:(NSURL *)url {
     NSURLComponents* components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
     if(![components.host isEqualToString:@"livecontainer-launch"]) return NO;
