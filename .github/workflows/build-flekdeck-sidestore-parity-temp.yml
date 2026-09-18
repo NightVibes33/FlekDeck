@@ -81,10 +81,73 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           git diff --exit-code
 
+      - name: Apply exact main direct-build compatibility
+        run: |
+          set -euxo pipefail
+          git fetch --no-tags origin main
+          rm -rf /tmp/flek-main-build
+          git worktree add --detach /tmp/flek-main-build origin/main
+
+          patches=(
+            Tools/patch_direct_multitask_host_bridge.py
+            Tools/patch_stikdebug_pid_verification.py
+            Tools/patch_guest_native_pip_bridge.py
+            Tools/patch_youtube_native_pip_render.py
+            Tools/patch_pip_state_separation.py
+          )
+          for patch in "${patches[@]}"; do
+            python3 "$patch"
+            (cd /tmp/flek-main-build && python3 "$patch")
+          done
+
+          # Main-owned Parallel/LiveProcess support must compile exactly like the
+          # working main artifact after its build-time transforms.
+          protected=(
+            MultitaskSupport/MultitaskDockView.swift
+            MultitaskSupport/AppSceneViewController.m
+            MultitaskSupport/PiPManager.m
+            LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
+            LiveContainerSwiftUI/Utilities/LCUtils.m
+          )
+          for p in "${protected[@]}"; do
+            test "$(git hash-object "$p")" = "$(git -C /tmp/flek-main-build hash-object "$p")"
+          done
+
+          # Keep the exact main build-time invariants.
+          xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
+          grep -q '@objc(prepareHostWindowForGuestLaunch)' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCGuestNativePiPBridge' LiveContainer/LCBootstrap.m
+          grep -q 'sampleBufferDisplayLayer' LiveContainer/LCBootstrap.m
+          grep -q 'com.flekdeck.nativepip.%@.%d' LiveContainer/LCBootstrap.m
+          grep -q 'LCYouTubePiPRefreshSource' LiveContainer/LCBootstrap.m
+          grep -q 'newContentSource' LiveContainer/LCBootstrap.m
+          grep -q 'contentSourceNeedsRefresh' LiveContainer/LCBootstrap.m
+          grep -q 'YouTube source bound=' LiveContainer/LCBootstrap.m
+          grep -q 'startWindowPiPWithVC' MultitaskSupport/PiPManager.m
+          grep -q 'LCNativePiPDoesNotOwnWindowLifecycle' MultitaskSupport/PiPManager.m
+          grep -q 'LCNativePiPAutoWindowFallback' MultitaskSupport/PiPManager.m
+          grep -q 'self.usesMediaCrop = NO;' MultitaskSupport/PiPManager.m
+          grep -q 'preferredContentSize = self.sourceContentSize' MultitaskSupport/PiPManager.m
+          grep -q 'private func installSwipeZone' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'self?.showAppSwitcher()' MultitaskSupport/MultitaskDockView.swift
+          ! grep -q 'LCPersistentSwitcherSwipeInvariant' MultitaskSupport/MultitaskDockView.swift
+          ! grep -q 'FlekImmediateSwitcherSwipeBridge' MultitaskSupport/MultitaskDockView.swift
+          grep -q 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+
+          # And prove the main build-time transforms did not erase ARM32.
+          grep -Fq 'bool is32bit = false;' LiveContainer/LCBootstrap.m
+          grep -Fq 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
+          grep -Fq 'ret = emulatorMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);' LiveContainer/LCBootstrap.m
+          grep -Fq 'appInfo.is32bit ? appInfo.defaultClassicMode : 0' LiveContainerSwiftUI/Models/LCAppModel.swift
+          grep -Fq 'launchToGuestApp(withClassicMode: classicMode)' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+
       - name: Build unsigned Release archive
         run: |
           set -uo pipefail
           mkdir -p build
+          set +e
           xcodebuild clean archive \
             -project LiveContainer.xcodeproj \
             -scheme LiveContainer \
@@ -96,6 +159,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee build/xcodebuild.log | xcpretty
           status=${PIPESTATUS[0]}
+          set -e
           if [ "$status" -ne 0 ]; then
             grep -nE '(^| )error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/xcodebuild.log | tail -300 || true
             echo '--- raw xcodebuild tail ---'
