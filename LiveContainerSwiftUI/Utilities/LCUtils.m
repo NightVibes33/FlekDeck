@@ -225,8 +225,13 @@ typedef int32_t (*FlekIOObjectReleaseFn)(FlekIOObject object);
 
 + (BOOL)isTXMScriptRequired {
     if (@available(iOS 19.0, *)) {
+        // IOKit is private to iOS SDK consumers even though the runtime symbols
+        // exist. Resolve only the three functions we need instead of importing
+        // or linking the framework, so the normal FlekDeck target keeps building.
         void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
-        if (!handle) return NO;
+        if (!handle) {
+            return NO;
+        }
 
         FlekIORegistryEntryFromPathFn entryFromPath =
             (FlekIORegistryEntryFromPathFn)dlsym(handle, "IORegistryEntryFromPath");
