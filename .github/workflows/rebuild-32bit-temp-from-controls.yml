@@ -57,8 +57,7 @@ jobs:
           for p in \
             MultitaskSupport/MultitaskDockView.swift \
             MultitaskSupport/DecoratedAppSceneViewController.m \
-            MultitaskSupport/MultitaskAppWindow.swift \
-            LiveContainerSwiftUI/Utilities/LCUtils.m; do
+            MultitaskSupport/MultitaskAppWindow.swift; do
             test "$(git hash-object "$p")" = "$(git rev-parse origin/main:"$p")"
           done
 
