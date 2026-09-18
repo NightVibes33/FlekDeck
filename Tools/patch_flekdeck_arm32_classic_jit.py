@@ -9,6 +9,14 @@ def replace_once(path: Path, old: str, new: str, label: str):
         raise SystemExit(f"{path}: {label} anchor missing or duplicated")
     path.write_text(text.replace(old, new, 1))
 
+app_info_h = Path("LiveContainerSwiftUI/Models/LCAppInfo.h")
+replace_once(
+    app_info_h,
+    "@property bool isJITNeeded;\n@property bool isLocked;",
+    "@property bool isJITNeeded;\n@property bool classicMode;\n@property (nonatomic, readonly) NSUInteger defaultClassicMode;\n@property bool isLocked;",
+    "Classic Mode Swift header contract",
+)
+
 shared_h = Path("LiveContainer/LCSharedUtils.h")
 replace_once(
     shared_h,
@@ -157,6 +165,7 @@ if "launchToGuestApp(withClassicMode: classicMode)" not in block:
 app_list.write_text(text[:start] + block + text[end:])
 
 checks = {
+    app_info_h: ["classicMode", "defaultClassicMode"],
     shared_h: ["launchToGuestAppWithClassicMode"],
     shared_m: ['@"__ActivateAsClassic"', "if(classicMode == 0)"],
     utils: ["classicMode: UInt = 0", "launchToGuestApp(withClassicMode: classicMode)"],

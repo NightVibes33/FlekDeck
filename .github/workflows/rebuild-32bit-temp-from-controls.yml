@@ -128,6 +128,7 @@ jobs:
           grep -Fq 'if(!is32bit) {' LiveContainer/LCBootstrap.m
           grep -Fq 'LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);' LiveContainer/LCBootstrap.m
           grep -Fq 'self.classicMode = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
+          grep -Fq 'defaultClassicMode' LiveContainerSwiftUI/Models/LCAppInfo.h
           grep -Fq 'appInfo.is32bit ? false' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -Fq 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
           grep -Fq 'LC32BitEmulatorLoadPath' LiveContainer/LCBootstrap.m

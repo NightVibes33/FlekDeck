@@ -23,6 +23,8 @@ typedef NS_ENUM(NSInteger, MultitaskSpecified){
 @property NSString* relativeBundlePath;
 @property bool isShared;
 @property bool isJITNeeded;
+@property bool classicMode;
+@property (nonatomic, readonly) NSUInteger defaultClassicMode;
 @property bool isLocked;
 @property bool isHidden;
 @property bool doSymlinkInbox;

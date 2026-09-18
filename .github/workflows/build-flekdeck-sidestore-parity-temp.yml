@@ -68,6 +68,7 @@ jobs:
           grep -Fq 'LC32BitEmulatorEntrySymbol' LiveContainer/LCBootstrap.m
           grep -Fq 'self.isJITNeeded = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -Fq 'self.classicMode = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
+          grep -Fq 'defaultClassicMode' LiveContainerSwiftUI/Models/LCAppInfo.h
           grep -Fq 'self.spoofSDKVersion = YES;' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -Fq 'appInfo.is32bit ? false' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -Fq 'appInfo.is32bit ? appInfo.defaultClassicMode : 0' LiveContainerSwiftUI/Models/LCAppModel.swift
