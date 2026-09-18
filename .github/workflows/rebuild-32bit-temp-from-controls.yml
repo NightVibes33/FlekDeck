@@ -89,11 +89,8 @@ jobs:
           from pathlib import Path
           p = Path('LiveContainer/LCBootstrap.m')
           s = p.read_text()
-          old = '''#if is32BitSupported
-    bool is32bit = [guestAppInfo[@"is32bit"] boolValue];'''
-          new = '''bool is32bit = false;
-#if is32BitSupported
-    is32bit = [guestAppInfo[@"is32bit"] boolValue];'''
+          old = '#if is32BitSupported\\n    bool is32bit = [guestAppInfo[@"is32bit"] boolValue];'
+          new = 'bool is32bit = false;\\n#if is32BitSupported\\n    is32bit = [guestAppInfo[@"is32bit"] boolValue];'
           if new not in s:
               if old not in s:
                   raise SystemExit('is32bit scope anchor missing')
@@ -110,14 +107,8 @@ jobs:
           from pathlib import Path
           p = Path('LiveContainer/LCBootstrap.m')
           s = p.read_text()
-          old = '''    LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);'''
-          new = '''#if is32BitSupported
-    if(!is32bit) {
-        LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);
-    }
-#else
-    LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);
-#endif'''
+          old = '    LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);'
+          new = '#if is32BitSupported\\n    if(!is32bit) {\\n        LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);\\n    }\\n#else\\n    LCInstallLegacyWindowSceneBridgeIfNeeded(appBundle);\\n#endif'
           if new not in s:
               if s.count(old) != 1:
                   raise SystemExit('legacy window scene bridge call anchor missing or duplicated')
