@@ -216,7 +216,6 @@ extern NSBundle *lcMainBundle;
         raise(SIGKILL);
     };
 
-    // Match the proven LiveExec32 path for TrollStore-hosted ARM32 guests.
     if (!self.certificatePassword) {
         NSString *tsPath = [NSString stringWithFormat:@"%@/../_TrollStore", NSBundle.mainBundle.bundlePath];
         if (!access(tsPath.UTF8String, F_OK)) {
