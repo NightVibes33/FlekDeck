@@ -82,6 +82,25 @@ jobs:
           p.write_text(s)
           PY
 
+          # Keep is32bit visible to all targets. LCBootstrap.m is compiled by
+          # targets that do not define is32BitSupported; using a branch-local
+          # declaration makes those targets fail to compile.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('LiveContainer/LCBootstrap.m')
+          s = p.read_text()
+          old = '''#if is32BitSupported
+    bool is32bit = [guestAppInfo[@"is32bit"] boolValue];'''
+          new = '''bool is32bit = false;
+#if is32BitSupported
+    is32bit = [guestAppInfo[@"is32bit"] boolValue];'''
+          if new not in s:
+              if old not in s:
+                  raise SystemExit('is32bit scope anchor missing')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
           # FlekDeck main has a legacy UIKit window-to-scene bridge for native
           # LiveProcess guests. LiveExec32 owns the ARM32 render/window lifecycle
           # itself, and the known-good ARM32 control repo does not install this
@@ -109,6 +128,7 @@ jobs:
           # Hard boundaries: native guests retain main ABI and Parallel stays out
           # of the proven ARM32 Classic/single-process route.
           grep -Fq 'static int (*appMain)(int, char**);' LiveContainer/LCBootstrap.m
+          grep -Fq 'bool is32bit = false;' LiveContainer/LCBootstrap.m
           grep -Fq 'int (*emulatorMain)(int, char **, char **) = NULL;' LiveContainer/LCBootstrap.m
           grep -Fq 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
           grep -Fq 'ret = emulatorMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);' LiveContainer/LCBootstrap.m
