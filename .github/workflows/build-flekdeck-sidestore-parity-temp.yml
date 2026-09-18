@@ -57,6 +57,8 @@ jobs:
 
           # ARM32 is the only intentional execution delta from main.
           grep -Fq 'static int (*appMain)(int, char**);' LiveContainer/LCBootstrap.m
+          grep -Fq 'bool is32bit = false;' LiveContainer/LCBootstrap.m
+          grep -Fq 'if(!is32bit) {' LiveContainer/LCBootstrap.m
           grep -Fq 'int (*emulatorMain)(int, char **, char **) = NULL;' LiveContainer/LCBootstrap.m
           grep -Fq 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
           grep -Fq 'ret = emulatorMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);' LiveContainer/LCBootstrap.m
