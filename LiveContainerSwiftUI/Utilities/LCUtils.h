@@ -37,6 +37,11 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 + (NSString*)getCertTeamIdWithKeyData:(NSData*)keyData password:(NSString*)password;
 + (int)validateCertificateWithCompletionHandler:(void(^)(int status, NSDate *expirationDate, NSString *organizationalUnitName, NSString *error))completionHandler;
 
+#if is32BitSupported
++ (BOOL)isTXMScriptRequired;
++ (NSString *)base64EncodedUniversalJITScript;
+#endif
+
 + (BOOL)isAppGroupAltStoreLike;
 + (Store)store;
 + (NSString *)appUrlScheme;

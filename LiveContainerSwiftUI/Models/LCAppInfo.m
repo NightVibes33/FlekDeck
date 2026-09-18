@@ -682,6 +682,14 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
 }
 
 - (NSString *)jitLaunchScriptJs {
+#if is32BitSupported
+    if (self.is32bit && LCUtils.isTXMScriptRequired) {
+        NSString *universalScript = LCUtils.base64EncodedUniversalJITScript;
+        if (universalScript.length > 0) {
+            return universalScript;
+        }
+    }
+#endif
     return _info[@"jitLaunchScriptJs"];
 }
 

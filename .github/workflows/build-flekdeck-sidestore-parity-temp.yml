@@ -50,7 +50,6 @@ jobs:
             MultitaskSupport/MultitaskDockView.swift
             MultitaskSupport/DecoratedAppSceneViewController.m
             MultitaskSupport/MultitaskAppWindow.swift
-            LiveContainerSwiftUI/Utilities/LCUtils.m
           )
           for p in "${protected[@]}"; do
             test "$(git hash-object "$p")" = "$(git rev-parse origin/main:"$p")"
@@ -74,6 +73,9 @@ jobs:
           grep -Fq 'appInfo.is32bit ? appInfo.defaultClassicMode : 0' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -Fq 'launchToGuestAppWithClassicMode' LiveContainer/LCSharedUtils.h
           grep -Fq 'launchToGuestApp(withClassicMode: classicMode)' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -Fq 'isTXMScriptRequired' LiveContainerSwiftUI/Utilities/LCUtils.h
+          grep -Fq 'base64EncodedUniversalJITScript' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -Fq 'self.is32bit && LCUtils.isTXMScriptRequired' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -Fq 'is32BitSupported=1' LiveContainer.xcodeproj/project.pbxproj
 
           # Build directly from checked-in source. Nothing may mutate it here.
@@ -108,7 +110,6 @@ jobs:
             MultitaskSupport/AppSceneViewController.m
             MultitaskSupport/PiPManager.m
             LiveContainerSwiftUI/Utilities/OfflineClassicModeProbe.m
-            LiveContainerSwiftUI/Utilities/LCUtils.m
           )
           for p in "${protected[@]}"; do
             test "$(git hash-object "$p")" = "$(git -C /tmp/flek-main-build hash-object "$p")"
@@ -141,6 +142,9 @@ jobs:
           grep -Fq 'ret = emulatorMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);' LiveContainer/LCBootstrap.m
           grep -Fq 'appInfo.is32bit ? appInfo.defaultClassicMode : 0' LiveContainerSwiftUI/Models/LCAppModel.swift
           grep -Fq 'launchToGuestApp(withClassicMode: classicMode)' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -Fq 'LCFlekProcessIsDebugged' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -Fq 'base64EncodedUniversalJITScript' LiveContainerSwiftUI/Utilities/LCUtils.m
+          grep -Fq 'self.is32bit && LCUtils.isTXMScriptRequired' LiveContainerSwiftUI/Models/LCAppInfo.m
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
 
