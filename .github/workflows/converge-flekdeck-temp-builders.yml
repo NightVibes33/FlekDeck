@@ -21,13 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify SideStore-compatible builder is canonical
+      - name: Verify FlekDeck 32-bit builder is canonical
         run: |
           set -euxo pipefail
           grep -q 'workflow_call:' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
           grep -q 'test "$BUNDLE_ID" = "com.fs.flekdeck"' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
           grep -q 'AAAAA11111.com.fs.flekdeck' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
-          grep -q 'patch_flekdeck_sidestore_identity.py' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
+          grep -q 'name: FlekDeck Temp 32-bit IPA' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
+          ! grep -q 'patch_flekdeck_sidestore_identity.py' .github/workflows/build-flekdeck-sidestore-parity-temp.yml
+          grep -q "bool is32bit = false;" LiveContainer/LCBootstrap.m
+          grep -q "if(!is32bit) {" LiveContainer/LCBootstrap.m
           for f in \
             .github/workflows/build-flekdeck-full-parity-temp.yml \
             .github/workflows/build-flekdeck-32bit-temp.yml \
