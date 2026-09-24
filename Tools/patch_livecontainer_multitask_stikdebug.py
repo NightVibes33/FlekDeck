@@ -96,34 +96,5 @@ s = s.replace(old_host, new_host, 1)
 
 # New StikDebug advertises stikdebug://. Keep accepting the old stikjit:// scheme
 # when StikDebug itself is being hosted as a guest for the LC-to-LC mode.
-s = s.replace('''                            if let scheme = scheme as? String, scheme == "stikjit" {\n''',
-              '''                            if let scheme = scheme as? String, scheme == "stikdebug" || scheme == "stikjit" {\n''')
+s = s.replace('''                            if let scheme = scheme as? String, scheme == "stikjit" || scheme == "stikdebug" {''', '''                            if let scheme = scheme as? String, scheme == "stikjit" || scheme == "stikdebug" {''')
 p.write_text(s)
-
-# ---------------------------------------------------------------------------
-# 3) Current StikDebug contract for multitask/LiveProcess PID attachment.
-# ---------------------------------------------------------------------------
-p = Path("LiveContainerSwiftUI/Views/AppList/LCAppListView.swift")
-s = p.read_text()
-old_pid_url = '''                if let url = URL(string: "stikjit://enable-jit?bundle-id=\\(Bundle.main.bundleIdentifier!)&pid=\\(pid)\\(encoded)") {\n'''
-new_pid_url = '''                if let url = URL(string: "stikdebug://enable-jit?bundle-id=\\(Bundle.main.bundleIdentifier!)&pid=\\(pid)\\(encoded)") {\n'''
-if old_pid_url not in s:
-    raise SystemExit("LCAppListView StikDebug PID URL anchor not found")
-s = s.replace(old_pid_url, new_pid_url, 1)
-s = s.replace('''                            return app.appInfo.urlSchemes().contains("stikjit") &&\n''',
-              '''                            return (app.appInfo.urlSchemes().contains("stikdebug") || app.appInfo.urlSchemes().contains("stikjit")) &&\n''')
-p.write_text(s)
-
-# ---------------------------------------------------------------------------
-# 4) Legacy relaunch helper: prefer the current external StikDebug scheme while
-# retaining the old scheme as a fallback for older StikDebug builds.
-# ---------------------------------------------------------------------------
-p = Path("LiveContainer/LCSharedUtils.m")
-s = p.read_text()
-old_legacy = '''        } else if ([application canOpenURL:[NSURL URLWithString:@"stikjit://"]]) {\n            urlScheme = @"stikjit://enable-jit?bundle-id=%@";\n        } else if ([application canOpenURL:[NSURL URLWithString:@"sidestore://"]]) {\n'''
-new_legacy = '''        } else if ([application canOpenURL:[NSURL URLWithString:@"stikdebug://"]]) {\n            urlScheme = @"stikdebug://enable-jit?bundle-id=%@";\n        } else if ([application canOpenURL:[NSURL URLWithString:@"stikjit://"]]) {\n            urlScheme = @"stikjit://enable-jit?bundle-id=%@";\n        } else if ([application canOpenURL:[NSURL URLWithString:@"sidestore://"]]) {\n'''
-if old_legacy in s:
-    s = s.replace(old_legacy, new_legacy, 1)
-p.write_text(s)
-
-print("Aligned FlekDeck Parallel launch with LiveContainer bookmarks and current StikDebug PID routing.")
