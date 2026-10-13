@@ -55,3 +55,9 @@ The unsigned IPA workflow now runs for this feature branch and parses the ported
 ## ESign and certificate requirements
 
 The recovery menu and ZIP preservation/extraction do not require a certificate import or App Groups. Native ROM binaries marked for signing still use the configured ZSign identity. Installing FlekDeck with ESign signs the IPA but does not import its private signing key into the running app; import the matching P12 in FlekDeck before flashing a native ROM. This change removes the App Group dependency, not iOS code-signature validation. Device validation is still required after CI.
+
+## ROM boot lifecycle and repeated-entry crash
+
+The October 13 crash stack contains two nested NXSlotMain/NXMainSlot calls; PEUserspaceManager traps on its second boot invocation. ROM startup now uses Nyxian 0.11.5's UIKit BootViewController lifecycle, including the volume scan, manifest boot logo, background image loading, main-queue slot entry, NXSlotCreateWindow, transitions, NXSlotDidAppear and recovery fallback. SwiftUI creates only the retained boot controller and does not invoke NXSlotMain from makeUIViewController. The boot controller is cached before its view is loaded and starts once per process, so nested run-loop rendering cannot reenter the ROM. FlekDeck's shell replaces upstream SuperSlot and its own scene retains the ROM window.
+
+The unrelated earlier Pokémon GO scene-create watchdog log is outside this ROM boot fix. Successful CI compilation is not a substitute for testing Procursus on the device.

@@ -1350,119 +1350,316 @@ struct FlekDeckRecoveryView: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: NXRecoveryViewController, context: Context) {}
 }
 
-private final class FlekDeckSlotHostController: UIViewController {
-    private let slotRootController: UIViewController
-    private let slotDidAppear: NXSlotDidAppearFn?
-    private let slotCreateWindow: NXSlotCreateWindowFn?
-    private var slotWindow: UIWindow?
-    private var didNotifySlotAppearance = false
 
-    init(rootController: UIViewController,
-         didAppear: NXSlotDidAppearFn?,
-         createWindow: NXSlotCreateWindowFn?) {
-        self.slotRootController = rootController
-        self.slotDidAppear = didAppear
-        self.slotCreateWindow = createWindow
+/*
+ Boot lifecycle adapted directly from Nyxian 0.11.5 BootViewController.
+ Preserve its volume scan, ROM splash, entry point, window and appearance hooks,
+ transitions and recovery path. FlekDeck supplies the built-in shell and store.
+*/
+private final class FlekDeckBootViewController: UIViewController {
+    private let builtinController: UIViewController
+    private var activeSlotWindow: UIWindow?
+    private var didStartBoot = false
+
+    init(builtinController: UIViewController) {
+        self.builtinController = builtinController
         super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
     }
-
+    private let splashView = UIView()
+    private let logoView = UIImageView()
+    
+    private enum BootTransition {
+        case zoomThrough
+        case crossfade
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
-        guard slotCreateWindow == nil else { return }
-        embedSlotRootController()
+        
+        guard !didStartBoot else { return }
+        didStartBoot = true
+        BootConfig.registerDefaults()
+        
+        self.view.backgroundColor = .systemBackground
+        
+        splashView.backgroundColor = self.view.backgroundColor
+        splashView.frame = self.view.bounds
+        splashView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.view.addSubview(splashView)
+        
+        let slot: URL = flashedSlotURL()
+        if let manifest: ROMManifest = try? ROMManifest(manifestPlistURL: slot.appendingPathComponent("manifest.plist")),
+           let logo: UIImage = manifest.bootlogo {
+            logoView.image = logo
+        } else {
+            logoView.image = UIImage(systemName: "square.stack.3d.up")
+        }
+        logoView.contentMode = .scaleAspectFit
+        logoView.translatesAutoresizingMaskIntoConstraints = false
+        
+        splashView.addSubview(logoView)
+        
+        NSLayoutConstraint.activate([
+            logoView.centerYAnchor.constraint(equalTo: splashView.centerYAnchor),
+            logoView.centerXAnchor.constraint(equalTo: splashView.centerXAnchor),
+            logoView.heightAnchor.constraint(equalToConstant: 125),
+            logoView.widthAnchor.constraint(equalToConstant: 125),
+        ])
+        
+        DispatchQueue.global(qos: .utility).async {
+            let mode = NXVolumeButtonMonitor.scan(for: 1.0)
+            NXVolumeButtonMonitor.disarm()
+            
+            if mode == 2 {
+                DispatchQueue.main.async {
+                    self.enterRecovery(error: nil)
+                }
+                return
+            }
+            
+
+            do {
+                try FlekDeckBootPaths.recoverInterruptedInstall()
+                try FlekDeckBootPaths.setSessionActive(false)
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    self.enterRecovery(error: "ERROR: Could not recover the ROM store: " + message)
+                }
+                return
+            }
+
+            // FlekDeck's own shell is the built-in slot, replacing SuperSlot.
+            if mode == 1 || !FileManager.default.fileExists(atPath: flashedSlotURL().appendingPathComponent("manifest.plist").path) {
+                DispatchQueue.main.async {
+                    self.transition(to: self.builtinController)
+                }
+                return
+            }
+
+            let slot = loadSlot(loadSuperslotForcefully: false)
+            
+            DispatchQueue.main.async {
+                guard case let .loaded(name, slotMain, slotDidAppear, slotCreateWindow) = slot else {
+                    if case let .failed(message) = slot {
+                        self.enterRecovery(error: "ERROR: \(message)")
+                    }
+                    return
+                }
+                
+                do {
+                    try FlekDeckBootPaths.setSessionActive(true)
+                } catch {
+                    self.enterRecovery(error: "ERROR: Could not activate ROM boot: " + error.localizedDescription)
+                    return
+                }
+
+                // UIKit startup runs outside SwiftUI's representable creation.
+                // The process retains this controller before any nested run loop.
+                guard let raw = slotMain() else {
+                    self.enterRecovery(error: "ERROR: \(name) NXSlotMain returned no view controller")
+                    return
+                }
+                let slotRoot = Unmanaged<UIViewController>.fromOpaque(raw).takeRetainedValue()
+                
+                self.changableStatusBarHidden = false
+                UIView.animate(withDuration: 0.3) {
+                    self.setNeedsStatusBarAppearanceUpdate()
+                }
+                
+                if let slotCreateWindow, let slotWindow = self.makeSlotWindow(slotCreateWindow) {
+                    self.transition(into: slotWindow, root: slotRoot) {
+                        slotDidAppear?()
+                    }
+                } else {
+                    self.transition(to: slotRoot) {
+                        slotDidAppear?()
+                    }
+                }
+            }
+        }
     }
-
-    private func embedSlotRootController() {
-        addChild(slotRootController)
-        slotRootController.view.frame = view.bounds
-        slotRootController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(slotRootController.view)
-        slotRootController.didMove(toParent: self)
+    
+    private func makeSlotWindow(_ create: NXSlotCreateWindowFn) -> UIWindow? {
+        guard let scene = view.window?.windowScene else { return nil }
+        guard let raw = create(Unmanaged.passUnretained(scene).toOpaque()) else { return nil }
+        return Unmanaged<UIWindow>.fromOpaque(raw).takeRetainedValue()
     }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        guard !didNotifySlotAppearance, slotWindow == nil else { return }
-
-        if let slotCreateWindow,
-           let scene = view.window?.windowScene,
-           let rawWindow = slotCreateWindow(Unmanaged.passUnretained(scene).toOpaque()) {
-            let window = Unmanaged<UIWindow>.fromOpaque(rawWindow).takeRetainedValue()
-            let hostWindow = view.window
-            window.rootViewController = slotRootController
-            window.alpha = 0
-            slotWindow = window
-            window.makeKeyAndVisible()
+    
+    private func transition(into slotWindow: UIWindow,
+                            root: UIViewController,
+                            completion: (() -> Void)? = nil) {
+        let hostWindow = view.window
+        
+        activeSlotWindow = slotWindow
+        slotWindow.rootViewController = root
+        slotWindow.alpha = 0
+        slotWindow.makeKeyAndVisible()
+        root.view.layoutIfNeeded()
+        
+        if let presentation = logoView.layer.presentation() {
+            logoView.layer.transform = presentation.transform
+        }
+        logoView.layer.removeAnimation(forKey: "breathe")
+        
+        let finish = {
+            hostWindow?.isHidden = true
+            hostWindow?.rootViewController = nil
+            // SwiftUI owns the original scene delegate. Retain the ROM window
+            // here instead of assigning Nyxian's SceneDelegate.window.
+            completion?()
+        }
+        
+        if UIAccessibility.isReduceMotionEnabled {
             UIView.animate(withDuration: 0.3, animations: {
-                window.alpha = 1
+                slotWindow.alpha = 1
             }, completion: { _ in
-                hostWindow?.isHidden = true
-                self.notifySlotAppearance()
+                finish()
             })
             return
         }
-
-        if slotRootController.parent == nil {
-            embedSlotRootController()
+        
+        root.view.transform = CGAffineTransform(scaleX: 0.97, y: 0.97)
+        
+        let splashOut = UIViewPropertyAnimator(duration: 0.4, curve: .easeOut) {
+            self.logoView.transform = CGAffineTransform(scaleX: 1.15, y: 1.15)
+            self.splashView.alpha = 0
+            slotWindow.alpha = 1
         }
-        notifySlotAppearance()
+        
+        let appIn = UIViewPropertyAnimator(duration: 0.55, dampingRatio: 1.0) {
+            root.view.transform = .identity
+        }
+        
+        appIn.addCompletion { _ in
+            finish()
+        }
+        
+        splashOut.startAnimation()
+        appIn.startAnimation()
     }
-
-    private func notifySlotAppearance() {
-        guard !didNotifySlotAppearance else { return }
-        didNotifySlotAppearance = true
-        slotDidAppear?()
+    
+    private func enterRecovery(error: String?) {
+        let recoveryController = NXRecoveryViewController()
+        if let error {
+            recoveryController.recoveryLogError(error)
+        }
+        recoveryShowMenu(recoveryController: recoveryController)
+        self.transition(to: recoveryController, style: .crossfade)
     }
-
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        startBreathing()
+    }
+    
+    private func startBreathing() {
+        guard !UIAccessibility.isReduceMotionEnabled,
+              splashView.superview != nil,
+              logoView.layer.animation(forKey: "breathe") == nil else { return }
+        
+        let pulse = CABasicAnimation(keyPath: "transform.scale")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.94
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        logoView.layer.add(pulse, forKey: "breathe")
+    }
+    
+    private func transition(to child: UIViewController,
+                            style: BootTransition = .zoomThrough,
+                            completion: (() -> Void)? = nil) {
+        addChild(child)
+        child.view.frame = view.bounds
+        child.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.insertSubview(child.view, belowSubview: splashView)
+        child.view.layoutIfNeeded()
+        
+        if let presentation = logoView.layer.presentation() {
+            logoView.layer.transform = presentation.transform
+        }
+        logoView.layer.removeAnimation(forKey: "breathe")
+        
+        let finish = {
+            self.splashView.removeFromSuperview()
+            child.didMove(toParent: self)
+            completion?()
+        }
+        
+        if style == .crossfade || UIAccessibility.isReduceMotionEnabled {
+            UIView.animate(withDuration: 0.3, animations: {
+                self.splashView.alpha = 0
+            }, completion: { _ in
+                finish()
+            })
+            return
+        }
+        
+        child.view.transform = CGAffineTransform(scaleX: 0.97, y: 0.97)
+        
+        let splashOut = UIViewPropertyAnimator(duration: 0.4, curve: .easeOut) {
+            self.logoView.transform = CGAffineTransform(scaleX: 1.15, y: 1.15)
+            self.splashView.alpha = 0
+        }
+        
+        let appIn = UIViewPropertyAnimator(duration: 0.55, dampingRatio: 1.0) {
+            child.view.transform = .identity
+        }
+        
+        appIn.addCompletion { _ in
+            finish()
+        }
+        
+        splashOut.startAnimation()
+        appIn.startAnimation()
+    }
+    
+    var changableStatusBarHidden = true
+    override var prefersStatusBarHidden: Bool {
+        return self.changableStatusBarHidden
+    }
+    
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation {
+        return .fade
+    }
+    
     override var childForStatusBarStyle: UIViewController? {
-        slotRootController
-    }
-
-    override var childForStatusBarHidden: UIViewController? {
-        slotRootController
+        splashView.superview == nil ? children.last : nil
     }
 }
 
-private struct FlekDeckSlotView: UIViewControllerRepresentable {
-    let name: String
-    let main: NXSlotMainFn
-    let didAppear: NXSlotDidAppearFn?
-    let createWindow: NXSlotCreateWindowFn?
+
+@MainActor
+private enum FlekDeckBootControllerCache {
+    // Publish the controller before viewDidLoad can run the ROM. NXSlotMain may
+    // spin a nested main run loop, causing SwiftUI to recreate its bridge.
+    // Every recreation receives this same controller; it cannot boot twice.
+    static var controller: FlekDeckBootViewController?
+}
+
+private struct FlekDeckBootControllerView<Content: View>: UIViewControllerRepresentable {
+    let content: Content
 
     func makeUIViewController(context: Context) -> UIViewController {
-        guard let rawRoot = main() else {
-            let recovery = NXRecoveryViewController()
-            BootConfig.registerDefaults()
-            recovery.recoveryLogError("ERROR: \(name) NXSlotMain returned no view controller.")
-            recoveryShowMenu(recoveryController: recovery)
-            return recovery
+        if let controller = FlekDeckBootControllerCache.controller {
+            return controller
         }
-        let root = Unmanaged<UIViewController>.fromOpaque(rawRoot).takeRetainedValue()
-        return FlekDeckSlotHostController(rootController: root,
-                                          didAppear: didAppear,
-                                          createWindow: createWindow)
+        let controller = FlekDeckBootViewController(
+            builtinController: UIHostingController(rootView: content.environment(\.self, context.environment)))
+        FlekDeckBootControllerCache.controller = controller
+        return controller
     }
 
     func updateUIViewController(_ controller: UIViewController, context: Context) {}
 }
 
-private enum FlekDeckBootDestination {
-    case checking
-    case app
-    case recovery(String?)
-    case slot(name: String,
-              main: NXSlotMainFn,
-              didAppear: NXSlotDidAppearFn?,
-              createWindow: NXSlotCreateWindowFn?)
-}
-
 struct FlekDeckBootGateView<Content: View>: View {
-    @State private var destination: FlekDeckBootDestination = .checking
     private let content: Content
 
     init(@ViewBuilder content: () -> Content) {
@@ -1470,68 +1667,7 @@ struct FlekDeckBootGateView<Content: View>: View {
     }
 
     var body: some View {
-        Group {
-            switch destination {
-            case .checking:
-                Color.black.ignoresSafeArea()
-                    .task { await checkVolumeButtons() }
-            case .app:
-                content
-            case .recovery(let error):
-                FlekDeckRecoveryView(initialError: error)
-            case .slot(let name, let main, let didAppear, let createWindow):
-                FlekDeckSlotView(name: name, main: main, didAppear: didAppear, createWindow: createWindow)
-            }
-        }
-    }
-
-    @MainActor
-    private func checkVolumeButtons() async {
-        let mode = await Task.detached(priority: .userInitiated) {
-            NXVolumeButtonMonitor.scan(for: 1.0)
-        }.value
-        NXVolumeButtonMonitor.disarm()
-        do {
-            try await Task.detached(priority: .utility) {
-                try FlekDeckBootPaths.recoverInterruptedInstall()
-                try FlekDeckBootPaths.setSessionActive(false)
-            }.value
-        } catch {
-            destination = .recovery("Could not recover an interrupted ROM install: \(error.localizedDescription)")
-            return
-        }
-        if mode == 2 {
-            destination = .recovery(nil)
-            return
-        }
-
-        BootConfig.registerDefaults()
-        // FlekDeck's built-in slot is its own app shell.
-        if mode == 1 {
-            destination = .app
-            return
-        }
-        let slotExists = FileManager.default.fileExists(atPath: flashedSlotURL().path)
-        guard slotExists else {
-            destination = .app
-            return
-        }
-
-        let result = await Task.detached(priority: .userInitiated) {
-            loadSlot(loadSuperslotForcefully: false)
-        }.value
-        switch result {
-        case let .loaded(name, main, didAppear, createWindow):
-            do {
-                try FlekDeckBootPaths.setSessionActive(true)
-            } catch {
-                destination = .recovery("Could not activate the ROM boot session: \(error.localizedDescription)")
-                return
-            }
-            destination = .slot(name: name, main: main, didAppear: didAppear, createWindow: createWindow)
-        case let .failed(message):
-            destination = .recovery(message)
-        }
+        FlekDeckBootControllerView(content: content)
+            .ignoresSafeArea()
     }
 }
-
