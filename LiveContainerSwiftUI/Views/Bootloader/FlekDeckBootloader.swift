@@ -1218,6 +1218,51 @@ func recoveryShowMenu(recoveryController: NXRecoveryViewController) {
 }
 
 
+// Lightweight, crash-resilient boot breadcrumbs. These logs live in Documents,
+// so Files can export them even when the ROM aborts before UIKit appears.
+// No per-frame logging, polling, UserDefaults writes, or unlimited growth.
+private enum FlekDeckBootTrace {
+    private static let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("BootLogs", isDirectory: true)
+    private static let current = directory.appendingPathComponent("current-boot.log")
+    private static let previous = directory.appendingPathComponent("previous-boot.log")
+
+    static func begin() {
+        let manager = FileManager.default
+        do {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            if manager.fileExists(atPath: previous.path) {
+                try manager.removeItem(at: previous)
+            }
+            if manager.fileExists(atPath: current.path) {
+                try manager.moveItem(at: current, to: previous)
+            }
+        } catch {
+            // Diagnostics must never interfere with boot.
+        }
+        mark("boot-controller-loaded")
+    }
+
+    static func mark(_ event: String) {
+        let manager = FileManager.default
+        try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fd = current.path.withCString {
+            Darwin.open($0, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, mode_t(0o600))
+        }
+        guard fd >= 0 else { return }
+        defer { _ = Darwin.close(fd) }
+        // Each session is bounded to a few dozen short checkpoints. Preserve the
+        // current trace until the next launch, rotating only one previous trace.
+        let cleaned = String(event.prefix(420)).replacingOccurrences(of: "\n", with: " ")
+        let line = "\(Date().ISO8601Format()) pid=\(getpid()) \(cleaned)\n"
+        let bytes = Array(line.utf8)
+        _ = bytes.withUnsafeBytes { buffer in
+            Darwin.write(fd, buffer.baseAddress, buffer.count)
+        }
+        _ = Darwin.fsync(fd)
+    }
+}
+
 private enum FlekDeckBootPaths {
     private static let legacyRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("FlekDeck/Boot", isDirectory: true)
@@ -1228,6 +1273,13 @@ private enum FlekDeckBootPaths {
     static let stagingSlot: URL = root.appendingPathComponent("Slot/.A.installing", isDirectory: true)
     static let previousSlot: URL = root.appendingPathComponent("Slot/.A.previous", isDirectory: true)
     static let imports: URL = root.appendingPathComponent("Imports", isDirectory: true)
+
+    static func previousSessionWasActive() -> Bool {
+        guard let plist = NSDictionary(contentsOf: root.appendingPathComponent("boot-session.plist")) else {
+            return false
+        }
+        return (plist["active"] as? Bool) == true
+    }
 
     static func setSessionActive(_ active: Bool) throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1383,6 +1435,7 @@ private final class FlekDeckBootViewController: UIViewController {
         guard !didStartBoot else { return }
         didStartBoot = true
         BootConfig.registerDefaults()
+        FlekDeckBootTrace.begin()
         
         self.view.backgroundColor = .systemBackground
         
@@ -1413,6 +1466,7 @@ private final class FlekDeckBootViewController: UIViewController {
         DispatchQueue.global(qos: .utility).async {
             let mode = NXVolumeButtonMonitor.scan(for: 1.0)
             NXVolumeButtonMonitor.disarm()
+            FlekDeckBootTrace.mark("volume-scan-finished mode=\(mode)")
             
             if mode == 2 {
                 DispatchQueue.main.async {
@@ -1423,8 +1477,11 @@ private final class FlekDeckBootViewController: UIViewController {
             
 
             do {
+                let previousActive = FlekDeckBootPaths.previousSessionWasActive()
+                FlekDeckBootTrace.mark("previous-session-active=\(previousActive)")
                 try FlekDeckBootPaths.recoverInterruptedInstall()
                 try FlekDeckBootPaths.setSessionActive(false)
+                FlekDeckBootTrace.mark("rom-store-recovered")
             } catch {
                 let message = error.localizedDescription
                 DispatchQueue.main.async {
@@ -1435,17 +1492,21 @@ private final class FlekDeckBootViewController: UIViewController {
 
             // FlekDeck's own shell is the built-in slot, replacing SuperSlot.
             if mode == 1 || !FileManager.default.fileExists(atPath: flashedSlotURL().appendingPathComponent("manifest.plist").path) {
+                FlekDeckBootTrace.mark("builtin-shell-selected")
                 DispatchQueue.main.async {
                     self.transition(to: self.builtinController)
                 }
                 return
             }
 
+            FlekDeckBootTrace.mark("rom-slot-load-enter")
             let slot = loadSlot(loadSuperslotForcefully: false)
+            FlekDeckBootTrace.mark("rom-slot-load-return")
             
             DispatchQueue.main.async {
                 guard case let .loaded(name, slotMain, slotDidAppear, slotCreateWindow) = slot else {
                     if case let .failed(message) = slot {
+                        FlekDeckBootTrace.mark("rom-slot-load-failed \(message)")
                         self.enterRecovery(error: "ERROR: \(message)")
                     }
                     return
@@ -1460,10 +1521,15 @@ private final class FlekDeckBootViewController: UIViewController {
 
                 // UIKit startup runs outside SwiftUI's representable creation.
                 // The process retains this controller before any nested run loop.
+                let extensionPresent = FileManager.default.fileExists(
+                    atPath: Bundle.main.builtInPlugInsURL?
+                        .appendingPathComponent("LiveProcess.appex", isDirectory: true).path ?? "")
+                FlekDeckBootTrace.mark("rom-nxslotmain-enter name=\(name) liveprocess-present=\(extensionPresent)")
                 guard let raw = slotMain() else {
                     self.enterRecovery(error: "ERROR: \(name) NXSlotMain returned no view controller")
                     return
                 }
+                FlekDeckBootTrace.mark("rom-nxslotmain-return")
                 let slotRoot = Unmanaged<UIViewController>.fromOpaque(raw).takeRetainedValue()
                 
                 self.changableStatusBarHidden = false
@@ -1471,19 +1537,41 @@ private final class FlekDeckBootViewController: UIViewController {
                     self.setNeedsStatusBarAppearanceUpdate()
                 }
                 
-                if let slotCreateWindow, let slotWindow = self.makeSlotWindow(slotCreateWindow) {
-                    self.transition(into: slotWindow, root: slotRoot) {
-                        slotDidAppear?()
+                if let slotCreateWindow {
+                    FlekDeckBootTrace.mark("rom-create-window-enter")
+                    if let slotWindow = self.makeSlotWindow(slotCreateWindow) {
+                        FlekDeckBootTrace.mark("rom-create-window-return")
+                        self.transition(into: slotWindow, root: slotRoot) {
+                            self.completeROMBoot(didAppear: slotDidAppear)
+                        }
+                    } else {
+                        FlekDeckBootTrace.mark("rom-create-window-unavailable; using-host-window")
+                        self.transition(to: slotRoot) {
+                            self.completeROMBoot(didAppear: slotDidAppear)
+                        }
                     }
                 } else {
+                    FlekDeckBootTrace.mark("rom-no-window-hook; using-host-window")
                     self.transition(to: slotRoot) {
-                        slotDidAppear?()
+                        self.completeROMBoot(didAppear: slotDidAppear)
                     }
                 }
             }
         }
     }
     
+    private func completeROMBoot(didAppear: NXSlotDidAppearFn?) {
+        FlekDeckBootTrace.mark("rom-didappear-enter")
+        didAppear?()
+        FlekDeckBootTrace.mark("rom-didappear-return")
+        do {
+            try FlekDeckBootPaths.setSessionActive(false)
+            FlekDeckBootTrace.mark("rom-boot-ui-ready")
+        } catch {
+            FlekDeckBootTrace.mark("rom-session-finalize-failed \(error.localizedDescription)")
+        }
+    }
+
     private func makeSlotWindow(_ create: NXSlotCreateWindowFn) -> UIWindow? {
         guard let scene = view.window?.windowScene else { return nil }
         guard let raw = create(Unmanaged.passUnretained(scene).toOpaque()) else { return nil }
@@ -1544,6 +1632,7 @@ private final class FlekDeckBootViewController: UIViewController {
     }
     
     private func enterRecovery(error: String?) {
+        FlekDeckBootTrace.mark("recovery-enter \(error ?? "user-volume-request")")
         let recoveryController = NXRecoveryViewController()
         if let error {
             recoveryController.recoveryLogError(error)
