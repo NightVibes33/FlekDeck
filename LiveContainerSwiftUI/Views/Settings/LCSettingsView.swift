@@ -33,7 +33,6 @@ enum JITEnablerType : Int, CaseIterable, Identifiable {
 }
 
 struct LCSettingsView: View {
-    @State private var showIdentityReport = false
     @State var errorShow = false
     @State var errorInfo = ""
     @State var successShow = false
@@ -90,41 +89,6 @@ struct LCSettingsView: View {
     @AppStorage("LCSharePrivateDataWithLiveProcess") var sharePrivateDataWithLiveProcess = false
     @AppStorage("BKNoWatchdogs") var disableLiveProcessWatchdog = false
     
-    // Written from inside LiveProcess by LCHostIdentityInit. The extension has no
-    // UI of its own and cannot be attached to on someone else's device, so the app
-    // group is the only way to see whether the identifier reached a parallel guest.
-    @AppStorage("LCHostIdentityStatus", store: LCUtils.appGroupUserDefault)
-    private var hostIdentityStatus: String = ""
-
-    @AppStorage("LCHostIdentityUdid", store: LCUtils.appGroupUserDefault)
-    private var hostIdentityUdid: String = ""
-
-    @AppStorage("LCHostIdentityDetail", store: LCUtils.appGroupUserDefault)
-    private var hostIdentityDetail: String = ""
-
-    // Published by this app at launch for the extension to pick up.
-    @AppStorage("LCHostEncryptedUdid", store: LCUtils.appGroupUserDefault)
-    private var publishedEncryptedUdid: String = ""
-
-    // How many times guest code actually asked the extension for the identifier,
-    // and who asked first. Installing the hook and being read are different facts.
-    @AppStorage("LCHostIdentityReads", store: LCUtils.appGroupUserDefault)
-    private var hostIdentityReads: Int = -1
-
-    @AppStorage("LCHostIdentityReader", store: LCUtils.appGroupUserDefault)
-    private var hostIdentityReader: String = ""
-
-    // Size and build date of the dylib that read the identifier, so two devices can
-    // be compared from screenshots when the files themselves cannot be moved.
-    @AppStorage("LCHostIdentityReaderFingerprint", store: LCUtils.appGroupUserDefault)
-    private var hostIdentityReaderFingerprint: String = ""
-
-    // The guest names itself. The image name above can only ever say which
-    // library made the call, and resolves to nothing when the caller sits in a
-    // hook trampoline — which is why this row used to say only "guest code".
-    @AppStorage("LCHostIdentityReaderApp", store: LCUtils.appGroupUserDefault)
-    private var hostIdentityReaderApp: String = ""
-    
     @AppStorage("LCBetaBannerOverride", store: LCUtils.appGroupUserDefault) private var betaBannerOverride: Int = 0
 
     @EnvironmentObject private var sharedModel : SharedModel
@@ -147,87 +111,6 @@ struct LCSettingsView: View {
         return "12345"
     }()
 
-    // Kept as separate lines on purpose. "What this app published" and "what a
-    // parallel guest actually resolved" are different facts, and collapsing them
-    // into one value hides the case worth catching: a guest that read an
-    // identifier belonging to some other install.
-    private var multitaskIdentityValue: String {
-        hostIdentityUdid.isEmpty ? "" : hostIdentityUdid
-    }
-
-    // These live in app group defaults, which outlive the app itself — reinstalling
-    // does not clear them. So a status with no timestamp beside it may well be from
-    // a previous install, which is exactly how a diagnostic starts lying.
-    private var multitaskIdentityDate: Date? {
-        LCUtils.appGroupUserDefault.object(forKey: "LCHostIdentityDate") as? Date
-    }
-
-    // One line for the row. Everything else moved behind a tap once this grew past
-    // what a Settings row can show — a truncated diagnostic is worse than a short
-    // one, because the ellipsis hides exactly the part being looked for.
-    private var multitaskIdentitySummary: String {
-        guard !hostIdentityStatus.isEmpty else {
-            return publishedEncryptedUdid.isEmpty
-                ? "This app has no identifier to publish"
-                : "Launch an app in parallel to confirm it arrives"
-        }
-        let carried = hostIdentityUdid.isEmpty ? "Not carried" : "Carried"
-        switch hostIdentityReads {
-        case ..<0: return "\(carried) · read count pending · tap for detail"
-        case 0: return "\(carried) · never read · tap for detail"
-        default:
-            let reader = hostIdentityReader.isEmpty ? "guest code" : hostIdentityReader
-            return "\(carried) · read \(hostIdentityReads)× by \(reader) · tap for detail"
-        }
-    }
-
-    // The full picture, for the alert and the clipboard. Copyable matters more than
-    // readable here: comparing two devices means sending this to someone else.
-    private var multitaskIdentityReport: String {
-        var lines: [String] = []
-        lines.append("App: \(publishedEncryptedUdid.isEmpty ? "—" : publishedEncryptedUdid)")
-        lines.append("Guest: \(hostIdentityUdid.isEmpty ? "—" : hostIdentityUdid)")
-        if hostIdentityStatus.isEmpty {
-            lines.append("No app has been launched in parallel yet.")
-        } else {
-            lines.append(hostIdentityDetail.isEmpty ? hostIdentityStatus : "\(hostIdentityStatus) (\(hostIdentityDetail))")
-            if let date = multitaskIdentityDate {
-                lines.append("Recorded \(date.formatted(.relative(presentation: .numeric)))")
-            }
-            switch hostIdentityReads {
-            case ..<0: lines.append("Read count not reported yet")
-            case 0: lines.append("Never read by the guest")
-            default:
-                let app = hostIdentityReaderApp.isEmpty ? "guest code" : hostIdentityReaderApp
-                lines.append("Read \(hostIdentityReads)× by \(app)")
-                if !hostIdentityReader.isEmpty {
-                    lines.append("via \(hostIdentityReader)")
-                }
-                if !hostIdentityReaderFingerprint.isEmpty {
-                    lines.append(hostIdentityReaderFingerprint)
-                }
-            }
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    // Orange only when something is genuinely wrong: a parallel launch that produced
-    // no identifier, or one that produced an identifier this app never published.
-    private var multitaskIdentityIsProblem: Bool {
-        if hostIdentityStatus.isEmpty {
-            return publishedEncryptedUdid.isEmpty
-        }
-        if hostIdentityUdid.isEmpty {
-            return true
-        }
-        if hostIdentityReads == 0 {
-            return true
-        }
-        return !publishedEncryptedUdid.isEmpty && hostIdentityUdid != publishedEncryptedUdid
-    }
-
-    
-    
     /// Name of the step the haptics slider currently sits on, shown beside it —
     /// a strength is easier to recognise by name than by a bare number, and the
     /// left end being "Off" is the part worth being explicit about.
@@ -261,77 +144,6 @@ struct LCSettingsView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section {
-
-                    // Developer-only. This is a diagnostic — it exists to compare what the
-                    // guest's identity check actually saw against what the app holds — and it
-                    // means nothing to anyone not chasing that particular mismatch.
-                    if sharedModel.developerMode {
-                        // MARK: - Multitask identity
-                        // What reached the last app launched in parallel. A guest reads
-                        // the identifier from the host process' bundle, which is the
-                        // extension rather than the app, so this is the value the check
-                        // actually saw — not the one the app holds.
-                        HStack(spacing: 12) {
-                            Image(systemName: "square.on.square")
-                                .font(.system(size: 20))
-                                .foregroundColor(.white)
-                                .frame(width: 36, height: 36)
-                                .background(Color.indigo)
-                                .cornerRadius(8)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Multitask UDID")
-                                    .font(.body)
-
-                                Text("App: \(publishedEncryptedUdid.isEmpty ? "—" : publishedEncryptedUdid)")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.3)
-
-                                Text("Guest: \(multitaskIdentityValue.isEmpty ? "—" : multitaskIdentityValue)")
-                                    .font(.subheadline)
-                                    .foregroundColor(multitaskIdentityIsProblem ? .orange : .secondary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.3)
-
-                                Text(multitaskIdentitySummary)
-                                    .font(.caption)
-                                    .foregroundColor(multitaskIdentityIsProblem ? .orange : .secondary)
-                                    .lineLimit(2)
-                                    .minimumScaleFactor(0.8)
-                            }
-                            Spacer()
-
-                            if !multitaskIdentityValue.isEmpty {
-                                Button(action: {
-                                    UIPasteboard.general.string = multitaskIdentityValue
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                }) {
-                                    Image(systemName: "doc.on.doc")
-                                        .font(.system(size: 18))
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                        }
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            // Copied as well as shown: the point of this row is usually to
-                            // send it to someone comparing another device.
-                            UIPasteboard.general.string = multitaskIdentityReport
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            showIdentityReport = true
-                        }
-                        .alert("Multitask UDID", isPresented: $showIdentityReport) {
-                            Button("OK", role: .cancel) {}
-                        } message: {
-                            Text("\(multitaskIdentityReport)\n\nCopied to clipboard.")
-                        }
-                    }
-
-                }
                 // Vibe certificate controls, exposed once in the Flek settings shell.
                 if sharedModel.multiLCStatus != 2 {
                     Section{
@@ -358,12 +170,6 @@ struct LCSettingsView: View {
                                     Text("lc.settings.importCertificateFromStore %@".localizeWithFormat(storeName))
                                 }
                             }
-                        }
-
-                        NavigationLink {
-                            LCJITLessDiagnoseView()
-                        } label: {
-                            Text("lc.settings.jitlessDiagnose".loc)
                         }
 
                     } header: {
@@ -481,19 +287,11 @@ struct LCSettingsView: View {
                         Toggle(isOn: $keepSelectedWhenQuit) {
                             Text("Keep Selected App when Quit")
                         }
-                        Toggle(isOn: $waitForDebugger) {
-                            Text("Wait For Debugger")
-                        }
                         Toggle(isOn: $sharePrivateDataWithLiveProcess) {
                             Text("Allow Private Data access from LiveProcess")
                         }
                         Toggle(isOn: $disableLiveProcessWatchdog) {
                             Text("Disable LiveProcess watchdog termination")
-                        }
-                        Button {
-                            exportDyld()
-                        } label: {
-                            Text("Export Dyld")
                         }
                         Button {
                             Task { await nukeSideStore() }
@@ -910,13 +708,6 @@ struct LCSettingsView: View {
                         }
                         .disabled(sharedModel.multiLCStatus == 2)
                         
-                        if(sharedModel.multiLCStatus == 2) {
-                            NavigationLink {
-                                LCJITLessDiagnoseView()
-                            } label: {
-                                Text("lc.settings.jitlessDiagnose".loc)
-                            }
-                        }
                     } header: {
                         Text("lc.settings.multiLC".loc)
                     } footer: {

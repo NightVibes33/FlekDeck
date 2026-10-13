@@ -1549,7 +1549,7 @@ private final class FlekDeckBootViewController: UIViewController {
                         missingAssets.joined(separator: ", ") +
                         ". Install a complete FlekDeck build; the flashed ROM was not modified."
                     FlekDeckBootTrace.mark("rom-runtime-preflight-failed \(message)")
-                    self.enterRecovery(error: "ERROR: " + message)
+                    self.enterRecovery(error: "ERROR: ROM boot resources are missing. Reinstall FlekDeck.")
                     return
                 }
                 if let freeMB = FlekDeckBootPaths.availableSpaceInMegabytes() {
