@@ -277,7 +277,7 @@ jobs:
           FRAMEWORKS="$UPSTREAM/Frameworks"
           test -s "$FRAMEWORKS/MobileDevelopmentService.dylib"
           test -s "$FRAMEWORKS/MobileDevelopmentKit.framework/MobileDevelopmentKit"
-          test -s "$FRAMEWORKS/MobileDevelopmentKit.framework/Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler"
+          test -s "$FRAMEWORKS/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler"
           mkdir -p build/pe-prebuilt
           cp "$FRAMEWORKS/MobileDevelopmentService.dylib" build/pe-prebuilt/
           cp -R "$FRAMEWORKS/MobileDevelopmentKit.framework" build/pe-prebuilt/
@@ -417,7 +417,7 @@ jobs:
           cp -R "$PE_PREBUILT/MobileDevelopmentKit.framework" "$APP/Frameworks/"
           ldid -S "$APP/Frameworks/bootstrapd.dylib"
           ldid -S "$APP/Frameworks/MobileDevelopmentService.dylib"
-          ldid -S "$APP/Frameworks/MobileDevelopmentKit.framework/Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler"
+          ldid -S "$APP/Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler"
           find "$APP/Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/Frameworks" -type f -name "*.dylib" -print0 | while IFS= read -r -d '' library; do
             ldid -S "$library"
           done
