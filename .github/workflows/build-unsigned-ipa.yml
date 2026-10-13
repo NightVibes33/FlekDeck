@@ -430,13 +430,14 @@ jobs:
           cd build
           zip -qry FlekDeck.ipa Payload
           unzip -t FlekDeck.ipa >/dev/null
+          unzip -Z1 FlekDeck.ipa > FlekDeck-ipa-entries.txt
           for required in \
             Shared/lib.zip Shared/include.zip Shared/swift.zip \
             Shared/kernel/ksurface_abi.h \
             Shared/LaunchServices/org.emexlabs.bootstrapd.plist \
             Shared/LaunchServices/org.emexlabs.compilerd.plist \
             Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib; do
-            unzip -Z1 FlekDeck.ipa | grep -Fxq "Payload/FlekDeck.app/$required" || { echo "IPA missing Nyxian runtime asset: $required"; exit 1; }
+            grep -Fxq "Payload/FlekDeck.app/$required" FlekDeck-ipa-entries.txt || { echo "IPA missing Nyxian runtime asset: $required"; exit 1; }
           done
           shasum -a 256 FlekDeck.ipa | tee FlekDeck.sha256
           ls -lh FlekDeck.ipa FlekDeck.sha256 FlekDeck-host-entitlements.plist
