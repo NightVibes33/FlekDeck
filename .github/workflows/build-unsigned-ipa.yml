@@ -240,7 +240,7 @@ jobs:
 
           # The ROM mounts these two actual Nyxian userspace services from
           # the host app bundle. A PE client alone cannot boot the ROM.
-          for target in bootstrapd MobileDevelopmentService; do
+          for target in bootstrapd; do
             set +e
             xcodebuild build \
               -project /tmp/flek-pe-source/Nyxian.xcodeproj \
@@ -258,6 +258,67 @@ jobs:
             fi
             test -s "build/pe-runtime/Release-iphoneos/${target}.dylib"
           done
+
+      # The upstream MobileDevelopmentService target depends on LLVM/Swift
+      # compiler support libraries that are not checked into Nyxian's source.
+      # Use the official built Nyxian userspace service and its actual framework
+      # dependencies rather than substituting a stub or dropping the service.
+      - name: Acquire official Nyxian userspace compiler service
+        run: |
+          set -euo pipefail
+          OFFICIAL_IPA="$PWD/build/Nyxian-0.11.4.ipa"
+          curl --fail --location --retry 3 --silent --show-error \
+            'https://github.com/emexlab/Nyxian/releases/download/0.11.4/Nyxian.ipa' \
+            --output "$OFFICIAL_IPA"
+          unzip -tq "$OFFICIAL_IPA" > /dev/null
+          python3 - "$OFFICIAL_IPA" "$PWD/build/pe-prebuilt" <<'PY'
+          import os
+          import pathlib
+          import shutil
+          import sys
+          import zipfile
+
+          target = pathlib.Path(sys.argv[2])
+          target.mkdir(parents=True, exist_ok=True)
+          required = (
+              "MobileDevelopmentService.dylib",
+              "CoreCompiler.framework/",
+              "MobileDevelopmentKit.framework/",
+          )
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              names = archive.namelist()
+              roots = {n.split("/Frameworks/", 1)[0] for n in names
+                       if n.endswith("/Frameworks/MobileDevelopmentService.dylib")}
+              if len(roots) != 1:
+                  raise SystemExit("Official Nyxian IPA missing a unique userspace service")
+              prefix = next(iter(roots)) + "/Frameworks/"
+              for item in required:
+                  matches = [n for n in names
+                             if n == prefix + item or n.startswith(prefix + item)]
+                  if not matches:
+                      raise SystemExit(f"Official Nyxian IPA missing {item}")
+                  for name in matches:
+                      relative = pathlib.PurePosixPath(name[len(prefix):])
+                      if ".." in relative.parts or relative.is_absolute():
+                          raise SystemExit(f"Unsafe official release entry: {name}")
+                      dest = target.joinpath(*relative.parts)
+                      info = archive.getinfo(name)
+                      if info.is_dir():
+                          dest.mkdir(parents=True, exist_ok=True)
+                          continue
+                      dest.parent.mkdir(parents=True, exist_ok=True)
+                      with archive.open(info) as src, dest.open("wb") as dst:
+                          shutil.copyfileobj(src, dst)
+                      perms = (info.external_attr >> 16) & 0o777
+                      if perms:
+                          os.chmod(dest, perms)
+          for relative in ("MobileDevelopmentService.dylib",
+                           "CoreCompiler.framework/CoreCompiler",
+                           "MobileDevelopmentKit.framework/MobileDevelopmentKit"):
+              if not (target / relative).is_file():
+                  raise SystemExit(f"Missing extracted native Nyxian binary: {relative}")
+          print("Official Nyxian userspace service and compiler frameworks validated")
+          PY
 
       - name: Parse and verify compatibility boundary
         run: |
@@ -364,6 +425,7 @@ jobs:
           EXTENSION="$APP/PlugIns/LiveProcess.appex"
           test -d "$EXTENSION"
           PE_PRODUCTS="$PWD/build/pe-runtime/Release-iphoneos"
+          PE_PREBUILT="$PWD/build/pe-prebuilt"
           mkdir -p "$EXTENSION/Frameworks"
           cp "$PE_PRODUCTS/FlekDeckPERuntime.dylib" "$EXTENSION/Frameworks/"
           cp -R "$PE_PRODUCTS/LiveShim.framework" "$EXTENSION/Frameworks/"
@@ -388,13 +450,21 @@ jobs:
           cp -R "$NYXIAN_SOURCE/Shared" "$APP/Shared"
           mkdir -p "$APP/Frameworks"
           cp "$PE_PRODUCTS/bootstrapd.dylib" "$APP/Frameworks/bootstrapd.dylib"
-          cp "$PE_PRODUCTS/MobileDevelopmentService.dylib" "$APP/Frameworks/MobileDevelopmentService.dylib"
+          cp "$PE_PREBUILT/MobileDevelopmentService.dylib" "$APP/Frameworks/MobileDevelopmentService.dylib"
+          cp -R "$PE_PREBUILT/CoreCompiler.framework" "$APP/Frameworks/"
+          cp -R "$PE_PREBUILT/MobileDevelopmentKit.framework" "$APP/Frameworks/"
+          ldid -S "$APP/Frameworks/bootstrapd.dylib"
+          ldid -S "$APP/Frameworks/MobileDevelopmentService.dylib"
+          ldid -S "$APP/Frameworks/CoreCompiler.framework/CoreCompiler"
+          ldid -S "$APP/Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit"
           for required in \
             Shared/lib.zip Shared/include.zip Shared/swift.zip \
             Shared/kernel/ksurface_abi.h \
             Shared/LaunchServices/org.emexlabs.bootstrapd.plist \
             Shared/LaunchServices/org.emexlabs.compilerd.plist \
-            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib; do
+            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib \
+            Frameworks/CoreCompiler.framework/CoreCompiler \
+            Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit; do
             test -s "$APP/$required" || { echo "Missing Nyxian runtime asset: $required"; exit 1; }
           done
           du -sh "$APP/Shared" "$APP/Frameworks/bootstrapd.dylib" "$APP/Frameworks/MobileDevelopmentService.dylib"
@@ -436,7 +506,9 @@ jobs:
             Shared/kernel/ksurface_abi.h \
             Shared/LaunchServices/org.emexlabs.bootstrapd.plist \
             Shared/LaunchServices/org.emexlabs.compilerd.plist \
-            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib; do
+            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib \
+            Frameworks/CoreCompiler.framework/CoreCompiler \
+            Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit; do
             grep -Fxq "Payload/FlekDeck.app/$required" FlekDeck-ipa-entries.txt || { echo "IPA missing Nyxian runtime asset: $required"; exit 1; }
           done
           shasum -a 256 FlekDeck.ipa | tee FlekDeck.sha256
