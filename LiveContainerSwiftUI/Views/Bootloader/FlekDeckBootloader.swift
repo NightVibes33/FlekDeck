@@ -1131,7 +1131,7 @@ private func recoveryFlashROM(_ c: NXRecoveryViewController, archive: URL) {
             let manifest = try flashROM(archive: preservedArchive, log: log)
             log.info("flashed \(manifest.name) \(manifest.version)")
             DispatchQueue.main.async {
-                c.recoveryLog("\nFlash complete. The original ZIP is preserved unchanged and the ROM slot is installed. FlekDeck will try the slot on the next launch; recovery remains available with one Volume Down press during startup.")
+                c.recoveryLog("\nFlash complete.\nPress both volume buttons to reboot when ready.")
                 c.finishConsole(selectAction: { _ in
                     restartSelf()
                 })
