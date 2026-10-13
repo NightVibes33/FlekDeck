@@ -1286,6 +1286,7 @@ private enum FlekDeckBootPaths {
             "Shared/LaunchServices/org.emexlabs.bootstrapd.plist",
             "Shared/LaunchServices/org.emexlabs.compilerd.plist",
             "Frameworks/bootstrapd.dylib",
+            "Frameworks/libBroadpatch.dylib",
             "Frameworks/MobileDevelopmentService.dylib",
             "Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler",
             "Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit",

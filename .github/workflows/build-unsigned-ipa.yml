@@ -460,9 +460,11 @@ jobs:
           cp -R "$NYXIAN_SOURCE/Shared" "$APP/Shared"
           mkdir -p "$APP/Frameworks"
           cp "$PE_PRODUCTS/bootstrapd.dylib" "$APP/Frameworks/bootstrapd.dylib"
+          cp "$PE_PRODUCTS/libBroadpatch.dylib" "$APP/Frameworks/libBroadpatch.dylib"
           cp "$PE_PREBUILT/MobileDevelopmentService.dylib" "$APP/Frameworks/MobileDevelopmentService.dylib"
           cp -R "$PE_PREBUILT/MobileDevelopmentKit.framework" "$APP/Frameworks/"
           ldid -S "$APP/Frameworks/bootstrapd.dylib"
+          ldid -S "$APP/Frameworks/libBroadpatch.dylib"
           ldid -S "$APP/Frameworks/MobileDevelopmentService.dylib"
           ldid -S "$APP/Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler"
           find "$APP/Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/Frameworks" -type f -name "*.dylib" -print0 | while IFS= read -r -d '' library; do
@@ -474,7 +476,7 @@ jobs:
             Shared/kernel/ksurface_abi.h \
             Shared/LaunchServices/org.emexlabs.bootstrapd.plist \
             Shared/LaunchServices/org.emexlabs.compilerd.plist \
-            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib \
+            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib Frameworks/libBroadpatch.dylib \
             Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler \
             Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit; do
             test -s "$APP/$required" || { echo "Missing Nyxian runtime asset: $required"; exit 1; }
@@ -518,7 +520,7 @@ jobs:
             Shared/kernel/ksurface_abi.h \
             Shared/LaunchServices/org.emexlabs.bootstrapd.plist \
             Shared/LaunchServices/org.emexlabs.compilerd.plist \
-            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib \
+            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib Frameworks/libBroadpatch.dylib \
             Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler \
             Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit; do
             grep -Fxq "Payload/FlekDeck.app/$required" FlekDeck-ipa-entries.txt || { echo "IPA missing Nyxian runtime asset: $required"; exit 1; }
