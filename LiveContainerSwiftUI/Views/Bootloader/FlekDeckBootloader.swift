@@ -1274,6 +1274,36 @@ private enum FlekDeckBootPaths {
     static let previousSlot: URL = root.appendingPathComponent("Slot/.A.previous", isDirectory: true)
     static let imports: URL = root.appendingPathComponent("Imports", isDirectory: true)
 
+    /// Nyxian's NXBootstrap and virtual filesystem resolve these paths
+    /// relative to Bundle.main, not the flashed ROM or LiveProcess.appex.
+    /// Never jump into NXSlotMain when any required host asset is absent.
+    static func missingNyxianBootAssets() -> [String] {
+        let resources = [
+            "Shared/lib.zip",
+            "Shared/include.zip",
+            "Shared/swift.zip",
+            "Shared/kernel/ksurface_abi.h",
+            "Shared/LaunchServices/org.emexlabs.bootstrapd.plist",
+            "Shared/LaunchServices/org.emexlabs.compilerd.plist",
+            "Frameworks/bootstrapd.dylib",
+            "Frameworks/MobileDevelopmentService.dylib",
+            "PlugIns/LiveProcess.appex/Frameworks/FlekDeckPERuntime.dylib",
+            "PlugIns/LiveProcess.appex/Frameworks/LiveShim.framework/LiveShim",
+            "PlugIns/LiveProcess.appex/Frameworks/libBroadpatch.dylib"
+        ]
+        return resources.filter {
+            !FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent($0).path)
+        }
+    }
+
+    static func availableSpaceInMegabytes() -> Int? {
+        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()),
+              let free = attrs[.systemFreeSize] as? NSNumber else {
+            return nil
+        }
+        return Int(free.int64Value / 1_000_000)
+    }
+
     static func previousSessionWasActive() -> Bool {
         guard let plist = NSDictionary(contentsOf: root.appendingPathComponent("boot-session.plist")) else {
             return false
@@ -1512,6 +1542,24 @@ private final class FlekDeckBootViewController: UIViewController {
                     return
                 }
                 
+                FlekDeckBootTrace.mark("rom-runtime-preflight-enter")
+                let missingAssets = FlekDeckBootPaths.missingNyxianBootAssets()
+                if !missingAssets.isEmpty {
+                    let message = "Required Nyxian userspace boot resources are missing from this IPA: " +
+                        missingAssets.joined(separator: ", ") +
+                        ". Install a complete FlekDeck build; the flashed ROM was not modified."
+                    FlekDeckBootTrace.mark("rom-runtime-preflight-failed \(message)")
+                    self.enterRecovery(error: "ERROR: " + message)
+                    return
+                }
+                if let freeMB = FlekDeckBootPaths.availableSpaceInMegabytes() {
+                    FlekDeckBootTrace.mark("rom-runtime-preflight-free-storage-mb=\(freeMB)")
+                    if freeMB < 4000 {
+                        FlekDeckBootTrace.mark("rom-runtime-preflight-warning-low-storage bootstrap-needs-room")
+                    }
+                }
+                FlekDeckBootTrace.mark("rom-runtime-preflight-ready")
+
                 do {
                     try FlekDeckBootPaths.setSessionActive(true)
                 } catch {
