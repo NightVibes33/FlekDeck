@@ -8,6 +8,13 @@
 #import <dlfcn.h>
 #import <UIKit/UIKit.h>
 #import <mach-o/dyld.h>
+#import <objc/message.h>
+#import <sys/types.h>
+#import <unistd.h>
+#import <stdlib.h>
+#import <string.h>
+#import <errno.h>
+#import "../LiveContainer/LCSharedUtils.h"
 #import "../LiveContainer/utils.h"
 #import "../LiveContainer/Tweaks/Tweaks.h"
 #import "../SideStore/XPCServer.h"
@@ -36,6 +43,185 @@ static NSMutableArray<NSURL *> *activeResourceURLs;
 
 extern int LiveContainerMain(int argc, char *argv[]);
 static char **_envp, **_apple = NULL;
+
+static void *flekDeckROMRuntimeHandle;
+static NSString *flekDeckROMRuntimeError;
+
+static NSError *FlekDeckPEError(NSInteger code, NSString *description) {
+    return [NSError errorWithDomain:@"FlekDeck.PEBridge"
+                               code:code
+                           userInfo:@{NSLocalizedDescriptionKey: description ?: @"FlekDeck could not start the ROM process."}];
+}
+
+/*
+ * The PE client library is rebuilt from pinned upstream source for FlekDeck.
+ * Load its secure-coding classes before NSExtension decodes a ROM request.
+ * Normal LiveContainer requests never activate the PE client hooks.
+ */
+static BOOL FlekDeckPrepareROMRuntime(void) {
+    if (flekDeckROMRuntimeHandle) return YES;
+    flekDeckROMRuntimeError = nil;
+    NSURL *sharedContainer = [LCSharedUtils appGroupPath];
+    NSURL *bootRoot = [sharedContainer URLByAppendingPathComponent:@"FlekDeck/Boot" isDirectory:YES];
+    NSDictionary *session = [NSDictionary dictionaryWithContentsOfURL:
+        [bootRoot URLByAppendingPathComponent:@"boot-session.plist"]];
+    if (![session[@"active"] boolValue]) {
+        flekDeckROMRuntimeError = @"There is no active FlekDeck ROM boot session.";
+        return NO;
+    }
+    if (@available(iOS 18.0, *)) {
+        NSURL *clientLibrary = [NSBundle.mainBundle.privateFrameworksURL
+            URLByAppendingPathComponent:@"FlekDeckPERuntime.dylib"];
+        if (![NSFileManager.defaultManager fileExistsAtPath:clientLibrary.path]) {
+            flekDeckROMRuntimeError = @"The FlekDeck PE client library is missing from this build.";
+            return NO;
+        }
+        dlerror();
+        void *handle = dlopen(clientLibrary.fileSystemRepresentation,
+                             RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
+        if (!handle) {
+            const char *detail = dlerror();
+            flekDeckROMRuntimeError = [NSString stringWithFormat:@"Could not load the FlekDeck PE client: %s", detail ?: "unknown dyld error"];
+            return NO;
+        }
+        for (NSString *className in @[@"PEFileTable", @"PEFileHandle", @"PEMachPort"]) {
+            if (NSClassFromString(className) == Nil) {
+                flekDeckROMRuntimeError = [NSString stringWithFormat:@"The PE client did not register %@.", className];
+                return NO;
+            }
+        }
+        flekDeckROMRuntimeHandle = handle;
+        return YES;
+    }
+    flekDeckROMRuntimeError = @"The Nyxian 0.11.5 PE client requires iOS 18 or newer.";
+    return NO;
+}
+
+static int FlekDeckRejectPERequest(NSString *detail) {
+    NSError *error = FlekDeckPEError(ENOTSUP, detail);
+    [LiveProcessHandler.extensionContext cancelRequestWithError:error];
+    NSLog(@"LiveProcess: %@", detail);
+    return ENOTSUP;
+}
+
+typedef void (*FlekDeckPEConnectHostFunction)(NSXPCListenerEndpoint *endpoint);
+typedef void (*FlekDeckPEConnectSyscallFunction)(id syscallPort);
+typedef int (*FlekDeckPEEnvironmentInitFunction)(NSInteger mode, NSString *executablePath, int argc, char *argv[]);
+
+static int FlekDeckRunPERequest(NSDictionary *appInfo) {
+    if (!FlekDeckPrepareROMRuntime()) {
+        return FlekDeckRejectPERequest(flekDeckROMRuntimeError ?: @"The imported ROM runtime could not be loaded.");
+    }
+
+    FlekDeckPEConnectHostFunction connectHost =
+        (FlekDeckPEConnectHostFunction)dlsym(flekDeckROMRuntimeHandle, "environment_client_connect_to_host");
+    FlekDeckPEConnectSyscallFunction connectSyscall =
+        (FlekDeckPEConnectSyscallFunction)dlsym(flekDeckROMRuntimeHandle, "environment_client_connect_to_syscall_proxy");
+    FlekDeckPEEnvironmentInitFunction environmentInit =
+        (FlekDeckPEEnvironmentInitFunction)dlsym(flekDeckROMRuntimeHandle, "environment_init");
+    if (!connectHost || !connectSyscall || !environmentInit) {
+        return FlekDeckRejectPERequest(
+            @"The packaged PE client is missing a required environment entry point.");
+    }
+
+    NSString *executablePath = appInfo[@"PEExecutablePath"];
+    NSXPCListenerEndpoint *endpoint = appInfo[@"PEEndpoint"];
+    id syscallPort = appInfo[@"PESyscallPort"];
+    NSDictionary *environment = appInfo[@"PEEnvironment"];
+    NSArray *arguments = appInfo[@"PEArguments"];
+    NSString *workingDirectory = appInfo[@"PEWorkingDirectory"];
+    id fileTable = appInfo[@"PEFileTable"];
+    NSArray *permissions = appInfo[@"PEFilePermissions"];
+
+    if (![executablePath isKindOfClass:NSString.class] || executablePath.length == 0 ||
+        ![endpoint isKindOfClass:NSXPCListenerEndpoint.class] ||
+        ![syscallPort isKindOfClass:NSClassFromString(@"PEMachPort")] ||
+        (environment && ![environment isKindOfClass:NSDictionary.class]) ||
+        (arguments && ![arguments isKindOfClass:NSArray.class]) ||
+        (permissions && ![permissions isKindOfClass:NSArray.class])) {
+        return FlekDeckRejectPERequest(@"The PE launch request is missing required endpoint, executable, argument, or environment data.");
+    }
+
+    typedef int64_t (*FlekDeckSandboxConsumeFunction)(const char *token);
+    FlekDeckSandboxConsumeFunction consume =
+        (FlekDeckSandboxConsumeFunction)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
+    if (permissions.count && !consume) {
+        return FlekDeckRejectPERequest(@"LiveProcess cannot consume the ROM's sandbox file permissions.");
+    }
+    for (id permission in permissions) {
+        if (![permission isKindOfClass:NSData.class] || ![permission length] ||
+            [permission length] > 1048576) {
+            return FlekDeckRejectPERequest(@"The ROM supplied an invalid sandbox file permission.");
+        }
+        NSMutableData *token = [permission mutableCopy];
+        const char terminator = '\0';
+        [token appendBytes:&terminator length:1];
+        if (consume(token.bytes) < 0) {
+            return FlekDeckRejectPERequest(@"LiveProcess could not consume a ROM sandbox file permission.");
+        }
+    }
+
+    NSString *directory = [workingDirectory isKindOfClass:NSString.class] && workingDirectory.length
+        ? workingDirectory
+        : [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+    if (chdir(directory.fileSystemRepresentation) != 0) {
+        return FlekDeckRejectPERequest([NSString stringWithFormat:@"Could not enter the ROM working directory %@: %s",
+                                        directory, strerror(errno)]);
+    }
+
+    SEL applySelector = NSSelectorFromString(@"apply");
+    if ([fileTable isKindOfClass:NSClassFromString(@"PEFileTable")] &&
+        [fileTable respondsToSelector:applySelector]) {
+        ((void (*)(id, SEL))objc_msgSend)(fileTable, applySelector);
+        setvbuf(stdout, NULL, _IONBF, 0);
+        setvbuf(stderr, NULL, _IONBF, 0);
+    } else if (fileTable) {
+        return FlekDeckRejectPERequest(@"The ROM file-descriptor table is not compatible with FlekDeck LiveProcess.");
+    }
+
+    connectHost(endpoint);
+    connectSyscall(syscallPort);
+
+    for (NSString *key in NSProcessInfo.processInfo.environment.allKeys) {
+        unsetenv(key.UTF8String);
+    }
+    for (id key in environment) {
+        id value = environment[key];
+        if ([key isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class]) {
+            setenv([key UTF8String], [value UTF8String], 1);
+        }
+    }
+
+    NSArray *sourceArguments = arguments.count ? arguments : @[executablePath];
+    char **guestArgv = calloc(sourceArguments.count + 1, sizeof(char *));
+    if (!guestArgv) {
+        return FlekDeckRejectPERequest(@"LiveProcess could not allocate the ROM argument vector.");
+    }
+    for (NSUInteger i = 0; i < sourceArguments.count; i++) {
+        id argument = sourceArguments[i];
+        if (![argument isKindOfClass:NSString.class]) {
+            for (NSUInteger j = 0; j < i; j++) free(guestArgv[j]);
+            free(guestArgv);
+            return FlekDeckRejectPERequest(@"The ROM supplied a non-string process argument.");
+        }
+        guestArgv[i] = strdup([argument UTF8String]);
+        if (!guestArgv[i]) {
+            for (NSUInteger j = 0; j < i; j++) free(guestArgv[j]);
+            free(guestArgv);
+            return FlekDeckRejectPERequest(@"LiveProcess could not copy the ROM argument vector.");
+        }
+    }
+
+    SEL argumentsSelector = NSSelectorFromString(@"setArguments:");
+    if ([NSProcessInfo.processInfo respondsToSelector:argumentsSelector]) {
+        ((void (*)(id, SEL, id))objc_msgSend)(NSProcessInfo.processInfo, argumentsSelector, sourceArguments);
+    }
+    int status = environmentInit(1, executablePath, (int)sourceArguments.count, guestArgv);
+    for (NSUInteger i = 0; i < sourceArguments.count; i++) free(guestArgv[i]);
+    free(guestArgv);
+    return status;
+}
+
 
 static NSError *LiveProcessLaunchError(NSInteger code, NSString *description) {
     return [NSError errorWithDomain:@"LiveProcess"
@@ -143,6 +329,11 @@ int LiveProcessMain(int argc, char *argv[]) {
     // Ensure app info is delivered
     NSDictionary *appInfo = LiveProcessHandler.retrievedAppInfo;
     NSCAssert(appInfo, @"Failed to retrieve app info");
+
+    // The Nyxian PE launch path is separate from ordinary LiveContainer app launches.
+    if ([appInfo[@"PEExecutablePath"] isKindOfClass:NSString.class]) {
+        exit(FlekDeckRunPERequest(appInfo));
+    }
     
     // Check if we received a request to execute a custom payload
     NSString *customPayloadDylib = appInfo[@"customPayloadDylib"];
@@ -264,10 +455,18 @@ static void* hook_dlopen(void* dyldApiInstancePtr, const char* path, int mode) {
 
 // Extension entry point
 int NSExtensionMain(int argc, char *argv[], char *envp[], char *apple[]) {
+    // Register the adapted PE client classes before decoding an active ROM request.
+    BOOL isROMProcess = FlekDeckPrepareROMRuntime();
+    void (*resecureDecoder)(void) = isROMProcess
+        ? (void (*)(void))dlsym(flekDeckROMRuntimeHandle, "ResecureDecoder") : NULL;
+    if (resecureDecoder) {
+        resecureDecoder();
+    } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wundeclared-selector"
     method_setImplementation(class_getInstanceMethod(NSClassFromString(@"NSXPCDecoder"), @selector(_validateAllowedClass:forKey:allowingInvocations:)), (IMP)hook_do_nothing);
 #pragma clang diagnostic pop
+    }
     // hook dlopen UIKit
     performHookDyldApi("dlopen", 2, (void**)&orig_dlopen, hook_dlopen);
     // call the real one
@@ -276,3 +475,4 @@ int NSExtensionMain(int argc, char *argv[], char *envp[], char *apple[]) {
     int (*orig_NSExtensionMain)(int argc, char * argv[]) = dlsym(RTLD_NEXT, "NSExtensionMain");
     return orig_NSExtensionMain(argc, argv);
 }
+

@@ -10,6 +10,10 @@
 #include "../LiveContainer/LCSharedUtils.h"
 #include "Utilities/LCUtils.h"
 #include "Utilities/unarchive.h"
+#include "Views/Bootloader/NXRecoveryViewController.h"
+#include "Views/Bootloader/NXVolumeButtonMonitor.h"
+#include "Views/Bootloader/FlekROMArchive.h"
+#include "Views/Bootloader/FlekROMSigning.h"
 #include "../MultitaskSupport/AppSceneViewController.h"
 #include "../MultitaskSupport/LCGuestVolume.h"
 #include "../MultitaskSupport/DecoratedAppSceneViewController.h"
@@ -19,3 +23,4 @@
 #include "../LiveContainer/FoundationPrivate.h"
 
 #endif /* LiveContainerSwiftUI_Bridging_Header_h_h */
+

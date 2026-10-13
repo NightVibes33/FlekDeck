@@ -7,8 +7,24 @@ on:
       - main
       - experiment/multitask-control-jit-diagnosis
       - experiment/parallel-guest-layout-safearea
+      - feature/boot-menu-zip-import
     paths:
       - '.github/trigger-unsigned-ipa'
+      - '.github/workflows/build-unsigned-ipa.yml'
+      - 'LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift'
+      - 'LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h'
+      - 'LiveContainerSwiftUI/Views/Bootloader/**'
+      - 'LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift'
+      - 'docs/flek-bootloader-parity.md'
+      - 'LiveProcess/**'
+      - 'Tools/prepare_flekdeck_pe_runtime.py'
+      - 'Tools/PEClientVRoot.c'
+      - 'Tools/test_flek_rom_archive.m'
+      - 'ThirdParty/FlekDeckPERuntime-NOTICE.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -19,6 +35,7 @@ jobs:
     env:
       VIBE_SHA: 318d7b0380898840da81c99278b39729147f7fea
       VIBE_ROOT: /tmp/vibe/LiveContainer-3.8.0
+      NYXIAN_PE_SHA: 350dd8dbeb796bc0ff5bc91ef770f1a2994432e7
     steps:
       - name: Checkout FlekDeck without recursive submodules
         uses: actions/checkout@v4
@@ -38,6 +55,15 @@ jobs:
           git clone --filter=blob:none --no-checkout https://github.com/krzyzanowskim/OpenSSL.git OpenSSL
           git -C OpenSSL fetch --no-tags origin "$VIBE_OPENSSL"
           git -C OpenSSL checkout --detach "$VIBE_OPENSSL"
+
+      - name: Test ROM extraction through iOS-style ancestor symlinks
+        run: |
+          set -euo pipefail
+          xcrun clang -fobjc-arc -framework Foundation \
+            Tools/test_flek_rom_archive.m \
+            LiveContainerSwiftUI/Views/Bootloader/FlekROMArchive.m \
+            -larchive -o /tmp/flek-rom-archive-test
+          /tmp/flek-rom-archive-test
 
       - name: Copy exact Vibe signing JIT runtime
         run: |
@@ -75,9 +101,7 @@ jobs:
             LiveContainerSwiftUI/Models/LCAppInfo.m
             LiveContainerSwiftUI/Models/LCAppModel.swift
             LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
-            LiveProcess/main.m
             LiveProcess/SideStoreLiveProcessHandler.m
-            LiveProcess/LiveProcess.entitlements
             TweakLoader/DocumentPicker.m
             TweakLoader/Notification.m
             TweakLoader/TweakLoader.m
@@ -126,9 +150,7 @@ jobs:
             LiveContainerSwiftUI/Models/LCAppInfo.m
             LiveContainerSwiftUI/Models/LCAppModel.swift
             LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
-            LiveProcess/main.m
             LiveProcess/SideStoreLiveProcessHandler.m
-            LiveProcess/LiveProcess.entitlements
             TweakLoader/DocumentPicker.m
             TweakLoader/Notification.m
             TweakLoader/TweakLoader.m
@@ -146,7 +168,7 @@ jobs:
           diff -qr litehook "$V/litehook"
           VIBE_OPENSSL="$(git -C OpenSSL rev-parse HEAD)"
           test "$VIBE_OPENSSL" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/OpenSSL")"
-          echo "Exact Vibe signing/JIT parity proven."
+          echo "Exact Vibe signing/JIT parity proven; FlekDeck owns the LiveProcess ROM request adapter."
 
       # Vibe intentionally overwrites several guest/runtime files above. Every
       # Flek-specific Single switcher/PiP/viewport layer MUST be reconstructed after
@@ -183,9 +205,46 @@ jobs:
         with:
           xcode-version: '26.6'
 
+      - name: Build adapted FlekDeck PE client from pinned source
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/emexlab/Nyxian.git /tmp/flek-pe-source
+          git -C /tmp/flek-pe-source fetch --no-tags origin "$NYXIAN_PE_SHA"
+          git -C /tmp/flek-pe-source checkout --detach "$NYXIAN_PE_SHA"
+          test "$(git -C /tmp/flek-pe-source rev-parse HEAD)" = "$NYXIAN_PE_SHA"
+          python3 Tools/prepare_flekdeck_pe_runtime.py /tmp/flek-pe-source
+          mkdir -p build
+          set +e
+          xcodebuild build \
+            -project /tmp/flek-pe-source/Nyxian.xcodeproj \
+            -target LiveProcess \
+            -configuration Release \
+            -sdk iphoneos -arch arm64 \
+            SYMROOT="$PWD/build/pe-runtime" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee build/pe-runtime-build.log | xcpretty
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            grep -nE 'error:|fatal error:|Undefined symbols|duplicate symbol|ld:' build/pe-runtime-build.log | tail -150 || true
+            exit "$status"
+          fi
+          CLIENT="$PWD/build/pe-runtime/Release-iphoneos/FlekDeckPERuntime.dylib"
+          test -f "$CLIENT"
+          nm -gU "$CLIENT" > build/pe-runtime-symbols.txt
+          grep -q _environment_client_connect_to_host build/pe-runtime-symbols.txt
+          grep -q _environment_client_connect_to_syscall_proxy build/pe-runtime-symbols.txt
+          grep -q _environment_init build/pe-runtime-symbols.txt
+          grep -q _ResecureDecoder build/pe-runtime-symbols.txt
+          ! grep -q _NSExtensionMain build/pe-runtime-symbols.txt
+
       - name: Parse and verify compatibility boundary
         run: |
           set -euo pipefail
+          python3 -m py_compile Tools/prepare_flekdeck_pe_runtime.py
+          plutil -lint LiveProcess/LiveProcess.entitlements LiveProcess/LiveProcessRelease.entitlements
+          grep -q FlekDeckRunPERequest LiveProcess/main.m
+          grep -q FlekDeckPrepareROMRuntime LiveProcess/main.m
           python3 -m py_compile Tools/patch_free_sidestore_support.py
           python3 -m py_compile Tools/patch_livecontainer_multitask_stikdebug.py
           python3 -m py_compile Tools/patch_parallel_guest_viewport_base.py
@@ -193,6 +252,7 @@ jobs:
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           xcrun swiftc -frontend -parse MultitaskSupport/MultitaskDockView.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Models/LCAppModel.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
           grep -q 'com.fs.flekdeck' SideStoreSupport/SideStoreHooks.m
@@ -280,6 +340,39 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$PWD/build/FlekDeck-host-entitlements.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$PWD/build/FlekDeck-host-entitlements.plist")" = "AAAAA11111.com.fs.flekdeck"
           test "$(/usr/libexec/PlistBuddy -c 'Print :ALTAppGroups:0' "$APP/Info.plist")" = "group.com.SideStore.SideStore"
+          EXTENSION="$APP/PlugIns/LiveProcess.appex"
+          test -d "$EXTENSION"
+          PE_PRODUCTS="$PWD/build/pe-runtime/Release-iphoneos"
+          mkdir -p "$EXTENSION/Frameworks"
+          cp "$PE_PRODUCTS/FlekDeckPERuntime.dylib" "$EXTENSION/Frameworks/"
+          cp -R "$PE_PRODUCTS/LiveShim.framework" "$EXTENSION/Frameworks/"
+          cp "$PE_PRODUCTS/libBroadpatch.dylib" "$EXTENSION/Frameworks/"
+          cp ThirdParty/FlekDeckPERuntime-NOTICE.md "$APP/PE-Runtime-NOTICE.md"
+          ldid -S "$EXTENSION/Frameworks/FlekDeckPERuntime.dylib"
+          ldid -S "$EXTENSION/Frameworks/LiveShim.framework/LiveShim"
+          ldid -S "$EXTENSION/Frameworks/libBroadpatch.dylib"
+          EXT_EXECUTABLE="$(plutil -extract CFBundleExecutable raw "$EXTENSION/Info.plist")"
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+          source = Path('LiveProcess/LiveProcessRelease.entitlements').read_text()
+          replacements = {
+              '$(APP_GROUP_SIDESTORE)': 'group.com.SideStore.SideStore',
+              '$(APP_GROUP_ALTSTORE)': 'group.com.rileytestut.AltStore',
+              '$(AppIdentifierPrefix)': 'AAAAA11111.',
+          }
+          for old, new in replacements.items():
+              source = source.replace(old, new)
+          if '$(' in source:
+              raise SystemExit('unresolved LiveProcess entitlement variable remains')
+          entitlements = plistlib.loads(source.encode())
+          entitlements['application-identifier'] = 'AAAAA11111.com.fs.flekdeck.LiveProcess'
+          Path('build/FlekDeck-LiveProcess.entitlements').write_bytes(plistlib.dumps(entitlements))
+          PY
+          plutil -lint build/FlekDeck-LiveProcess.entitlements
+          ldid -S"$PWD/build/FlekDeck-LiveProcess.entitlements" "$EXTENSION/$EXT_EXECUTABLE"
+          ldid -e "$EXTENSION/$EXT_EXECUTABLE" > build/FlekDeck-LiveProcess-signed-entitlements.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' build/FlekDeck-LiveProcess-signed-entitlements.plist)" = 'group.com.SideStore.SideStore'
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
@@ -297,4 +390,7 @@ jobs:
             build/FlekDeck.ipa
             build/FlekDeck.sha256
             build/FlekDeck-host-entitlements.plist
+            build/FlekDeck-LiveProcess-signed-entitlements.plist
+            build/pe-runtime-symbols.txt
           if-no-files-found: error
+

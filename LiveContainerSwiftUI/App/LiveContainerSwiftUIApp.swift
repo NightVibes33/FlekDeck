@@ -121,7 +121,9 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
     
     var body: some Scene {
         WindowGroup(id: "Main") {
-            LCTabView()
+            FlekDeckBootGateView {
+                LCTabView()
+            }
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .environmentObject(DataManager.shared.model)
                 .environmentObject(LCAppSortManager.shared)
@@ -156,3 +158,4 @@ private struct MultitaskScene: Scene {
         }
     }
 }
+
