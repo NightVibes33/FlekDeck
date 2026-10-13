@@ -238,6 +238,27 @@ jobs:
           grep -q _ResecureDecoder build/pe-runtime-symbols.txt
           ! grep -q _NSExtensionMain build/pe-runtime-symbols.txt
 
+          # The ROM mounts these two actual Nyxian userspace services from
+          # the host app bundle. A PE client alone cannot boot the ROM.
+          for target in bootstrapd MobileDevelopmentService; do
+            set +e
+            xcodebuild build \
+              -project /tmp/flek-pe-source/Nyxian.xcodeproj \
+              -target "$target" \
+              -configuration Release \
+              -sdk iphoneos -arch arm64 \
+              SYMROOT="$PWD/build/pe-runtime" \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+              2>&1 | tee "build/${target}-build.log" | xcpretty
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -ne 0 ]; then
+              grep -nE 'error:|fatal error:|Undefined symbols|duplicate symbol|ld:' "build/${target}-build.log" | tail -150 || true
+              exit "$status"
+            fi
+            test -s "build/pe-runtime/Release-iphoneos/${target}.dylib"
+          done
+
       - name: Parse and verify compatibility boundary
         run: |
           set -euo pipefail
@@ -347,6 +368,36 @@ jobs:
           cp "$PE_PRODUCTS/FlekDeckPERuntime.dylib" "$EXTENSION/Frameworks/"
           cp -R "$PE_PRODUCTS/LiveShim.framework" "$EXTENSION/Frameworks/"
           cp "$PE_PRODUCTS/libBroadpatch.dylib" "$EXTENSION/Frameworks/"
+
+          # NXBootstrap uses Bundle.main/Shared/{lib,include,swift}.zip and
+          # the kernel mounts Shared/{kernel,LaunchServices} plus these two
+          # services. Preserve the entire Shared tree at this exact pinned
+          # Nyxian revision; generating only a ROM splash is not sufficient.
+          NYXIAN_SOURCE="/tmp/flek-pe-source"
+          test -s "$NYXIAN_SOURCE/Shared/lib.zip"
+          test -s "$NYXIAN_SOURCE/Shared/include.zip"
+          test -s "$NYXIAN_SOURCE/Shared/swift.zip"
+          for archive in lib.zip include.zip swift.zip; do
+            unzip -tq "$NYXIAN_SOURCE/Shared/$archive" > /dev/null
+          done
+          mkdir -p "$NYXIAN_SOURCE/Shared/kernel"
+          rsync -am --include='*/' --include='*.h' --exclude='*' "$NYXIAN_SOURCE/Nyxian/" "$NYXIAN_SOURCE/Shared/kernel/"
+          rsync -am --include='*/' --include='*.h' --exclude='*' "$NYXIAN_SOURCE/LiveProcess/" "$NYXIAN_SOURCE/Shared/kernel/"
+          cp "$NYXIAN_SOURCE/ksurface_abi.h" "$NYXIAN_SOURCE/Shared/kernel/ksurface_abi.h"
+          test -s "$NYXIAN_SOURCE/Shared/kernel/ksurface_abi.h"
+          cp -R "$NYXIAN_SOURCE/Shared" "$APP/Shared"
+          mkdir -p "$APP/Frameworks"
+          cp "$PE_PRODUCTS/bootstrapd.dylib" "$APP/Frameworks/bootstrapd.dylib"
+          cp "$PE_PRODUCTS/MobileDevelopmentService.dylib" "$APP/Frameworks/MobileDevelopmentService.dylib"
+          for required in \
+            Shared/lib.zip Shared/include.zip Shared/swift.zip \
+            Shared/kernel/ksurface_abi.h \
+            Shared/LaunchServices/org.emexlabs.bootstrapd.plist \
+            Shared/LaunchServices/org.emexlabs.compilerd.plist \
+            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib; do
+            test -s "$APP/$required" || { echo "Missing Nyxian runtime asset: $required"; exit 1; }
+          done
+          du -sh "$APP/Shared" "$APP/Frameworks/bootstrapd.dylib" "$APP/Frameworks/MobileDevelopmentService.dylib"
           cp ThirdParty/FlekDeckPERuntime-NOTICE.md "$APP/PE-Runtime-NOTICE.md"
           ldid -S "$EXTENSION/Frameworks/FlekDeckPERuntime.dylib"
           ldid -S "$EXTENSION/Frameworks/LiveShim.framework/LiveShim"
@@ -379,6 +430,14 @@ jobs:
           cd build
           zip -qry FlekDeck.ipa Payload
           unzip -t FlekDeck.ipa >/dev/null
+          for required in \
+            Shared/lib.zip Shared/include.zip Shared/swift.zip \
+            Shared/kernel/ksurface_abi.h \
+            Shared/LaunchServices/org.emexlabs.bootstrapd.plist \
+            Shared/LaunchServices/org.emexlabs.compilerd.plist \
+            Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib; do
+            unzip -Z1 FlekDeck.ipa | grep -Fxq "Payload/FlekDeck.app/$required" || { echo "IPA missing Nyxian runtime asset: $required"; exit 1; }
+          done
           shasum -a 256 FlekDeck.ipa | tee FlekDeck.sha256
           ls -lh FlekDeck.ipa FlekDeck.sha256 FlekDeck-host-entitlements.plist
 
