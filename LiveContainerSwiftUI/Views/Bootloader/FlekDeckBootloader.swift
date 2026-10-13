@@ -1008,10 +1008,8 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
     
     let manifest: ROMManifest = try ROMManifest(manifestPlistURL: slot.appendingPathComponent("manifest.plist"))
 
-    if manifest.paths.contains(where: { $0.codesigning.neededNXT2 }),
-       FlekDeckBootSharedRootURL() == nil {
-        throw romError("This ROM requires an app group shared by FlekDeck and LiveProcess. Re-sign both with the same application group before importing it.")
-    }
+    // PEFilePermissions grants the extension access to host-owned ROM files.
+    // App Groups are optional; ESign may legitimately sign without them.
     let executable = try slotFile(manifest.executable, in: slot)
     guard fm.fileExists(atPath: executable.path) else {
         throw romError("\(manifest.name): executable \(manifest.executable) is missing")
@@ -1223,7 +1221,9 @@ func recoveryShowMenu(recoveryController: NXRecoveryViewController) {
 private enum FlekDeckBootPaths {
     private static let legacyRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("FlekDeck/Boot", isDirectory: true)
-    static let root: URL = FlekDeckBootSharedRootURL() ?? legacyRoot
+    // The upstream sandbox grant issuer only grants paths inside the host HOME.
+    // Store ROMs here even when the signing profile also authorizes App Groups.
+    static let root: URL = legacyRoot
     static let slot: URL = root.appendingPathComponent("Slot/A", isDirectory: true)
     static let stagingSlot: URL = root.appendingPathComponent("Slot/.A.installing", isDirectory: true)
     static let previousSlot: URL = root.appendingPathComponent("Slot/.A.previous", isDirectory: true)
@@ -1238,17 +1238,26 @@ private enum FlekDeckBootPaths {
 
     static func recoverInterruptedInstall() throws {
         let manager = FileManager.default
-        // LiveProcess runs in its own sandbox. Keep the installed ROM under
-        // the app-group container shared by FlekDeck and that extension. Copy
-        // the previous app-container store forward once, retaining the old
-        // files as a recovery copy until the user removes them.
-        if root.standardizedFileURL != legacyRoot.standardizedFileURL,
-           !manager.fileExists(atPath: root.path),
-           manager.fileExists(atPath: legacyRoot.path) {
+        // Recover earlier App Group installs without deleting their source.
+        // New installs stay inside the host sandbox and use PE file grants.
+        let sharedRoot = FlekDeckBootSharedRootURL()
+        if let sharedRoot,
+           sharedRoot.standardizedFileURL != root.standardizedFileURL,
+           manager.fileExists(atPath: sharedRoot.path),
+           !manager.fileExists(atPath: root.path) {
             try manager.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try manager.copyItem(at: legacyRoot, to: root)
+            try manager.copyItem(at: sharedRoot, to: root)
         }
         try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        if let sharedRoot,
+           sharedRoot.standardizedFileURL != root.standardizedFileURL,
+           !manager.fileExists(atPath: slot.path) {
+            let sharedSlot = sharedRoot.appendingPathComponent("Slot/A", isDirectory: true)
+            if manager.fileExists(atPath: sharedSlot.path) {
+                try manager.createDirectory(at: slot.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try manager.copyItem(at: sharedSlot, to: slot)
+            }
+        }
 
         let slotExists = manager.fileExists(atPath: slot.path)
         let previousExists = manager.fileExists(atPath: previousSlot.path)

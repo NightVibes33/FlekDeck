@@ -56,19 +56,15 @@ static NSError *FlekDeckPEError(NSInteger code, NSString *description) {
 /*
  * The PE client library is rebuilt from pinned upstream source for FlekDeck.
  * Load its secure-coding classes before NSExtension decodes a ROM request.
- * Normal LiveContainer requests never activate the PE client hooks.
+ * Normal LiveContainer requests never initialize the PE execution environment.
  */
 static BOOL FlekDeckPrepareROMRuntime(void) {
     if (flekDeckROMRuntimeHandle) return YES;
     flekDeckROMRuntimeError = nil;
-    NSURL *sharedContainer = [LCSharedUtils appGroupPath];
-    NSURL *bootRoot = [sharedContainer URLByAppendingPathComponent:@"FlekDeck/Boot" isDirectory:YES];
-    NSDictionary *session = [NSDictionary dictionaryWithContentsOfURL:
-        [bootRoot URLByAppendingPathComponent:@"boot-session.plist"]];
-    if (![session[@"active"] boolValue]) {
-        flekDeckROMRuntimeError = @"There is no active FlekDeck ROM boot session.";
-        return NO;
-    }
+    // Register PE secure-coding classes before decoding the launch request.
+    // Loading these classes does not initialize the PE execution environment.
+    // Private host storage is handed off later through PEFilePermissions, so
+    // the extension cannot use a shared boot-session file to choose this path.
     if (@available(iOS 18.0, *)) {
         NSURL *clientLibrary = [NSBundle.mainBundle.privateFrameworksURL
             URLByAppendingPathComponent:@"FlekDeckPERuntime.dylib"];
@@ -159,6 +155,12 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo) {
         if (consume(token.bytes) < 0) {
             return FlekDeckRejectPERequest(@"LiveProcess could not consume a ROM sandbox file permission.");
         }
+    }
+
+    // Tokens must grant real filesystem access before the PE runtime starts.
+    if (![NSFileManager.defaultManager isReadableFileAtPath:executablePath]) {
+        return FlekDeckRejectPERequest(
+            @"LiveProcess cannot read the ROM executable after consuming PEFilePermissions. Re-import the ROM and export the boot log.");
     }
 
     NSString *directory = [workingDirectory isKindOfClass:NSString.class] && workingDirectory.length
@@ -455,9 +457,9 @@ static void* hook_dlopen(void* dyldApiInstancePtr, const char* path, int mode) {
 
 // Extension entry point
 int NSExtensionMain(int argc, char *argv[], char *envp[], char *apple[]) {
-    // Register the adapted PE client classes before decoding an active ROM request.
-    BOOL isROMProcess = FlekDeckPrepareROMRuntime();
-    void (*resecureDecoder)(void) = isROMProcess
+    // Decode both request types without relying on an App Group marker.
+    BOOL hasPEClient = FlekDeckPrepareROMRuntime();
+    void (*resecureDecoder)(void) = hasPEClient
         ? (void (*)(void))dlsym(flekDeckROMRuntimeHandle, "ResecureDecoder") : NULL;
     if (resecureDecoder) {
         resecureDecoder();
