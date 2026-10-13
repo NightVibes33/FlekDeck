@@ -262,7 +262,7 @@ jobs:
       # Pin an upstream Nyxian build after MobileDevelopmentService was added.
       # Nyxian 0.11.4 predates the service and cannot supply this boot runtime.
       - name: Download upstream Nyxian userspace service dependencies
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           repository: emexlab/Nyxian
           run-id: 36919965048
@@ -273,15 +273,62 @@ jobs:
       - name: Stage exact upstream Nyxian service layout
         run: |
           set -euo pipefail
-          UPSTREAM="$PWD/build/upstream-nyxian/Payload/Nyxian.app"
-          FRAMEWORKS="$UPSTREAM/Frameworks"
-          test -s "$FRAMEWORKS/MobileDevelopmentService.dylib"
-          test -s "$FRAMEWORKS/MobileDevelopmentKit.framework/MobileDevelopmentKit"
-          test -s "$FRAMEWORKS/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler"
-          mkdir -p build/pe-prebuilt
-          cp "$FRAMEWORKS/MobileDevelopmentService.dylib" build/pe-prebuilt/
-          cp -R "$FRAMEWORKS/MobileDevelopmentKit.framework" build/pe-prebuilt/
-          echo 'Verified upstream Nyxian userspace compiler service and nested frameworks.'
+          python3 - "$PWD/build/upstream-nyxian" "$PWD/build/pe-prebuilt" <<'PY'
+          import os
+          import pathlib
+          import shutil
+          import stat
+          import sys
+          import zipfile
+
+          source = pathlib.Path(sys.argv[1])
+          output = pathlib.Path(sys.argv[2])
+          output.mkdir(parents=True, exist_ok=True)
+          prefix = "Payload/Nyxian.app/Frameworks/"
+          must_have = (
+              "MobileDevelopmentService.dylib",
+              "MobileDevelopmentKit.framework/MobileDevelopmentKit",
+              "MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler",
+          )
+          # upload-artifact v7 archive:false stores the IPA directly.
+          # download-artifact v8 retrieves that original IPA, not Payload/.
+          candidates = []
+          for file in source.iterdir():
+              if file.is_file() and zipfile.is_zipfile(file):
+                  with zipfile.ZipFile(file) as z:
+                      names = set(z.namelist())
+                      if all(prefix + item in names for item in must_have):
+                          candidates.append(file)
+          if len(candidates) != 1:
+              raise SystemExit("Expected one unarchived upstream Nyxian IPA with all native compiler services")
+          with zipfile.ZipFile(candidates[0]) as z:
+              for info in z.infolist():
+                  name = info.filename
+                  if not name.startswith(prefix):
+                      continue
+                  relative = name[len(prefix):]
+                  if not (relative == "MobileDevelopmentService.dylib" or
+                          relative.startswith("MobileDevelopmentKit.framework/")):
+                      continue
+                  path = pathlib.PurePosixPath(relative)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(f"Unsafe Nyxian IPA member: {name}")
+                  mode = info.external_attr >> 16
+                  if stat.S_ISLNK(mode):
+                      raise SystemExit(f"Unexpected symlink in upstream userspace service: {name}")
+                  target = output.joinpath(*path.parts)
+                  if info.is_dir():
+                      target.mkdir(parents=True, exist_ok=True)
+                      continue
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  with z.open(info) as src, target.open("wb") as dest:
+                      shutil.copyfileobj(src, dest)
+                  os.chmod(target, (mode & 0o777) or 0o644)
+          for item in must_have:
+              if not (output / item).is_file():
+                  raise SystemExit(f"Missing verified native Nyxian binary: {item}")
+          print("Validated and staged upstream Nyxian services and nested CoreCompiler")
+          PY
 
       - name: Parse and verify compatibility boundary
         run: |
