@@ -1,7 +1,7 @@
 <div align="center">
   <h1>FleckDeck</h1>
   <p><strong>Your apps. Your space. Your own iOS workspace.</strong></p>
-  <p>A familiar Home Screen, a built-in app library, and the VibeContainers runtime underneath.</p>
+  <p>A familiar Home Screen, a built-in App Library.</p>
   <p>
     <a href="https://github.com/NightVibes33/FlekDeck/releases/tag/FlexDeck"><img src="https://img.shields.io/badge/download-current%20release-brightgreen" alt="Download current release"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL v3 license"></a>
