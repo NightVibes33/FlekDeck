@@ -33,6 +33,15 @@ static NSMutableArray<NSURL *> *activeResourceURLs;
     return retrievedAppInfo;
 }
 
+// Upstream Nyxian drops its NSExtensionContext after decoding the ROM
+// launch request, before handing XPC endpoints to its PE runtime. Keeping
+// FlekDeck's separate static references alive retains the XPC request and
+// its Mach send rights even after the payload has been unpacked.
++ (void)releaseROMRequestPayload {
+    retrievedAppInfo = nil;
+    extensionContext = nil;
+}
+
 - (void)beginRequestWithExtensionContext:(NSExtensionContext *)context {
     extensionContext = context;
     retrievedAppInfo = [context.inputItems.firstObject userInfo];
@@ -180,6 +189,13 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo) {
     } else if (fileTable) {
         return FlekDeckRejectPERequest(@"The ROM file-descriptor table is not compatible with FlekDeck LiveProcess.");
     }
+
+    // Mirror Nyxian's ROM-only XPC lifecycle. The endpoint, syscall port,
+    // environment, and argv are now retained in local variables; detach the
+    // original NSExtensionContext and userInfo dictionary before activating
+    // the PE host/syscall connections. Do NOT affect regular guest requests.
+    appInfo = nil;
+    [LiveProcessHandler releaseROMRequestPayload];
 
     connectHost(endpoint);
     connectSyscall(syscallPort);
