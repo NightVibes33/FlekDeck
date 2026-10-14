@@ -433,7 +433,8 @@ jobs:
           # successful host build is insufficient if the signer is omitted.
           test -s "$APP/Frameworks/ZSign.dylib"
           test -s "$APP/Frameworks/OpenSSL.framework/OpenSSL"
-          nm -gU "$APP/Frameworks/ZSign.dylib" | grep -Fq 'OBJC_CLASS_$_ZSigner'
+          nm -gU "$APP/Frameworks/ZSign.dylib" > build/FlekDeck-ZSign-symbols.txt
+          grep -Fq 'OBJC_CLASS_$_ZSigner' build/FlekDeck-ZSign-symbols.txt
           test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$PWD/build/FlekDeck-host-entitlements.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$PWD/build/FlekDeck-host-entitlements.plist")" = "AAAAA11111.com.fs.flekdeck"
           test "$(/usr/libexec/PlistBuddy -c 'Print :ALTAppGroups:0' "$APP/Info.plist")" = "group.com.SideStore.SideStore"
