@@ -96,6 +96,11 @@ BOOL FlekDeckPrepareROMFrontBoardRegistration(NSError **error)
         SEL predicateSelector = NSSelectorFromString(@"predicateMatchingIdentifier:");
         SEL lookupSelector = NSSelectorFromString(@"handleForPredicate:error:");
         SEL createSelector = NSSelectorFromString(@"createProcessWithHandle:");
+        SEL initSelector = NSSelectorFromString(@"_initWithIdentity:handle:executionContext:");
+        BOOL canUseFactory = processClass && [processClass respondsToSelector:createSelector];
+        BOOL canUseInitializer = processClass && class_getInstanceMethod(processClass, initSelector) != NULL;
+        FlekROMTrace(canUseFactory ? "rom-frontboard-factory-available" : "rom-frontboard-factory-missing");
+        FlekROMTrace(canUseInitializer ? "rom-frontboard-initializer-available" : "rom-frontboard-initializer-missing");
         Method auditMethod = manager ? class_getInstanceMethod(manager, auditSelector) : NULL;
         if (!auditMethod || !class_getInstanceMethod(manager, existingSelector)) {
             FlekROMTrace("rom-frontboard-manager-registration-api-unavailable");
@@ -108,9 +113,12 @@ BOOL FlekDeckPrepareROMFrontBoardRegistration(NSError **error)
             setupError = FlekROMSigningError(20, @"RunningBoard process-handle lookup APIs are unavailable.");
             return;
         }
-        if (![processClass respondsToSelector:createSelector]) {
-            FlekROMTrace("rom-frontboard-create-process-api-unavailable");
-            setupError = FlekROMSigningError(20, @"iOS 27 has no non-bootstrapping FrontBoard process factory. The ROM was left intact; see BootLogs.");
+        // iOS 27 can remove the class factory while retaining the instance
+        // initializer. Do not reject ROM boot merely because one *private*
+        // selector is absent; require at least one non-registering constructor.
+        if (!canUseFactory && !canUseInitializer) {
+            FlekROMTrace("rom-frontboard-no-safe-constructor");
+            setupError = FlekROMSigningError(20, @"iOS 27 does not expose a non-bootstrapping FrontBoard process constructor to FlekDeck. The installed ROM was not changed.");
             return;
         }
         id (^adapter)(id, audit_token_t) = ^id(id target, audit_token_t token) {
@@ -138,10 +146,39 @@ BOOL FlekDeckPrepareROMFrontBoardRegistration(NSError **error)
             // Do NOT call FBProcessManager registerProcessForHandle: here;
             // that enters _bootstrapAndExec on an already launched extension,
             // and is the path that failed in the device's first XPC crash.
-            id process = ((id (*)(id, SEL, id))objc_msgSend)(
-                processClass, createSelector, rbsHandle);
-            FlekROMTrace(process ? "rom-frontboard-created-handle-process" :
-                                   "rom-frontboard-handle-process-create-failed");
+            id process = nil;
+            if (canUseFactory) {
+                process = ((id (*)(id, SEL, id))objc_msgSend)(
+                    processClass, createSelector, rbsHandle);
+                FlekROMTrace(process ? "rom-frontboard-created-handle-process" :
+                                       "rom-frontboard-handle-process-create-failed");
+            }
+            if (!process && canUseInitializer) {
+                // Apple's FBProcess implementation also exposes this existing
+                // handle/identity initializer. A RunningBoard handle already
+                // represents a live NSExtension process: never invoke
+                // registerProcessForHandle: or _bootstrapAndExec again.
+                SEL identitySelector = NSSelectorFromString(@"identity");
+                id identity = [rbsHandle respondsToSelector:identitySelector] ?
+                    ((id (*)(id, SEL))objc_msgSend)(rbsHandle, identitySelector) : nil;
+                if (identity) {
+                    @try {
+                        process = ((id (*)(id, SEL, id, id, id))objc_msgSend)(
+                            [processClass alloc], initSelector, identity, rbsHandle, nil);
+                    } @catch (NSException *ex) {
+                        FlekROMTrace("rom-frontboard-handle-initializer-exception");
+                    }
+                }
+                FlekROMTrace(process ? "rom-frontboard-initialized-handle-process" :
+                                       "rom-frontboard-handle-initialization-failed");
+            }
+            // Check the interface Nyxian's PEProcess consumes before handing
+            // its LiveProcess extension over to ROM process bookkeeping.
+            if (process && (![process respondsToSelector:@selector(isRunning)] ||
+                            ![process respondsToSelector:NSSelectorFromString(@"addObserver:")])) {
+                FlekROMTrace("rom-frontboard-created-process-missing-lifecycle");
+                return nil;
+            }
             return process;
         };
         IMP replacement = imp_implementationWithBlock(adapter);
