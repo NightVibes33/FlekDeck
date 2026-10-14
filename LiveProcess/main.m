@@ -457,18 +457,24 @@ int UIApplicationMain(int argc, char * argv[], NSString * principalClassName, NS
     return LiveProcessMain(argc, argv);
 }
 
-// NSExtensionMain will load UIKit and call UIApplicationMain, so we need to redirect it to our fake one
-static void* (*orig_dlopen)(void* dyldApiInstancePtr, const char* path, int mode);
-static void* hook_dlopen(void* dyldApiInstancePtr, const char* path, int mode) {
-    const char *UIKitFrameworkPath = "/System/Library/Frameworks/UIKit.framework/UIKit";
-    if(path && !strncmp(path, UIKitFrameworkPath, strlen(UIKitFrameworkPath))) {
-        // switch back to original dlopen
-        performHookDyldApi("dlopen", 2, (void**)&orig_dlopen, orig_dlopen);
-        // FIXME: may be incompatible with jailbreak tweaks?
-        return RTLD_MAIN_ONLY;
-    } else {
-        __attribute__((musttail)) return orig_dlopen(dyldApiInstancePtr, path, mode);
+// Match the iOS extension launch interception that Nyxian uses in
+// LiveProcess/main.m. The old FlekDeck implementation returned RTLD_MAIN_ONLY
+// when UIKit was loaded, which rewrote dyld's *library loading* state and
+// interfered with the process bootstrap before a PE request was decoded.
+//
+// Nyxian instead intercepts exactly the UIApplicationMain symbol lookup and
+// immediately restores the original dyld dlsym implementation. This works
+// for both the ROM request and FlekDeck's ordinary LiveContainer guest path,
+// since both enter through the shared LiveProcessMain dispatcher.
+static void* (*orig_extension_dlsym)(void *dyldApiInstancePtr, void *handle, const char *symbol);
+static void* hook_extension_dlsym(void *dyldApiInstancePtr, void *handle, const char *symbol) {
+    if (symbol && strcmp(symbol, "UIApplicationMain") == 0) {
+        // Once extension startup resolves the entry point, stop intercepting
+        // subsequent symbol lookups (Nyxian's exact lifecycle).
+        performHookDyldApi("dlsym", 2, (void **)&orig_extension_dlsym, orig_extension_dlsym);
+        return (void *)&UIApplicationMain;
     }
+    __attribute__((musttail)) return orig_extension_dlsym(dyldApiInstancePtr, handle, symbol);
 }
 
 // Extension entry point
@@ -485,8 +491,13 @@ int NSExtensionMain(int argc, char *argv[], char *envp[], char *apple[]) {
     method_setImplementation(class_getInstanceMethod(NSClassFromString(@"NSXPCDecoder"), @selector(_validateAllowedClass:forKey:allowingInvocations:)), (IMP)hook_do_nothing);
 #pragma clang diagnostic pop
     }
-    // hook dlopen UIKit
-    performHookDyldApi("dlopen", 2, (void**)&orig_dlopen, hook_dlopen);
+    // Register Nyxian's one-shot UIApplicationMain resolution hook.
+    // Do not alter dlopen/RTLD_MAIN_ONLY or run ROM process setup yet.
+    if (!performHookDyldApi("dlsym", 2,
+                            (void **)&orig_extension_dlsym, hook_extension_dlsym)) {
+        NSLog(@"FlekDeck LiveProcess: could not install upstream-style extension entry hook");
+        return ENOTSUP;
+    }
     // call the real one
     _envp = envp;
     _apple = apple;
