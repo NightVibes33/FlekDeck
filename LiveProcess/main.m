@@ -44,7 +44,7 @@ static NSMutableArray<NSURL *> *activeResourceURLs;
 
 - (void)beginRequestWithExtensionContext:(NSExtensionContext *)context {
     extensionContext = context;
-    retrievedAppInfo = [context.inputItems.firstObject userInfo];
+    // Nyxian reads inputItems after the extension runloop stops.
     // Return control to LiveContainerMain
     CFRunLoopStop(CFRunLoopGetMain());
 }
@@ -113,7 +113,7 @@ typedef void (*FlekDeckPEConnectHostFunction)(NSXPCListenerEndpoint *endpoint);
 typedef void (*FlekDeckPEConnectSyscallFunction)(id syscallPort);
 typedef int (*FlekDeckPEEnvironmentInitFunction)(NSInteger mode, NSString *executablePath, int argc, char *argv[]);
 
-static int FlekDeckRunPERequest(NSDictionary *appInfo) {
+static int FlekDeckRunPERequest(NSDictionary *appInfo, int originalArgc, char *originalArgv[]) {
     if (!FlekDeckPrepareROMRuntime()) {
         return FlekDeckRejectPERequest(flekDeckROMRuntimeError ?: @"The imported ROM runtime could not be loaded.");
     }
@@ -200,43 +200,59 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo) {
     connectHost(endpoint);
     connectSyscall(syscallPort);
 
-    for (NSString *key in NSProcessInfo.processInfo.environment.allKeys) {
-        unsetenv(key.UTF8String);
-    }
-    for (id key in environment) {
-        id value = environment[key];
-        if ([key isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class]) {
-            setenv([key UTF8String], [value UTF8String], 1);
+    // Upstream Nyxian leaves the inherited environment intact if
+    // PEEnvironment is absent, and only replaces it when supplied.
+    if (environment) {
+        for (NSString *key in NSProcessInfo.processInfo.environment.allKeys) {
+            unsetenv(key.UTF8String);
+        }
+        for (NSString *key in environment) {
+            NSString *value = environment[key];
+            if ([key isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class]) {
+                setenv(key.UTF8String, value.UTF8String, 0);
+            }
         }
     }
 
-    NSArray *sourceArguments = arguments.count ? arguments : @[executablePath];
-    char **guestArgv = calloc(sourceArguments.count + 1, sizeof(char *));
-    if (!guestArgv) {
-        return FlekDeckRejectPERequest(@"LiveProcess could not allocate the ROM argument vector.");
-    }
-    for (NSUInteger i = 0; i < sourceArguments.count; i++) {
-        id argument = sourceArguments[i];
-        if (![argument isKindOfClass:NSString.class]) {
-            for (NSUInteger j = 0; j < i; j++) free(guestArgv[j]);
-            free(guestArgv);
-            return FlekDeckRejectPERequest(@"The ROM supplied a non-string process argument.");
+    // Nyxian uses argc=0 for a missing/empty argument array, rather than
+    // manufacturing argv[0] containing the executable path.
+    int guestArgc = originalArgc;
+    char **guestArgv = originalArgv;
+    BOOL allocatedArgv = NO;
+    if (arguments.count == 0) {
+        guestArgc = 0;
+    } else {
+        guestArgc = (int)arguments.count;
+        guestArgv = calloc(arguments.count + 1, sizeof(char *));
+        if (!guestArgv) {
+            return FlekDeckRejectPERequest(@"LiveProcess could not allocate the ROM argument vector.");
         }
-        guestArgv[i] = strdup([argument UTF8String]);
-        if (!guestArgv[i]) {
-            for (NSUInteger j = 0; j < i; j++) free(guestArgv[j]);
-            free(guestArgv);
-            return FlekDeckRejectPERequest(@"LiveProcess could not copy the ROM argument vector.");
+        allocatedArgv = YES;
+        for (NSUInteger i = 0; i < arguments.count; i++) {
+            id argument = arguments[i];
+            if (![argument isKindOfClass:NSString.class]) {
+                for (NSUInteger j = 0; j < i; j++) free(guestArgv[j]);
+                free(guestArgv);
+                return FlekDeckRejectPERequest(@"The ROM supplied a non-string process argument.");
+            }
+            guestArgv[i] = strdup([argument UTF8String]);
+            if (!guestArgv[i]) {
+                for (NSUInteger j = 0; j < i; j++) free(guestArgv[j]);
+                free(guestArgv);
+                return FlekDeckRejectPERequest(@"LiveProcess could not copy the ROM argument vector.");
+            }
         }
     }
 
     SEL argumentsSelector = NSSelectorFromString(@"setArguments:");
     if ([NSProcessInfo.processInfo respondsToSelector:argumentsSelector]) {
-        ((void (*)(id, SEL, id))objc_msgSend)(NSProcessInfo.processInfo, argumentsSelector, sourceArguments);
+        ((void (*)(id, SEL, id))objc_msgSend)(NSProcessInfo.processInfo, argumentsSelector, arguments ?: @[]);
     }
-    int status = environmentInit(1, executablePath, (int)sourceArguments.count, guestArgv);
-    for (NSUInteger i = 0; i < sourceArguments.count; i++) free(guestArgv[i]);
-    free(guestArgv);
+    int status = environmentInit(1, executablePath, guestArgc, guestArgv);
+    if (allocatedArgv) {
+        for (NSUInteger i = 0; i < arguments.count; i++) free(guestArgv[i]);
+        free(guestArgv);
+    }
     return status;
 }
 
@@ -344,13 +360,13 @@ static BOOL ConfigureGuestResources(NSDictionary *appInfo, NSError **outError) {
 int LiveProcessMain(int argc, char *argv[]) {
     // Let NSExtensionContext initialize, once it's done it will call CFRunLoopStop
     CFRunLoopRun();
-    // Ensure app info is delivered
-    NSDictionary *appInfo = LiveProcessHandler.retrievedAppInfo;
+    // Nyxian decodes the request after CFRunLoopRun, not in beginRequest.
+    NSDictionary *appInfo = [LiveProcessHandler.extensionContext.inputItems.firstObject userInfo];
     NSCAssert(appInfo, @"Failed to retrieve app info");
 
     // The Nyxian PE launch path is separate from ordinary LiveContainer app launches.
     if ([appInfo[@"PEExecutablePath"] isKindOfClass:NSString.class]) {
-        exit(FlekDeckRunPERequest(appInfo));
+        exit(FlekDeckRunPERequest(appInfo, argc, argv));
     }
     
     // Check if we received a request to execute a custom payload
