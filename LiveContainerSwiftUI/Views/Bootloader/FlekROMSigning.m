@@ -51,7 +51,7 @@ static void FlekROMTrace(const char *event)
     int fd = open(path, O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0600);
     if (fd < 0) return;
     char line[180];
-    int n = snprintf(line, sizeof(line), "pid=%d %s\\n", getpid(), event);
+    int n = snprintf(line, sizeof(line), "pid=%d %s\n", getpid(), event);
     if (n > 0 && n < sizeof(line)) {
         (void)write(fd, line, (size_t)n);
         (void)fsync(fd);
