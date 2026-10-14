@@ -512,8 +512,39 @@ jobs:
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
           cd build
-          zip -qry FlekDeck.ipa Payload
-          unzip -t FlekDeck.ipa >/dev/null
+          # Package the unsigned app as a portable IPA. Do not include macOS
+          # UID/GID, timestamp, Finder, or other ZIP extra fields: iOS installd
+          # extracts the *resigned* archive on the device, and SideStore's
+          # repackager must not inherit host-only ZIP metadata.
+          rm -f FlekDeck.ipa
+          COPYFILE_DISABLE=1 zip -qrX FlekDeck.ipa Payload
+          unzip -tq FlekDeck.ipa >/dev/null
+          python3 - <<'PY'
+          import plistlib
+          import stat
+          import zipfile
+          with zipfile.ZipFile('FlekDeck.ipa') as ipa:
+              names = ipa.namelist()
+              if len(names) != len(set(names)):
+                  raise SystemExit('Duplicate IPA ZIP entries')
+              if not names or not all(name.startswith('Payload/') for name in names):
+                  raise SystemExit('Unexpected top-level IPA ZIP layout')
+              if 'Payload/FlekDeck.app/Info.plist' not in names:
+                  raise SystemExit('Missing app Info.plist')
+              info = plistlib.loads(ipa.read('Payload/FlekDeck.app/Info.plist'))
+              if info.get('CFBundleExecutable') != 'FlekDeck':
+                  raise SystemExit('Unexpected main executable')
+              for member in ipa.infolist():
+                  if member.filename.startswith('/') or '..' in member.filename.split('/'):
+                      raise SystemExit('Unsafe IPA member: ' + member.filename)
+                  if stat.S_ISLNK(member.external_attr >> 16):
+                      raise SystemExit('IPA contains symlink: ' + member.filename)
+                  if member.extra:
+                      raise SystemExit('Nonportable ZIP extra field in ' + member.filename)
+              if ipa.testzip() is not None:
+                  raise SystemExit('Damaged IPA entry')
+              print(f'Canonical SideStore IPA validated: {len(names)} entries, no ZIP extras or symlinks')
+          PY
           unzip -Z1 FlekDeck.ipa > FlekDeck-ipa-entries.txt
           for required in \
             Shared/lib.zip Shared/include.zip Shared/swift.zip \
