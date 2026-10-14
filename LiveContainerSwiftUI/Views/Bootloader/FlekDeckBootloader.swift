@@ -312,8 +312,6 @@ private typealias NXSlotMainFn = @convention(c) () -> UnsafeMutableRawPointer?
 private typealias NXSlotDidAppearFn = @convention(c) () -> Void
 private typealias NXSlotCreateWindowFn = @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer?
 private typealias NXRomGenericFn = @convention(c) (UnsafePointer<CChar>) -> Int32
-// The ROM exports Nyxian’s exact LiveProcess development-entitlement check.
-private typealias NXROMExtensionEntitlementFn = @convention(c) () -> Int8
 
 private func romError(_ message: String) -> NSError {
     NSError(domain: "com.fs.flekdeck.bootloader.rom", code: 3, userInfo: [NSLocalizedDescriptionKey: message])
@@ -1578,23 +1576,6 @@ private final class FlekDeckBootViewController: UIViewController {
                 // same device; do not preempt its process lifecycle.
                 FlekDeckTraceROMProcessEnvironment()
                 FlekDeckBootTrace.mark("rom-frontboard-upstream-path-ready")
-                // The upstream PEUserspaceManager refuses to start without a
-                // registered development-signed LiveProcess extension. A
-                // readable .appex bundle is not evidence of that capability.
-                // Ask the ROM's own PEExtensionHasGetTaskAllowed rather than
-                // guessing from an IPA plist or changing its FrontBoard path.
-                let defaultSymbols = UnsafeMutableRawPointer(bitPattern: -2)
-                if let symbol = dlsym(defaultSymbols, "PEExtensionHasGetTaskAllowed") {
-                    let check = unsafeBitCast(symbol, to: NXROMExtensionEntitlementFn.self)
-                    if check() == 0 {
-                        FlekDeckBootTrace.mark("rom-liveprocess-get-task-allow-failed")
-                        self.enterRecovery(error: "ERROR: Nyxian could not verify LiveProcess's get-task-allow entitlement. The installed app extension must be registered and development-signed; verify the extension's provisioning and signature.")
-                        return
-                    }
-                    FlekDeckBootTrace.mark("rom-liveprocess-get-task-allow-ok")
-                } else {
-                    FlekDeckBootTrace.mark("rom-liveprocess-get-task-allow-check-not-exported")
-                }
 
                 // UIKit startup runs outside SwiftUI's representable creation.
                 // The process retains this controller before any nested run loop.
@@ -1801,25 +1782,66 @@ private final class FlekDeckBootViewController: UIViewController {
 }
 
 
+// Nyxian installs BootViewController directly as its UIWindow root from
+// SceneDelegate. SwiftUI must never parent a live ROM boot controller inside
+// UIViewControllerRepresentable: the ROM spins its own userspace/scene/window
+// state while NXSlotMain is still on the main thread.
 @MainActor
-private enum FlekDeckBootControllerCache {
-    // Publish the controller before viewDidLoad can run the ROM. NXSlotMain may
-    // spin a nested main run loop, causing SwiftUI to recreate its bridge.
-    // Every recreation receives this same controller; it cannot boot twice.
+private enum FlekDeckNativeBootWindowCache {
+    // Retain the UIKit scene host for the entire boot/ROM lifecycle.
+    // NXSlotMain is deliberately single-shot per process.
     static var controller: FlekDeckBootViewController?
+    static var window: UIWindow?
+
+    static func install(in scene: UIWindowScene, builtin: UIViewController) {
+        guard controller == nil else { return }
+        let root = FlekDeckBootViewController(builtinController: builtin)
+        let bootWindow = UIWindow(windowScene: scene)
+        controller = root
+        window = bootWindow
+
+        // The same UIWindowSceneDelegate that SwiftUI uses for URL routing
+        // now owns the native boot window, as in upstream Nyxian.
+        if let delegate = scene.delegate as? SceneDelegate {
+            delegate.window = bootWindow
+        }
+        bootWindow.rootViewController = root
+        bootWindow.makeKeyAndVisible()
+        FlekDeckBootTrace.mark("native-scene-window-root-active")
+    }
+}
+
+// A passive bridge obtains the WindowGroup's environment only. The ROM
+// controller does not live in this bridge and is not a SwiftUI child.
+@MainActor
+private final class FlekDeckNativeBootWindowBridge: UIViewController {
+    private let builtin: UIViewController
+
+    init(builtin: UIViewController) {
+        self.builtin = builtin
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard let scene = view.window?.windowScene else {
+            NSLog("[FlekDeck ROM] UIWindowScene not available for native boot")
+            return
+        }
+        FlekDeckNativeBootWindowCache.install(in: scene, builtin: builtin)
+    }
 }
 
 private struct FlekDeckBootControllerView<Content: View>: UIViewControllerRepresentable {
     let content: Content
 
     func makeUIViewController(context: Context) -> UIViewController {
-        if let controller = FlekDeckBootControllerCache.controller {
-            return controller
-        }
-        let controller = FlekDeckBootViewController(
-            builtinController: UIHostingController(rootView: content.environment(\.self, context.environment)))
-        FlekDeckBootControllerCache.controller = controller
-        return controller
+        let builtin = UIHostingController(rootView: content.environment(\.self, context.environment))
+        return FlekDeckNativeBootWindowBridge(builtin: builtin)
     }
 
     func updateUIViewController(_ controller: UIViewController, context: Context) {}
