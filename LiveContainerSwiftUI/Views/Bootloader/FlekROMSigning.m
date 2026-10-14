@@ -35,16 +35,13 @@ static NSError *FlekROMSigningError(NSInteger code, NSString *description)
                            userInfo:@{NSLocalizedDescriptionKey: description}];
 }
 
-// The iOS 27 system's FrontBoard registration may re-bootstrap a process
-// which is already running as an extension. In the supplied crash that
-// bootstrap destroyed a Mach send right still held by XPC; the fallback
-// registration then returned nil, and Nyxian's extension cleanup trapped
-// in libsystem_notify's unfair-lock assertion.
-//
-// Obtain a FrontBoard process representation from the existing RunningBoard
-// handle WITHOUT registering/bootstraping that running extension again.
-// This affects only Nyxian ROM process launches, not normal FlekDeck UI.
-// No XPC ports, device state, or certificate data are logged.
+// Nyxian's ROM initializer owns FrontBoard process registration. The
+// upstream ROM calls FBProcessManager registerProcessForAuditToken: after
+// resolving the LiveProcess extension's RunningBoard handle. Never replace
+// that API with an invented constructor or fail a preflight based on the
+// availability of unrelated private selectors. In particular, successful
+// upstream Nyxian ROM boot on the same iOS 27 device disproves the previous
+// "unsupported OS" diagnosis.
 static void FlekROMTrace(const char *event)
 {
     const char *home = getenv("HOME");
@@ -54,7 +51,7 @@ static void FlekROMTrace(const char *event)
     int fd = open(path, O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0600);
     if (fd < 0) return;
     char line[180];
-    int n = snprintf(line, sizeof(line), "pid=%d %s\n", getpid(), event);
+    int n = snprintf(line, sizeof(line), "pid=%d %s\\n", getpid(), event);
     if (n > 0 && n < sizeof(line)) {
         (void)write(fd, line, (size_t)n);
         (void)fsync(fd);
@@ -62,137 +59,24 @@ static void FlekROMTrace(const char *event)
     close(fd);
 }
 
-BOOL FlekDeckPrepareROMFrontBoardRegistration(NSError **error)
+void FlekDeckTraceROMProcessEnvironment(void)
 {
-    if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27) return YES;
-    static BOOL installed = NO;
-    static NSError *setupError = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        // FrontBoard and RunningBoard are lazily linked private frameworks.
-        // The ROM calls this preflight BEFORE NXSlotMain starts, so merely
-        // looking up their classes can incorrectly say an API is unavailable.
-        void *frontBoard = dlopen("/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard",
-                                  RTLD_NOW | RTLD_GLOBAL);
-        if (!frontBoard) {
-            FlekROMTrace("rom-frontboard-dlopen-failed");
-            setupError = FlekROMSigningError(23, @"FrontBoard could not be loaded for ROM process registration.");
-            return;
-        }
-        void *runningBoard = dlopen("/System/Library/PrivateFrameworks/RunningBoardServices.framework/RunningBoardServices",
-                                    RTLD_NOW | RTLD_GLOBAL);
-        if (!runningBoard) {
-            FlekROMTrace("rom-runningboard-dlopen-failed");
-            setupError = FlekROMSigningError(24, @"RunningBoardServices could not be loaded for ROM process registration.");
-            return;
-        }
-        FlekROMTrace("rom-private-process-frameworks-loaded");
-        Class manager = NSClassFromString(@"FBProcessManager");
-        Class predicate = NSClassFromString(@"RBSProcessPredicate");
-        Class handleClass = NSClassFromString(@"RBSProcessHandle");
-        Class processClass = NSClassFromString(@"FBProcess");
-        SEL auditSelector = NSSelectorFromString(@"registerProcessForAuditToken:");
-        SEL existingSelector = NSSelectorFromString(@"processForPID:");
-        SEL predicateSelector = NSSelectorFromString(@"predicateMatchingIdentifier:");
-        SEL lookupSelector = NSSelectorFromString(@"handleForPredicate:error:");
-        SEL createSelector = NSSelectorFromString(@"createProcessWithHandle:");
-        SEL initSelector = NSSelectorFromString(@"_initWithIdentity:handle:executionContext:");
-        BOOL canUseFactory = processClass && [processClass respondsToSelector:createSelector];
-        BOOL canUseInitializer = processClass && class_getInstanceMethod(processClass, initSelector) != NULL;
-        FlekROMTrace(canUseFactory ? "rom-frontboard-factory-available" : "rom-frontboard-factory-missing");
-        FlekROMTrace(canUseInitializer ? "rom-frontboard-initializer-available" : "rom-frontboard-initializer-missing");
-        Method auditMethod = manager ? class_getInstanceMethod(manager, auditSelector) : NULL;
-        if (!auditMethod || !class_getInstanceMethod(manager, existingSelector)) {
-            FlekROMTrace("rom-frontboard-manager-registration-api-unavailable");
-            setupError = FlekROMSigningError(20, @"FrontBoard process manager APIs are unavailable on this iOS release.");
-            return;
-        }
-        if (![predicate respondsToSelector:predicateSelector] ||
-            ![handleClass respondsToSelector:lookupSelector]) {
-            FlekROMTrace("rom-runningboard-lookup-api-unavailable");
-            setupError = FlekROMSigningError(20, @"RunningBoard process-handle lookup APIs are unavailable.");
-            return;
-        }
-        // iOS 27 can remove the class factory while retaining the instance
-        // initializer. Do not reject ROM boot merely because one *private*
-        // selector is absent; require at least one non-registering constructor.
-        if (!canUseFactory && !canUseInitializer) {
-            FlekROMTrace("rom-frontboard-no-safe-constructor");
-            setupError = FlekROMSigningError(20, @"iOS 27 does not expose a non-bootstrapping FrontBoard process constructor to FlekDeck. The installed ROM was not changed.");
-            return;
-        }
-        id (^adapter)(id, audit_token_t) = ^id(id target, audit_token_t token) {
-            pid_t pid = (pid_t)token.val[5];
-            if (pid <= 0) {
-                FlekROMTrace("rom-frontboard-invalid-audit-token");
-                return nil;
-            }
-            // An existing FBProcess is the preferred canonical representation.
-            id existing = ((id (*)(id, SEL, pid_t))objc_msgSend)(target, existingSelector, pid);
-            if (existing != nil) {
-                FlekROMTrace("rom-frontboard-using-existing-process");
-                return existing;
-            }
-            id predicateObj = ((id (*)(id, SEL, id))objc_msgSend)(
-                predicate, predicateSelector, @(pid));
-            NSError *lookupError = nil;
-            id rbsHandle = predicateObj ?
-                ((id (*)(id, SEL, id, NSError **))objc_msgSend)(
-                    handleClass, lookupSelector, predicateObj, &lookupError) : nil;
-            if (!rbsHandle || lookupError) {
-                FlekROMTrace("rom-frontboard-runningboard-handle-unavailable");
-                return nil;
-            }
-            // Do NOT call FBProcessManager registerProcessForHandle: here;
-            // that enters _bootstrapAndExec on an already launched extension,
-            // and is the path that failed in the device's first XPC crash.
-            id process = nil;
-            if (canUseFactory) {
-                process = ((id (*)(id, SEL, id))objc_msgSend)(
-                    processClass, createSelector, rbsHandle);
-                FlekROMTrace(process ? "rom-frontboard-created-handle-process" :
-                                       "rom-frontboard-handle-process-create-failed");
-            }
-            if (!process && canUseInitializer) {
-                // Apple's FBProcess implementation also exposes this existing
-                // handle/identity initializer. A RunningBoard handle already
-                // represents a live NSExtension process: never invoke
-                // registerProcessForHandle: or _bootstrapAndExec again.
-                SEL identitySelector = NSSelectorFromString(@"identity");
-                id identity = [rbsHandle respondsToSelector:identitySelector] ?
-                    ((id (*)(id, SEL))objc_msgSend)(rbsHandle, identitySelector) : nil;
-                if (identity) {
-                    @try {
-                        process = ((id (*)(id, SEL, id, id, id))objc_msgSend)(
-                            [processClass alloc], initSelector, identity, rbsHandle, nil);
-                    } @catch (NSException *ex) {
-                        FlekROMTrace("rom-frontboard-handle-initializer-exception");
-                    }
-                }
-                FlekROMTrace(process ? "rom-frontboard-initialized-handle-process" :
-                                       "rom-frontboard-handle-initialization-failed");
-            }
-            // Check the interface Nyxian's PEProcess consumes before handing
-            // its LiveProcess extension over to ROM process bookkeeping.
-            if (process && (![process respondsToSelector:@selector(isRunning)] ||
-                            ![process respondsToSelector:NSSelectorFromString(@"addObserver:")])) {
-                FlekROMTrace("rom-frontboard-created-process-missing-lifecycle");
-                return nil;
-            }
-            return process;
-        };
-        IMP replacement = imp_implementationWithBlock(adapter);
-        if (!replacement) {
-            setupError = FlekROMSigningError(21, @"Could not install the iOS 27 ROM process adapter.");
-            return;
-        }
-        method_setImplementation(auditMethod, replacement);
-        installed = YES;
-        FlekROMTrace("rom-frontboard-handle-process-adapter-installed");
-    });
-    if (!installed && error)
-        *error = setupError ?: FlekROMSigningError(22, @"ROM process adapter is unavailable.");
-    return installed;
+    // Diagnostic-only preflight. Nyxian performs registration inside the ROM
+    // itself; FlekDeck must not gate it or install Objective-C method hooks.
+    NSString *extensionPath = [NSBundle.mainBundle.builtInPlugInsPath
+        stringByAppendingPathComponent:@"LiveProcess.appex"];
+    NSString *infoPath = [extensionPath stringByAppendingPathComponent:@"Info.plist"];
+    NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
+    NSString *executable = info[@"CFBundleExecutable"];
+    NSString *executablePath = [extensionPath stringByAppendingPathComponent:
+        [executable isKindOfClass:NSString.class] ? executable : @"LiveProcess"];
+    NSString *extensionIdentifier = info[@"CFBundleIdentifier"];
+    FlekROMTrace(info ? "rom-liveprocess-info-present" : "rom-liveprocess-info-missing");
+    FlekROMTrace([NSFileManager.defaultManager isReadableFileAtPath:executablePath] ?
+        "rom-liveprocess-executable-present" : "rom-liveprocess-executable-missing");
+    FlekROMTrace([extensionIdentifier isKindOfClass:NSString.class] && extensionIdentifier.length ?
+        "rom-liveprocess-bundle-identifier-present" : "rom-liveprocess-bundle-identifier-missing");
+    FlekROMTrace("rom-frontboard-native-nyxian-registration-unmodified");
 }
 
 static NSData *FlekROMCertificateFromBuiltinSideStore(void)

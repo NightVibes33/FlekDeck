@@ -13,8 +13,8 @@ NS_ASSUME_NONNULL_BEGIN
 FOUNDATION_EXPORT BOOL FlekDeckSignROMFilesWithZSign(NSArray<NSURL *> *files,
                                                      NSError * _Nullable * _Nullable error);
 
-/// iOS 27-only ROM process-registration compatibility; no UI changes.
-FOUNDATION_EXPORT BOOL FlekDeckPrepareROMFrontBoardRegistration(NSError * _Nullable * _Nullable error);
+/// Log bundled LiveProcess readiness without changing Nyxian registration.
+FOUNDATION_EXPORT void FlekDeckTraceROMProcessEnvironment(void);
 
 /// Returns the ROM store shared by FlekDeck and its LiveProcess extension.
 /// Returns nil when the signed app has no usable application-group entitlement.
