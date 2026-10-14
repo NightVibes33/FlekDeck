@@ -18,6 +18,7 @@
 #import <stdio.h>
 #import <stdlib.h>
 #import <unistd.h>
+#import <dlfcn.h>
 
 // The pinned Vibe signer is loaded dynamically; ROMs use the same native
 // ZSigner, but must validate arguments before its asynchronous C++ worker.
@@ -68,6 +69,24 @@ BOOL FlekDeckPrepareROMFrontBoardRegistration(NSError **error)
     static NSError *setupError = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+        // FrontBoard and RunningBoard are lazily linked private frameworks.
+        // The ROM calls this preflight BEFORE NXSlotMain starts, so merely
+        // looking up their classes can incorrectly say an API is unavailable.
+        void *frontBoard = dlopen("/System/Library/PrivateFrameworks/FrontBoard.framework/FrontBoard",
+                                  RTLD_NOW | RTLD_GLOBAL);
+        if (!frontBoard) {
+            FlekROMTrace("rom-frontboard-dlopen-failed");
+            setupError = FlekROMSigningError(23, @"FrontBoard could not be loaded for ROM process registration.");
+            return;
+        }
+        void *runningBoard = dlopen("/System/Library/PrivateFrameworks/RunningBoardServices.framework/RunningBoardServices",
+                                    RTLD_NOW | RTLD_GLOBAL);
+        if (!runningBoard) {
+            FlekROMTrace("rom-runningboard-dlopen-failed");
+            setupError = FlekROMSigningError(24, @"RunningBoardServices could not be loaded for ROM process registration.");
+            return;
+        }
+        FlekROMTrace("rom-private-process-frameworks-loaded");
         Class manager = NSClassFromString(@"FBProcessManager");
         Class predicate = NSClassFromString(@"RBSProcessPredicate");
         Class handleClass = NSClassFromString(@"RBSProcessHandle");
@@ -78,12 +97,20 @@ BOOL FlekDeckPrepareROMFrontBoardRegistration(NSError **error)
         SEL lookupSelector = NSSelectorFromString(@"handleForPredicate:error:");
         SEL createSelector = NSSelectorFromString(@"createProcessWithHandle:");
         Method auditMethod = manager ? class_getInstanceMethod(manager, auditSelector) : NULL;
-        if (!auditMethod || !class_getInstanceMethod(manager, existingSelector) ||
-            ![predicate respondsToSelector:predicateSelector] ||
-            ![handleClass respondsToSelector:lookupSelector] ||
-            ![processClass respondsToSelector:createSelector]) {
-            setupError = FlekROMSigningError(20, @"iOS 27 cannot represent the ROM extension without re-registering it.");
+        if (!auditMethod || !class_getInstanceMethod(manager, existingSelector)) {
+            FlekROMTrace("rom-frontboard-manager-registration-api-unavailable");
+            setupError = FlekROMSigningError(20, @"FrontBoard process manager APIs are unavailable on this iOS release.");
+            return;
+        }
+        if (![predicate respondsToSelector:predicateSelector] ||
+            ![handleClass respondsToSelector:lookupSelector]) {
+            FlekROMTrace("rom-runningboard-lookup-api-unavailable");
+            setupError = FlekROMSigningError(20, @"RunningBoard process-handle lookup APIs are unavailable.");
+            return;
+        }
+        if (![processClass respondsToSelector:createSelector]) {
             FlekROMTrace("rom-frontboard-create-process-api-unavailable");
+            setupError = FlekROMSigningError(20, @"iOS 27 has no non-bootstrapping FrontBoard process factory. The ROM was left intact; see BootLogs.");
             return;
         }
         id (^adapter)(id, audit_token_t) = ^id(id target, audit_token_t token) {
@@ -195,18 +222,49 @@ BOOL FlekDeckSignROMFilesWithZSign(NSArray<NSURL *> *files, NSError **error)
         [paths addObject:[entry path]];
     }
 
-    NSError *loadError = nil;
-    [LCUtils loadStoreFrameworksWithError2:&loadError];
-    if (loadError) {
-        if (error) *error = loadError;
+    // ZSign.dylib is bundled with FlekDeck. Load it from the host bundle
+    // explicitly: the UI's lazy LCUtils loader can return without registering
+    // ZSigner when a dynamically re-signed app changes its executable layout.
+    // Do not depend on the separate SideStore signing service at ROM flash time.
+    NSString *frameworks = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks"];
+    NSString *opensslPath = [frameworks stringByAppendingPathComponent:@"OpenSSL.framework/OpenSSL"];
+    NSString *zsignPath = [frameworks stringByAppendingPathComponent:@"ZSign.dylib"];
+    if (![NSFileManager.defaultManager isReadableFileAtPath:zsignPath]) {
+        FlekROMTrace("rom-zsign-missing-in-installed-bundle");
+        if (error) *error = FlekROMSigningError(4, @"The installed FlekDeck app is missing Frameworks/ZSign.dylib. Reinstall with extensions and frameworks preserved.");
+        return NO;
+    }
+    // ZSign's LC_LOAD_DYLIB references @rpath/OpenSSL.framework/OpenSSL.
+    // Resolve its dependency first; keep both images mapped for async signing.
+    if (![NSFileManager.defaultManager isReadableFileAtPath:opensslPath]) {
+        FlekROMTrace("rom-zsign-openssl-missing");
+        if (error) *error = FlekROMSigningError(5, @"The installed FlekDeck app is missing OpenSSL.framework.");
+        return NO;
+    }
+    void *opensslHandle = dlopen(opensslPath.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
+    if (!opensslHandle) {
+        const char *why = dlerror();
+        FlekROMTrace("rom-zsign-openssl-dlopen-failed");
+        if (error) *error = FlekROMSigningError(6,
+            [NSString stringWithFormat:@"Could not load OpenSSL: %s", why ?: "unknown loader error"]);
+        return NO;
+    }
+    void *zsignHandle = dlopen(zsignPath.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
+    if (!zsignHandle) {
+        const char *why = dlerror();
+        FlekROMTrace("rom-zsign-dlopen-failed");
+        if (error) *error = FlekROMSigningError(7,
+            [NSString stringWithFormat:@"Could not load ZSign.dylib: %s", why ?: "unknown loader error"]);
         return NO;
     }
     Class signer = NSClassFromString(@"ZSigner");
     SEL action = @selector(signMachOPathArr:bundleId:cert:pass:completionHandler:);
     if (signer == Nil || ![signer respondsToSelector:action]) {
-        if (error) *error = FlekROMSigningError(4, @"The native ZSign service is unavailable in this installation.");
+        FlekROMTrace(signer == Nil ? "rom-zsign-class-unavailable" : "rom-zsign-selector-unavailable");
+        if (error) *error = FlekROMSigningError(8, @"ZSign was loaded, but the required ZSigner class or method was not registered.");
         return NO;
     }
+    FlekROMTrace("rom-zsign-ready");
 
     dispatch_semaphore_t completed = dispatch_semaphore_create(0);
     __block BOOL succeeded = NO;
