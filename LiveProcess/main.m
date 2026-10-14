@@ -454,7 +454,10 @@ int LiveProcessMain(int argc, char *argv[]) {
 // this is our fake UIApplicationMain called from _xpc_objc_uimain (xpc_main)
 __attribute__((visibility("default")))
 int UIApplicationMain(int argc, char * argv[], NSString * principalClassName, NSString * delegateClassName) {
-    return LiveProcessMain(argc, argv);
+    // Nyxian terminates its LiveProcess extension when guest execution ends.
+    // Returning into _xpc_objc_uimain instead leaves the extension bootstrap
+    // executing after the ROM has already handed off its XPC/Mach rights.
+    exit(LiveProcessMain(argc, argv));
 }
 
 // Match the iOS extension launch interception that Nyxian uses in

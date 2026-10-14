@@ -312,6 +312,8 @@ private typealias NXSlotMainFn = @convention(c) () -> UnsafeMutableRawPointer?
 private typealias NXSlotDidAppearFn = @convention(c) () -> Void
 private typealias NXSlotCreateWindowFn = @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer?
 private typealias NXRomGenericFn = @convention(c) (UnsafePointer<CChar>) -> Int32
+// The ROM exports Nyxian’s exact LiveProcess development-entitlement check.
+private typealias NXROMExtensionEntitlementFn = @convention(c) () -> Int8
 
 private func romError(_ message: String) -> NSError {
     NSError(domain: "com.fs.flekdeck.bootloader.rom", code: 3, userInfo: [NSLocalizedDescriptionKey: message])
@@ -1576,6 +1578,23 @@ private final class FlekDeckBootViewController: UIViewController {
                 // same device; do not preempt its process lifecycle.
                 FlekDeckTraceROMProcessEnvironment()
                 FlekDeckBootTrace.mark("rom-frontboard-upstream-path-ready")
+                // The upstream PEUserspaceManager refuses to start without a
+                // registered development-signed LiveProcess extension. A
+                // readable .appex bundle is not evidence of that capability.
+                // Ask the ROM's own PEExtensionHasGetTaskAllowed rather than
+                // guessing from an IPA plist or changing its FrontBoard path.
+                let defaultSymbols = UnsafeMutableRawPointer(bitPattern: -2)
+                if let symbol = dlsym(defaultSymbols, "PEExtensionHasGetTaskAllowed") {
+                    let check = unsafeBitCast(symbol, to: NXROMExtensionEntitlementFn.self)
+                    if check() == 0 {
+                        FlekDeckBootTrace.mark("rom-liveprocess-get-task-allow-failed")
+                        self.enterRecovery(error: "ERROR: Nyxian could not verify LiveProcess's get-task-allow entitlement. The installed app extension must be registered and development-signed; verify the extension's provisioning and signature.")
+                        return
+                    }
+                    FlekDeckBootTrace.mark("rom-liveprocess-get-task-allow-ok")
+                } else {
+                    FlekDeckBootTrace.mark("rom-liveprocess-get-task-allow-check-not-exported")
+                }
 
                 // UIKit startup runs outside SwiftUI's representable creation.
                 // The process retains this controller before any nested run loop.
