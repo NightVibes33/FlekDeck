@@ -10,6 +10,9 @@
 #import <dispatch/dispatch.h>
 #import <Security/Security.h>
 #import "../../../ZSign/zsigner.h"
+#import <objc/runtime.h>
+#import <objc/message.h>
+#import <mach/mach.h>
 
 // The pinned Vibe signer is loaded dynamically; ROMs use the same native
 // ZSigner, but must validate arguments before its asynchronous C++ worker.
@@ -24,6 +27,80 @@ static NSError *FlekROMSigningError(NSInteger code, NSString *description)
     return [NSError errorWithDomain:@"com.fs.flekdeck.bootloader.signing"
                                code:code
                            userInfo:@{NSLocalizedDescriptionKey: description}];
+}
+
+// iOS 27 FrontBoard process bootstrap reports XPC send-right corruption while
+// registering Nyxian's LiveProcess using registerProcessForAuditToken:.
+// Leave Nyxian ROM code unchanged: reuse any registered FBProcess for this PID,
+// otherwise hand FrontBoard its already verified RBSProcessHandle instead of
+// asking it to reconstruct and bootstrap one from a raw audit token.
+// Scope this compatibility adapter to FlekDeck ROM boot on iOS 27+ only.
+BOOL FlekDeckPrepareROMFrontBoardRegistration(NSError **error)
+{
+    if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27) return YES;
+    static BOOL installed = NO;
+    static dispatch_once_t once;
+    static NSError *setupError = nil;
+    dispatch_once(&once, ^{
+        Class manager = NSClassFromString(@"FBProcessManager");
+        Class predicate = NSClassFromString(@"RBSProcessPredicate");
+        Class handleClass = NSClassFromString(@"RBSProcessHandle");
+        SEL auditSelector = NSSelectorFromString(@"registerProcessForAuditToken:");
+        SEL existingSelector = NSSelectorFromString(@"processForPID:");
+        SEL handleSelector = NSSelectorFromString(@"registerProcessForHandle:");
+        SEL predicateSelector = NSSelectorFromString(@"predicateMatchingIdentifier:");
+        SEL lookupSelector = NSSelectorFromString(@"handleForPredicate:error:");
+        Method auditMethod = manager ? class_getInstanceMethod(manager, auditSelector) : NULL;
+        if (!auditMethod || !class_getInstanceMethod(manager, existingSelector) ||
+            !class_getInstanceMethod(manager, handleSelector) ||
+            ![predicate respondsToSelector:predicateSelector] ||
+            ![handleClass respondsToSelector:lookupSelector]) {
+            setupError = FlekROMSigningError(20, @"The iOS 27 ROM process-registration APIs are not available.");
+            return;
+        }
+        id (^adapter)(id, audit_token_t) = ^id(id target, audit_token_t token) {
+            pid_t pid = (pid_t)token.val[5];
+            if (pid <= 0) return nil;
+            id existing = ((id (*)(id, SEL, pid_t))objc_msgSend)(target, existingSelector, pid);
+            if (existing != nil) {
+                SEL runningSelector = NSSelectorFromString(@"isRunning");
+                if (![existing respondsToSelector:runningSelector] ||
+                    ((BOOL (*)(id, SEL))objc_msgSend)(existing, runningSelector)) {
+                    return existing;
+                }
+            }
+            // A process must never be repeatedly registered while a private
+            // framework's registerForHandle implementation is in flight.
+            static __thread BOOL inRegistration = NO;
+            if (inRegistration) return nil;
+            inRegistration = YES;
+            id result = nil;
+            @try {
+                id rbsPredicate = ((id (*)(id, SEL, id))objc_msgSend)(
+                    predicate, predicateSelector, @(pid));
+                NSError *lookupError = nil;
+                id rbsHandle = rbsPredicate ?
+                    ((id (*)(id, SEL, id, NSError **))objc_msgSend)(
+                        handleClass, lookupSelector, rbsPredicate, &lookupError) : nil;
+                if (rbsHandle && !lookupError) {
+                    result = ((id (*)(id, SEL, id))objc_msgSend)(
+                        target, handleSelector, rbsHandle);
+                }
+            } @finally {
+                inRegistration = NO;
+            }
+            return result;
+        };
+        IMP replacement = imp_implementationWithBlock(adapter);
+        if (!replacement) {
+            setupError = FlekROMSigningError(21, @"Could not install the iOS 27 ROM registration adapter.");
+            return;
+        }
+        method_setImplementation(auditMethod, replacement);
+        installed = YES;
+    });
+    if (!installed && error) *error = setupError ?: FlekROMSigningError(22, @"ROM process registration is unavailable.");
+    return installed;
 }
 
 static NSData *FlekROMCertificateFromBuiltinSideStore(void)

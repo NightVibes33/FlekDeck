@@ -1570,6 +1570,18 @@ private final class FlekDeckBootViewController: UIViewController {
                     return
                 }
 
+                // The original ROM uses FrontBoard's raw-audit-token launch
+                // registration. On iOS 27 that path trapped in libxpc during
+                // PESpawnFBProcess; prepare a handle-backed registration path.
+                var frontBoardError: NSError?
+                guard FlekDeckPrepareROMFrontBoardRegistration(&frontBoardError) else {
+                    FlekDeckBootTrace.mark("rom-frontboard-compat-unavailable " +
+                        (frontBoardError?.localizedDescription ?? "unknown"))
+                    self.enterRecovery(error: "ERROR: ROM process registration is unavailable on this iOS build.")
+                    return
+                }
+                FlekDeckBootTrace.mark("rom-frontboard-compat-ready")
+
                 // UIKit startup runs outside SwiftUI's representable creation.
                 // The process retains this controller before any nested run loop.
                 let extensionPresent = FileManager.default.fileExists(
