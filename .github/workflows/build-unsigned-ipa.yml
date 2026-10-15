@@ -18,6 +18,7 @@ on:
       - 'docs/flek-bootloader-parity.md'
       - 'LiveProcess/**'
       - 'Tools/prepare_flekdeck_pe_runtime.py'
+      - 'Tools/patch_*.py'
       - 'Tools/PEClientVRoot.c'
       - 'Tools/test_flek_rom_archive.m'
       - 'ThirdParty/FlekDeckPERuntime-NOTICE.md'
