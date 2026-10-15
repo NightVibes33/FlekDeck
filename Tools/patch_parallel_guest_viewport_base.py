@@ -355,12 +355,23 @@ source = path.read_text()
 live_marker = "LCParallelTikTokInitialViewportEnvironment"
 
 if live_marker not in source:
-    app_info_anchor = (
-        '    NSDictionary *appInfo = LiveProcessHandler.retrievedAppInfo;\n'
-        '    NSCAssert(appInfo, @"Failed to retrieve app info");\n'
+    # FlekDeck's Nyxian-parity LiveProcess reads XPC inputItems after
+    # CFRunLoopRun returns. The older LiveContainer bridge used a cached
+    # retrievedAppInfo getter. Support both explicit, known boot lifecycles
+    # without rewriting how either receives its launch request.
+    app_info_anchors = (
+        (
+            '    NSDictionary *appInfo = [LiveProcessHandler.extensionContext.inputItems.firstObject userInfo];\n'
+            '    NSCAssert(appInfo, @"Failed to retrieve app info");\n'
+        ),
+        (
+            '    NSDictionary *appInfo = LiveProcessHandler.retrievedAppInfo;\n'
+            '    NSCAssert(appInfo, @"Failed to retrieve app info");\n'
+        ),
     )
-    if app_info_anchor not in source:
-        raise SystemExit("LiveProcess/main.m: appInfo anchor not found")
+    app_info_anchor = next((anchor for anchor in app_info_anchors if anchor in source), None)
+    if app_info_anchor is None:
+        raise SystemExit("LiveProcess/main.m: neither Nyxian nor LiveContainer appInfo anchor found")
 
     env_seed = r'''
     // LCParallelTikTokInitialViewportEnvironment
