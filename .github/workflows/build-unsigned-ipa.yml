@@ -345,6 +345,10 @@ jobs:
           plutil -lint LiveProcess/LiveProcess.entitlements LiveProcess/LiveProcessRelease.entitlements
           grep -q FlekDeckRunPERequest LiveProcess/main.m
           grep -q FlekDeckPrepareROMRuntime LiveProcess/main.m
+          grep -q 'pe-environment-init-enter' LiveProcess/main.m
+          grep -q 'pe-mach-syscall-proxy-connected' LiveProcess/main.m
+          grep -q 'rom-registration-get-task-allow-denied' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          grep -q 'previous-nyxian-kmsg.log' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           python3 -m py_compile Tools/patch_free_sidestore_support.py
           python3 -m py_compile Tools/patch_livecontainer_multitask_stikdebug.py
           python3 -m py_compile Tools/patch_parallel_guest_viewport_base.py
@@ -522,6 +526,14 @@ jobs:
           ldid -S"$PWD/build/FlekDeck-LiveProcess.entitlements" "$EXTENSION/$EXT_EXECUTABLE"
           ldid -e "$EXTENSION/$EXT_EXECUTABLE" > build/FlekDeck-LiveProcess-signed-entitlements.plist
           test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' build/FlekDeck-LiveProcess-signed-entitlements.plist)" = 'group.com.SideStore.SideStore'
+          # Nyxian checks PKHostPlugIn's installed entitlement dictionary, not
+          # a source plist. Verify the packaged extension before delivering it.
+          test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' build/FlekDeck-LiveProcess-signed-entitlements.plist)" = 'true'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' build/FlekDeck-LiveProcess-signed-entitlements.plist)" = 'AAAAA11111.com.fs.flekdeck.LiveProcess'
+          test "$(plutil -extract CFBundleIdentifier raw "$EXTENSION/Info.plist")" = 'com.fs.flekdeck.LiveProcess'
+          test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw "$EXTENSION/Info.plist")" = 'com.apple.ar.viewer'
+          test "$(plutil -extract NSExtension.NSExtensionPrincipalClass raw "$EXTENSION/Info.plist")" = 'LiveProcessHandler'
+          echo "Packaged Nyxian-compatible extension identity, entry point and signed entitlements verified."
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/

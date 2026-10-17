@@ -61,3 +61,53 @@ The recovery menu and ZIP preservation/extraction do not require a certificate i
 The October 13 crash stack contains two nested NXSlotMain/NXMainSlot calls; PEUserspaceManager traps on its second boot invocation. ROM startup now uses Nyxian 0.11.5's UIKit BootViewController lifecycle, including the volume scan, manifest boot logo, background image loading, main-queue slot entry, NXSlotCreateWindow, transitions, NXSlotDidAppear and recovery fallback. SwiftUI creates only the retained boot controller and does not invoke NXSlotMain from makeUIViewController. The boot controller is cached before its view is loaded and starts once per process, so nested run-loop rendering cannot reenter the ROM. FlekDeck's shell replaces upstream SuperSlot and its own scene retains the ROM window.
 
 The unrelated earlier Pokémon GO scene-create watchdog log is outside this ROM boot fix. Successful CI compilation is not a substitute for testing Procursus on the device.
+
+
+## October 2026 single-commit ROM process and diagnostics audit
+
+The ROM loader continues to call the original `NXSlotMain`, `NXSlotCreateWindow` and
+`NXSlotDidAppear` entry points. FlekDeck does **not** replace Nyxian's
+`PESpawnFBProcess` / RunningBoard audit-token / FrontBoard registration
+implementation, and does not override the kernel process manager.
+
+Before slot entry, FlekDeck now performs a **read-only** lookup using the
+same registered `NSExtension` identity and `_plugIn.entitlements` API that
+Nyxian uses. Check `rom-registration-get-task-allow-ok` versus
+`rom-registration-get-task-allow-denied` in the boot trace. This is
+diagnostic, not an entitlement bypass. The ROM's cached
+`PEExtensionHasGetTaskAllowed()` is deliberately **not called early**.
+CI verifies the signed extension's app identifier, principal class, extension
+point and get-task-allow. The *installed* profile can still differ after
+SideStore/ESign signs the IPA, so always check the on-device registration
+diagnostic.
+
+LiveProcess now writes limited, payload-free checkpoints into the accessible
+SideStore App Group when one exists. On the next host launch they are imported
+to `Files > FlekDeck > BootLogs > LiveProcess`. If the installed profile
+does not grant the App Group, the checkpoints still appear in iOS console
+logs under `FlekDeck PE boot`; the absence of a shared log is not
+proof that the extension never ran.
+
+**Nyxian itself** writes `Documents/kmsg.txt` and opens it with
+`O_TRUNC` on each new runtime boot. The host now copies any surviving
+`kmsg.txt` to `BootLogs/previous-nyxian-kmsg.log` **before** slot
+entry on the next launch; after a successful return/appearance it also
+snapshots `current-nyxian-kmsg.log`. A crash or hard termination inside
+`NXSlotMain` will still leave the original `Documents/kmsg.txt`
+for immediate Files export.
+
+To triage a reboot:
+1. Copy `Documents/kmsg.txt` if present, then cold-start FlekDeck once.
+2. Export `BootLogs/current-boot.log`,
+   `BootLogs/previous-boot.log`, `BootLogs/previous-nyxian-kmsg.log`,
+   and any `BootLogs/LiveProcess/pe-*.log`.
+3. If the runtime reached `pe-environment-init-enter` but not
+   `pe-environment-init-return`, inspect the kernel log for the failing
+   ksurface/shimcache/bootstrap stage. If there are no PE checkpoints at all,
+   inspect extension registration and `PEUserspaceManager:boot` messages
+   before modifying DYLD hooks again.
+
+This change strengthens observability and build invariants. Passing GitHub
+Actions validates compilation and packaging, **not a fully successful
+Procursus boot or device signing**. Neither iOS entitlement checks nor
+Nyxian's process registration is spoofed or bypassed.

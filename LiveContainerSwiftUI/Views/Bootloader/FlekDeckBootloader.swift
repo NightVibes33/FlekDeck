@@ -1227,6 +1227,65 @@ private enum FlekDeckBootTrace {
     private static let current = directory.appendingPathComponent("current-boot.log")
     private static let previous = directory.appendingPathComponent("previous-boot.log")
 
+    // The original Nyxian klog writes to Documents/kmsg.txt in the host
+    // process. It truncates that file when the next ROM boot begins. Preserve
+    // the last fatal session before it can be overwritten.
+    private static let nyxianKmsg = directory.deletingLastPathComponent()
+        .appendingPathComponent("kmsg.txt")
+    private static let currentKmsg = directory.appendingPathComponent("current-nyxian-kmsg.log")
+    private static let previousKmsg = directory.appendingPathComponent("previous-nyxian-kmsg.log")
+
+    private static func copyNyxianKmsg(to destination: URL) {
+        guard FileManager.default.fileExists(atPath: nyxianKmsg.path) else { return }
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: nyxianKmsg, to: destination)
+        } catch {
+            // Diagnostics must never stop the ROM boot.
+        }
+    }
+
+    // LiveProcess runs in another sandbox. Its optional shared-container
+    // breadcrumbs are imported into Documents/BootLogs/LiveProcess at launch.
+    // Preserve a bounded number and consume the shared copies only after
+    // successful import. Free/ESign profiles without App Groups simply skip it.
+    private static func importExtensionDiagnostics() {
+        guard let shared = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.SideStore.SideStore") else { return }
+        let source = shared.appendingPathComponent("FlekDeck/Boot/Diagnostics", isDirectory: true)
+        let destination = directory.appendingPathComponent("LiveProcess", isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: source, includingPropertiesForKeys: nil) else { return }
+        do {
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            let logs = entries.filter { $0.lastPathComponent.hasPrefix("pe-") && $0.pathExtension == "log" }
+            for file in logs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).suffix(16) {
+                let target = destination.appendingPathComponent(file.lastPathComponent)
+                if FileManager.default.fileExists(atPath: target.path) {
+                    try FileManager.default.removeItem(at: target)
+                }
+                try FileManager.default.copyItem(at: file, to: target)
+                try FileManager.default.removeItem(at: file)
+            }
+            // No unlimited log accumulation in the user-visible export directory.
+            let retained = try FileManager.default.contentsOfDirectory(
+                at: destination, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "log" }
+                .sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            for old in retained.dropLast(16) {
+                try? FileManager.default.removeItem(at: old)
+            }
+        } catch {
+            // A missing App Group or an expired signer must not affect boot.
+        }
+    }
+
+    static func captureNyxianKmsg() {
+        copyNyxianKmsg(to: currentKmsg)
+    }
+
     static func begin() {
         let manager = FileManager.default
         do {
@@ -1237,9 +1296,16 @@ private enum FlekDeckBootTrace {
             if manager.fileExists(atPath: current.path) {
                 try manager.moveItem(at: current, to: previous)
             }
+            // Always snapshot kmsg from the previous boot before Nyxian opens
+            // it with O_TRUNC during the next ROM's first klog message.
+            copyNyxianKmsg(to: previousKmsg)
+            if manager.fileExists(atPath: currentKmsg.path) {
+                try manager.removeItem(at: currentKmsg)
+            }
         } catch {
             // Diagnostics must never interfere with boot.
         }
+        importExtensionDiagnostics()
         mark("boot-controller-loaded")
     }
 
@@ -1576,6 +1642,7 @@ private final class FlekDeckBootViewController: UIViewController {
                 // same device; do not preempt its process lifecycle.
                 FlekDeckTraceROMProcessEnvironment()
                 FlekDeckBootTrace.mark("rom-frontboard-upstream-path-ready")
+                FlekDeckBootTrace.mark("rom-nyxian-kmsg-in-documents-captured-on-next-launch")
 
                 // UIKit startup runs outside SwiftUI's representable creation.
                 // The process retains this controller before any nested run loop.
@@ -1588,6 +1655,7 @@ private final class FlekDeckBootViewController: UIViewController {
                     return
                 }
                 FlekDeckBootTrace.mark("rom-nxslotmain-return")
+                FlekDeckBootTrace.captureNyxianKmsg()
                 let slotRoot = Unmanaged<UIViewController>.fromOpaque(raw).takeRetainedValue()
                 
                 self.changableStatusBarHidden = false
@@ -1622,6 +1690,7 @@ private final class FlekDeckBootViewController: UIViewController {
         FlekDeckBootTrace.mark("rom-didappear-enter")
         didAppear?()
         FlekDeckBootTrace.mark("rom-didappear-return")
+        FlekDeckBootTrace.captureNyxianKmsg()
         do {
             try FlekDeckBootPaths.setSessionActive(false)
             FlekDeckBootTrace.mark("rom-boot-ui-ready")

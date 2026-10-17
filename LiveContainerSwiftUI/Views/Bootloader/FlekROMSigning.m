@@ -59,6 +59,47 @@ static void FlekROMTrace(const char *event)
     close(fd);
 }
 
+static void FlekROMTraceRegisteredExtension(NSString *identifier)
+{
+    // Mirror Nyxian PEExtension's discovery path, read-only. Do not invoke
+    // PEExtensionHasGetTaskAllowed here: its dispatch_once caches failure and
+    // early preflights can poison the ROM's own boot attempt.
+    Class extensionClass = NSClassFromString(@"NSExtension");
+    SEL factory = NSSelectorFromString(@"extensionWithIdentifier:error:");
+    if (!extensionClass || ![extensionClass respondsToSelector:factory]) {
+        FlekROMTrace("rom-registration-nsextension-unavailable");
+        return;
+    }
+    NSError *registrationError = nil;
+    id extension = ((id (*)(id, SEL, id, NSError **))objc_msgSend)(
+        extensionClass, factory, identifier, &registrationError);
+    if (!extension || registrationError) {
+        FlekROMTrace("rom-registration-extension-lookup-failed");
+        return;
+    }
+    FlekROMTrace("rom-registration-extension-resolved");
+    SEL plugIn = NSSelectorFromString(@"_plugIn");
+    if (![extension respondsToSelector:plugIn]) {
+        FlekROMTrace("rom-registration-plugin-selector-unavailable");
+        return;
+    }
+    id plugin = ((id (*)(id, SEL))objc_msgSend)(extension, plugIn);
+    SEL entitlementsSelector = NSSelectorFromString(@"entitlements");
+    if (!plugin || ![plugin respondsToSelector:entitlementsSelector]) {
+        FlekROMTrace("rom-registration-plugin-entitlements-unavailable");
+        return;
+    }
+    id entitlements = ((id (*)(id, SEL))objc_msgSend)(plugin, entitlementsSelector);
+    if (![entitlements isKindOfClass:NSDictionary.class]) {
+        FlekROMTrace("rom-registration-entitlements-not-a-dictionary");
+        return;
+    }
+    NSNumber *getTaskAllow = entitlements[@"get-task-allow"];
+    BOOL allowed = [getTaskAllow isKindOfClass:NSNumber.class] && getTaskAllow.boolValue;
+    FlekROMTrace(allowed ? "rom-registration-get-task-allow-ok" :
+                           "rom-registration-get-task-allow-denied");
+}
+
 void FlekDeckTraceROMProcessEnvironment(void)
 {
     // Diagnostic-only preflight. Nyxian performs registration inside the ROM
@@ -76,6 +117,13 @@ void FlekDeckTraceROMProcessEnvironment(void)
         "rom-liveprocess-executable-present" : "rom-liveprocess-executable-missing");
     FlekROMTrace([extensionIdentifier isKindOfClass:NSString.class] && extensionIdentifier.length ?
         "rom-liveprocess-bundle-identifier-present" : "rom-liveprocess-bundle-identifier-missing");
+    if ([extensionIdentifier isKindOfClass:NSString.class] && extensionIdentifier.length) {
+        FlekROMTraceRegisteredExtension(extensionIdentifier);
+    } else {
+        FlekROMTrace("rom-registration-cannot-check-missing-bundle-identifier");
+    }
+    // Nyxian still owns the actual RBS audit-token and FBProcess registration.
+    // Never replace it with a guessed private selector on newer iOS releases.
     FlekROMTrace("rom-frontboard-native-nyxian-registration-unmodified");
 }
 

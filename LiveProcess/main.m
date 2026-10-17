@@ -102,10 +102,38 @@ static BOOL FlekDeckPrepareROMRuntime(void) {
     return NO;
 }
 
+// Crash-resilient, content-free PE breadcrumbs. Extension sandbox paths differ
+// from the host's Documents directory, so use the *actual* signed App Group
+// when it exists and let the host copy the logs to Files at the next launch.
+// No launch payloads, sandbox tokens, environment values or paths are logged.
+static void FlekDeckPETrace(const char *event) {
+    if (!event) return;
+    NSLog(@"FlekDeck PE boot: %s", event);
+    NSURL *shared = [NSFileManager.defaultManager
+        containerURLForSecurityApplicationGroupIdentifier:@"group.com.SideStore.SideStore"];
+    if (!shared) return;
+    NSURL *directory = [shared URLByAppendingPathComponent:@"FlekDeck/Boot/Diagnostics" isDirectory:YES];
+    if (![NSFileManager.defaultManager createDirectoryAtURL:directory
+                                withIntermediateDirectories:YES attributes:nil error:nil]) return;
+    NSString *name = [NSString stringWithFormat:@"pe-%d.log", getpid()];
+    NSURL *output = [directory URLByAppendingPathComponent:name];
+    int fd = open(output.fileSystemRepresentation,
+                  O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    char line[192];
+    int length = snprintf(line, sizeof(line), "pid=%d %s\n", getpid(), event);
+    if (length > 0 && (size_t)length < sizeof(line)) {
+        (void)write(fd, line, (size_t)length);
+        (void)fsync(fd);
+    }
+    close(fd);
+}
+
 static int FlekDeckRejectPERequest(NSString *detail) {
     NSError *error = FlekDeckPEError(ENOTSUP, detail);
     [LiveProcessHandler.extensionContext cancelRequestWithError:error];
     NSLog(@"LiveProcess: %@", detail);
+    FlekDeckPETrace("pe-request-rejected-see-os-log-for-description");
     return ENOTSUP;
 }
 
@@ -114,6 +142,7 @@ typedef void (*FlekDeckPEConnectSyscallFunction)(id syscallPort);
 typedef int (*FlekDeckPEEnvironmentInitFunction)(NSInteger mode, NSString *executablePath, int argc, char *argv[]);
 
 static int FlekDeckRunPERequest(NSDictionary *appInfo, int originalArgc, char *originalArgv[]) {
+    FlekDeckPETrace("pe-request-enter");
     if (!FlekDeckPrepareROMRuntime()) {
         return FlekDeckRejectPERequest(flekDeckROMRuntimeError ?: @"The imported ROM runtime could not be loaded.");
     }
@@ -128,6 +157,7 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo, int originalArgc, char *o
         return FlekDeckRejectPERequest(
             @"The packaged PE client is missing a required environment entry point.");
     }
+    FlekDeckPETrace("pe-runtime-entrypoints-resolved");
 
     NSString *executablePath = appInfo[@"PEExecutablePath"];
     NSXPCListenerEndpoint *endpoint = appInfo[@"PEEndpoint"];
@@ -166,6 +196,7 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo, int originalArgc, char *o
         }
     }
 
+    FlekDeckPETrace("pe-sandbox-file-permissions-consumed");
     // Tokens must grant real filesystem access before the PE runtime starts.
     if (![NSFileManager.defaultManager isReadableFileAtPath:executablePath]) {
         return FlekDeckRejectPERequest(
@@ -180,6 +211,7 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo, int originalArgc, char *o
                                         directory, strerror(errno)]);
     }
 
+    FlekDeckPETrace("pe-guest-working-directory-ready");
     SEL applySelector = NSSelectorFromString(@"apply");
     if ([fileTable isKindOfClass:NSClassFromString(@"PEFileTable")] &&
         [fileTable respondsToSelector:applySelector]) {
@@ -190,6 +222,7 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo, int originalArgc, char *o
         return FlekDeckRejectPERequest(@"The ROM file-descriptor table is not compatible with FlekDeck LiveProcess.");
     }
 
+    FlekDeckPETrace("pe-file-descriptor-handoff-complete");
     // Mirror Nyxian's ROM-only XPC lifecycle. The endpoint, syscall port,
     // environment, and argv are now retained in local variables; detach the
     // original NSExtensionContext and userInfo dictionary before activating
@@ -198,7 +231,9 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo, int originalArgc, char *o
     [LiveProcessHandler releaseROMRequestPayload];
 
     connectHost(endpoint);
+    FlekDeckPETrace("pe-xpc-host-connected");
     connectSyscall(syscallPort);
+    FlekDeckPETrace("pe-mach-syscall-proxy-connected");
 
     // Upstream Nyxian leaves the inherited environment intact if
     // PEEnvironment is absent, and only replaces it when supplied.
@@ -248,7 +283,9 @@ static int FlekDeckRunPERequest(NSDictionary *appInfo, int originalArgc, char *o
     if ([NSProcessInfo.processInfo respondsToSelector:argumentsSelector]) {
         ((void (*)(id, SEL, id))objc_msgSend)(NSProcessInfo.processInfo, argumentsSelector, arguments ?: @[]);
     }
+    FlekDeckPETrace("pe-environment-init-enter");
     int status = environmentInit(1, executablePath, guestArgc, guestArgv);
+    FlekDeckPETrace("pe-environment-init-return");
     if (allocatedArgv) {
         for (NSUInteger i = 0; i < arguments.count; i++) free(guestArgv[i]);
         free(guestArgv);
