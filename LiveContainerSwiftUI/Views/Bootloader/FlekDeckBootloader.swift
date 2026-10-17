@@ -916,7 +916,8 @@ func recoveryConfirmWipe(recoveryController c: NXRecoveryViewController) {
 private func removeFlashedSlot(_ log: RomLog) {
     do {
         try FileManager.default.removeItem(at: flashedSlotURL())
-        log.info("flashed ROM removed, next boot uses SuperSlot.dylib")
+        FlekDeckBootPaths.clearCommittedROM()
+        log.info("flashed ROM removed, next boot uses FlekDeck's built-in shell")
     } catch {
         log.error("ERROR: \(errnoDescription(error))")
     }
@@ -1116,8 +1117,15 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
         }
         throw error
     }
-    
-    return manifest
+
+    // The recovery UI must never claim a ROM was flashed without proving its
+    // committed manifest is still readable from the same path used at boot.
+    let verified = try ROMManifest(manifestPlistURL: finalSlot.appendingPathComponent("manifest.plist"))
+    guard verified.identifier == manifest.identifier else {
+        throw romError("ROM commit validation failed: slot manifest identity changed")
+    }
+    try FlekDeckBootPaths.recordCommittedROM(verified)
+    return verified
 }
 
 private func recoveryFlashROM(_ c: NXRecoveryViewController, archive: URL) {
@@ -1339,6 +1347,27 @@ private enum FlekDeckBootPaths {
     static let stagingSlot: URL = root.appendingPathComponent("Slot/.A.installing", isDirectory: true)
     static let previousSlot: URL = root.appendingPathComponent("Slot/.A.previous", isDirectory: true)
     static let imports: URL = root.appendingPathComponent("Imports", isDirectory: true)
+    private static let committedReceipt = root.appendingPathComponent("committed-rom.plist")
+
+    static var expectedFlashedROM: Bool {
+        FileManager.default.fileExists(atPath: committedReceipt.path)
+    }
+
+    /// Commit a human-readable receipt only after the signed staged slot has
+    /// actually become Slot/A. Keep it outside Slot/A so interrupted relaunch
+    /// can distinguish a missing slot from a deliberate first launch.
+    static func recordCommittedROM(_ manifest: ROMManifest) throws {
+        let data = try PropertyListSerialization.data(fromPropertyList: [
+            "identifier": manifest.identifier,
+            "version": manifest.version,
+            "manifestVersion": manifest.manifestVersion
+        ], format: .xml, options: 0)
+        try data.write(to: committedReceipt, options: .atomic)
+    }
+
+    static func clearCommittedROM() {
+        try? FileManager.default.removeItem(at: committedReceipt)
+    }
 
     /// Nyxian's NXBootstrap and virtual filesystem resolve these paths
     /// relative to Bundle.main, not the flashed ROM or LiveProcess.appex.
@@ -1590,10 +1619,24 @@ private final class FlekDeckBootViewController: UIViewController {
             }
 
             // FlekDeck's own shell is the built-in slot, replacing SuperSlot.
-            if mode == 1 || !FileManager.default.fileExists(atPath: flashedSlotURL().appendingPathComponent("manifest.plist").path) {
-                FlekDeckBootTrace.mark("builtin-shell-selected")
+            if mode == 1 {
+                FlekDeckBootTrace.mark("builtin-shell-selected-volume-override")
                 DispatchQueue.main.async {
                     self.transition(to: self.builtinController)
+                }
+                return
+            }
+            if !FileManager.default.fileExists(atPath: flashedSlotURL().appendingPathComponent("manifest.plist").path) {
+                if FlekDeckBootPaths.expectedFlashedROM {
+                    FlekDeckBootTrace.mark("rom-committed-receipt-present-but-manifest-missing")
+                    DispatchQueue.main.async {
+                        self.enterRecovery(error: "ERROR: A ROM was previously installed, but its slot manifest is missing. The ROM was not automatically removed. Check Files and reflash or restore the slot.")
+                    }
+                } else {
+                    FlekDeckBootTrace.mark("builtin-shell-selected-no-committed-rom")
+                    DispatchQueue.main.async {
+                        self.transition(to: self.builtinController)
+                    }
                 }
                 return
             }

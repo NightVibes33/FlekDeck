@@ -524,6 +524,12 @@ final class LCSpringboardIconCell: UICollectionViewCell {
             isUserInteractionEnabled = false
             isPlaceholderCell = true
         }
+        // The live Personalization toggle must affect UIKit springboard tiles,
+        // not only the SwiftUI fallback grid. Read when a cell is configured;
+        // viewWillAppear refreshes visible cells after leaving Settings.
+        let backgrounds = LCUtils.appGroupUserDefault.object(
+            forKey: FlekDeckKeys.showAppCardBackgrounds) as? Bool ?? true
+        glassBackgroundView?.isHidden = isPlaceholderCell || !backgrounds
     }
 
     /// Sets the title, prefixed with the shared mark when the app's data lives
@@ -767,7 +773,7 @@ final class LCSpringboardIconCell: UICollectionViewCell {
 
         // 1. Card background — recreate instead of snapshotting
         // (UIVisualEffectView snapshots are unreliable, especially UIGlassEffect)
-        if let glass = glassBackgroundView {
+        if let glass = glassBackgroundView, !glass.isHidden {
             let bgCopy: UIVisualEffectView
             if #available(iOS 26, *) {
                 bgCopy = UIVisualEffectView(effect: UIGlassEffect(style: .regular))

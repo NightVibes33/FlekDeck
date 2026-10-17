@@ -111,3 +111,21 @@ This change strengthens observability and build invariants. Passing GitHub
 Actions validates compilation and packaging, **not a fully successful
 Procursus boot or device signing**. Neither iOS entitlement checks nor
 Nyxian's process registration is spoofed or bypassed.
+
+
+## Home Screen glass-card toggle and ROM slot-commit receipt
+
+Personalization now offers **Show App Card Backgrounds**. It controls the
+round translucent glass tiles in the UIKit springboard and SwiftUI fallback
+without changing their icon images, titles, tap targets or delete gestures.
+"Frame Shortcut Icons" remains a separate setting.
+
+After a successful flash, FlekDeck reopens and validates Slot/A's manifest
+and saves a small `committed-rom.plist` receipt in its Boot directory.
+On cold launch, a missing manifest with a surviving receipt enters recovery
+and records `rom-committed-receipt-present-but-manifest-missing`, instead of
+silently opening the built-in shell. On deliberate unflash, both the slot and
+the receipt are removed. Earlier installs without a receipt still boot normally
+when their manifest exists. If installation or resigning deletes the *whole*
+app data container, no local receipt can survive; preserve a ROM backup and
+inspect signing/reinstallation behavior before claiming persistence is fixed.

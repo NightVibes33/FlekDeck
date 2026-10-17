@@ -17,6 +17,7 @@ enum FlekDeckKeys {
     static let homeScreenOrder = "FlekHomeScreenOrder" // ordered IDs of all home screen items (default apps + installed)
     static let homeScreenPageSizes = "FlekHomeScreenPageSizes" // per-page item counts for custom page layouts
     static let cardStyleGlass = "FlekCardStyleGlass" // true = liquid glass, false = thin material
+    static let showAppCardBackgrounds = "FlekShowAppCardBackgrounds" // default true; hiding retains tap targets and edit controls
 }
 
 /// Home screen layout chosen on the Personalization page.

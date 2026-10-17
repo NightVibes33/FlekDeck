@@ -24,6 +24,7 @@ struct FlekPersonalizationView: View {
     @AppStorage("dynamicColors", store: LCUtils.appGroupUserDefault) private var dynamicColors = true
     @AppStorage("darkModeIcon", store: LCUtils.appGroupUserDefault) private var darkModeIcon = false
     @AppStorage("LCFrameShortcutIcons", store: LCUtils.appGroupUserDefault) private var frameShortIcon = false
+    @AppStorage(FlekDeckKeys.showAppCardBackgrounds, store: LCUtils.appGroupUserDefault) private var showAppCardBackgrounds = true
 
     @State private var showCollection = false
     @State private var showPhotoPicker = false
@@ -76,6 +77,9 @@ struct FlekPersonalizationView: View {
                         }
                         Divider().padding(.leading, 16)
                         Toggle("lc.settings.FrameIcon".loc, isOn: $frameShortIcon)
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                        Divider().padding(.leading, 16)
+                        Toggle("Show App Card Backgrounds", isOn: $showAppCardBackgrounds)
                             .padding(.horizontal, 16).padding(.vertical, 12)
                     }
                     .background(card)

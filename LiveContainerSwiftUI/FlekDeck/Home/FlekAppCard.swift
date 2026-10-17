@@ -29,6 +29,7 @@ struct FlekAppCard<Icon: View>: View {
     /// Random delay so each card wiggles at a different phase, like real iOS.
     @State private var wiggleDelay: Double = 0
     @AppStorage(FlekDeckKeys.cardStyleGlass, store: LCUtils.appGroupUserDefault) private var cardStyleGlass: Bool = true
+    @AppStorage(FlekDeckKeys.showAppCardBackgrounds, store: LCUtils.appGroupUserDefault) private var showCardBackgrounds = true
     @Environment(\.colorScheme) private var colorScheme
 
     private var scale: CGFloat { cardHeight / FlekTheme.cardHeight }
@@ -81,7 +82,9 @@ struct FlekAppCard<Icon: View>: View {
         .frame(height: cardHeight)
         // Glass mode: wobble content before applying the glass background
         .rotationEffect(.degrees(isGlassMode ? wiggleAngle : 0))
-        .flekGlassCard(cornerRadius: FlekTheme.cardCorner * min(1, scale))
+        .modifier(FlekCardBackgroundVisibility(
+            visible: showCardBackgrounds,
+            cornerRadius: FlekTheme.cardCorner * min(1, scale)))
         .overlay(alignment: .topLeading) {
             if isEditing && editBadge != .none {
                 Button {
@@ -119,6 +122,22 @@ struct FlekAppCard<Icon: View>: View {
         .onAppear {
             wiggleDelay = Double.random(in: 0...0.24)
             if isEditing { wigglePhase = true }
+        }
+    }
+}
+
+
+/// Preserves the full-size tap target and edit badge when card glass is hidden.
+private struct FlekCardBackgroundVisibility: ViewModifier {
+    let visible: Bool
+    let cornerRadius: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if visible {
+            content.flekGlassCard(cornerRadius: cornerRadius)
+        } else {
+            content
         }
     }
 }

@@ -349,6 +349,13 @@ jobs:
           grep -q 'pe-mach-syscall-proxy-connected' LiveProcess/main.m
           grep -q 'rom-registration-get-task-allow-denied' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'previous-nyxian-kmsg.log' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'recordCommittedROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'rom-committed-receipt-present-but-manifest-missing' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekShowAppCardBackgrounds' LiveContainerSwiftUI/FlekDeck/Home/FlekDeckModel.swift
+          grep -q 'Show App Card Backgrounds' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Home/FlekAppCard.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardIconCell.swift
           python3 -m py_compile Tools/patch_free_sidestore_support.py
           python3 -m py_compile Tools/patch_livecontainer_multitask_stikdebug.py
           python3 -m py_compile Tools/patch_parallel_guest_viewport_base.py
