@@ -30,6 +30,8 @@
 			<string>MicroGamepad</string>
 		</dict>
 	</array>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Music guests use your authorized Apple Music library and active subscription for playback.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
