@@ -485,12 +485,22 @@ int UIApplicationMain(int argc, char * argv[], NSString * principalClassName, NS
 // immediately restores the original dyld dlsym implementation. This works
 // for both the ROM request and FlekDeck's ordinary LiveContainer guest path,
 // since both enter through the shared LiveProcessMain dispatcher.
+// Nyxian's pinned DYLD vtable installer is present in the PE runtime, but
+// regular LiveContainer launches also need to work without that library.
+// Match upstream Nyxian's hook implementation on the ROM-capable path.
+typedef bool (*FlekDeckDyldHookInstaller)(const char *, uint32_t, void **, void *);
+static FlekDeckDyldHookInstaller extension_dyld_hook_installer = performHookDyldApi;
 static void* (*orig_extension_dlsym)(void *dyldApiInstancePtr, void *handle, const char *symbol);
 static void* hook_extension_dlsym(void *dyldApiInstancePtr, void *handle, const char *symbol) {
     if (symbol && strcmp(symbol, "UIApplicationMain") == 0) {
-        // Once extension startup resolves the entry point, stop intercepting
-        // subsequent symbol lookups (Nyxian's exact lifecycle).
-        performHookDyldApi("dlsym", 2, (void **)&orig_extension_dlsym, orig_extension_dlsym);
+        // Restore using the SAME installer and original pointer used when the
+        // one-shot hook was installed. Do not mix Nyxian and Vibe restorers.
+        if (!extension_dyld_hook_installer("dlsym", 2,
+                                           (void **)&orig_extension_dlsym,
+                                           orig_extension_dlsym)) {
+            NSLog(@"FlekDeck LiveProcess: DYLD UIApplicationMain hook restoration failed");
+            abort();
+        }
         return (void *)&UIApplicationMain;
     }
     __attribute__((musttail)) return orig_extension_dlsym(dyldApiInstancePtr, handle, symbol);
@@ -510,11 +520,31 @@ int NSExtensionMain(int argc, char *argv[], char *envp[], char *apple[]) {
     method_setImplementation(class_getInstanceMethod(NSClassFromString(@"NSXPCDecoder"), @selector(_validateAllowedClass:forKey:allowingInvocations:)), (IMP)hook_do_nothing);
 #pragma clang diagnostic pop
     }
-    // Register Nyxian's one-shot UIApplicationMain resolution hook.
+    // Register Nyxian's one-shot UIApplicationMain hook before invoking the
+    // system extension entry point. The PE runtime already contains Nyxian's
+    // original DyldHook.m, so use THAT installer for ROM-capable launches,
+    // not the Vibe version linked into FlekDeck's ordinary extension path.
+    if (hasPEClient) {
+        extension_dyld_hook_installer = (FlekDeckDyldHookInstaller)
+            dlsym(flekDeckROMRuntimeHandle, "performHookDyldApi");
+        if (!extension_dyld_hook_installer) {
+            NSLog(@"FlekDeck LiveProcess: pinned Nyxian DYLD installer not exported");
+            return ENOTSUP;
+        }
+        NSLog(@"FlekDeck LiveProcess: using pinned Nyxian DYLD entry hook");
+    } else {
+        extension_dyld_hook_installer = performHookDyldApi;
+        NSLog(@"FlekDeck LiveProcess: using standard LiveContainer DYLD entry hook");
+    }
     // Do not alter dlopen/RTLD_MAIN_ONLY or run ROM process setup yet.
-    if (!performHookDyldApi("dlsym", 2,
-                            (void **)&orig_extension_dlsym, hook_extension_dlsym)) {
-        NSLog(@"FlekDeck LiveProcess: could not install upstream-style extension entry hook");
+    if (!extension_dyld_hook_installer("dlsym", 2,
+                                       (void **)&orig_extension_dlsym,
+                                       hook_extension_dlsym)) {
+        NSLog(@"FlekDeck LiveProcess: could not install UIApplicationMain DYLD hook");
+        return ENOTSUP;
+    }
+    if (!orig_extension_dlsym) {
+        NSLog(@"FlekDeck LiveProcess: DYLD entry hook missing original function");
         return ENOTSUP;
     }
     // call the real one

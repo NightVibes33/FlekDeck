@@ -237,6 +237,13 @@ jobs:
           grep -q _environment_client_connect_to_syscall_proxy build/pe-runtime-symbols.txt
           grep -q _environment_init build/pe-runtime-symbols.txt
           grep -q _ResecureDecoder build/pe-runtime-symbols.txt
+          # Full Nyxian DYLD parity: the pinned guest runtime must export
+          # the installer, guest image hooks, and LiveShim dlopen constructor.
+          grep -q _performHookDyldApi build/pe-runtime-symbols.txt
+          grep -q _DyldHooksInit build/pe-runtime-symbols.txt
+          test -s "$PWD/build/pe-runtime/Release-iphoneos/LiveShim.framework/LiveShim"
+          nm -gU "$PWD/build/pe-runtime/Release-iphoneos/LiveShim.framework/LiveShim" > build/pe-liveshim-symbols.txt
+          grep -q _LiveShimDlopenHookInit build/pe-liveshim-symbols.txt
           ! grep -q _NSExtensionMain build/pe-runtime-symbols.txt
 
           # The ROM mounts these two actual Nyxian userspace services from
@@ -576,5 +583,6 @@ jobs:
             build/FlekDeck-host-entitlements.plist
             build/FlekDeck-LiveProcess-signed-entitlements.plist
             build/pe-runtime-symbols.txt
+            build/pe-liveshim-symbols.txt
           if-no-files-found: error
 
