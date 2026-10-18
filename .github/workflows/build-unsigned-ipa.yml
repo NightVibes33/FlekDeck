@@ -29,8 +29,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# GitHub REST excludes draft release assets from read-only Actions tokens.
+# This job needs repository contents:write to read the user's existing draft
+# release binary. It does not change or publish the release.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:

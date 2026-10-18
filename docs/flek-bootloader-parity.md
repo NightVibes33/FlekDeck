@@ -417,3 +417,8 @@ The unsigned host and PE runtime compile before the mandatory ROM release asset 
 ## ROM binary source updated to existing draft release
 
 The user already uploaded the identical Procursus ZIP to GitHub draft release `Zip` (release ID `416553967`, asset `653881071`, 45,839,875 bytes). The workflow accesses the draft via authenticated GitHub REST API with `GITHUB_TOKEN` and `contents: read`, pins the expected SHA-256 and size, and fails closed on a mismatch. Draft publication is not needed, and no binary upload is required. This runs after the iOS build for independent compilation diagnostics.
+
+
+## Draft release access from GitHub Actions
+
+Draft release `Zip` (ID `416553967`) is not accessible using a read-only `GITHUB_TOKEN` (HTTP 403). The unsigned IPA workflow now requests `contents: write` so GitHub REST permits reading this private draft and its verified 45,839,875-byte ZIP. The workflow does not publish, edit or delete the release. It still verifies ZIP size, SHA-256, archive integrity, manifest, and extracted ROM content before packaging.
