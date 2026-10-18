@@ -1538,8 +1538,21 @@ struct FlekDeckRecoveryView: UIViewControllerRepresentable {
 */
 private final class FlekDeckBootViewController: UIViewController {
     private let builtinController: UIViewController
+    // Keep FlekDeck's own UIWindow mounted under the genuine ROM WindowServer.
+    // This is one app with two coordinated scenes, not a fake icon-grid clone.
     private var activeSlotWindow: UIWindow?
+    private var homeSwitcherWindow: UIWindow?
+    private var homeSwitcherButton: UIButton?
+    private var guestHomeIsVisible = false
     private var didStartBoot = false
+
+    private static let guestBootCrashGuardKey = "FlekDeckGuestSpringBoardCrashGuard"
+    private static let guestHomePreferenceKey = "FlekDeckUseRealSpringBoard"
+
+    private static var wantsRealSpringBoard: Bool {
+        let defaults = LCUtils.appGroupUserDefault
+        return defaults.object(forKey: guestHomePreferenceKey) as? Bool ?? true
+    }
 
     init(builtinController: UIViewController) {
         self.builtinController = builtinController
@@ -1607,6 +1620,13 @@ private final class FlekDeckBootViewController: UIViewController {
             do {
                 let previousActive = FlekDeckBootPaths.previousSessionWasActive()
                 FlekDeckBootTrace.mark("previous-session-active=\(previousActive)")
+                // A synchronous trap inside the ROM's NXSlotMain previously made
+                // every cold launch crash. Next launch must show FlekDeck
+                // instead, keeping the user's installed ROM untouched.
+                if previousActive {
+                    UserDefaults.standard.set(true, forKey: Self.guestBootCrashGuardKey)
+                    FlekDeckBootTrace.mark("integrated-guest-crash-guard-armed")
+                }
                 try FlekDeckBootPaths.recoverInterruptedInstall()
                 try FlekDeckBootPaths.setSessionActive(false)
                 FlekDeckBootTrace.mark("rom-store-recovered")
@@ -1619,8 +1639,11 @@ private final class FlekDeckBootViewController: UIViewController {
             }
 
             // FlekDeck's own shell is the built-in slot, replacing SuperSlot.
-            if mode == 1 {
-                FlekDeckBootTrace.mark("builtin-shell-selected-volume-override")
+            if mode == 1 || !Self.wantsRealSpringBoard ||
+                UserDefaults.standard.bool(forKey: Self.guestBootCrashGuardKey) {
+                let reason = mode == 1 ? "volume-override" :
+                    (!Self.wantsRealSpringBoard ? "disabled-by-user" : "previous-guest-boot-failed")
+                FlekDeckBootTrace.mark("builtin-shell-selected-\(reason)")
                 DispatchQueue.main.async {
                     self.transition(to: self.builtinController)
                 }
@@ -1661,7 +1684,8 @@ private final class FlekDeckBootViewController: UIViewController {
                         missingAssets.joined(separator: ", ") +
                         ". Install a complete FlekDeck build; the flashed ROM was not modified."
                     FlekDeckBootTrace.mark("rom-runtime-preflight-failed \(message)")
-                    self.enterRecovery(error: "ERROR: ROM boot resources are missing. Reinstall FlekDeck.")
+                    // Never lock the whole FlekDeck host behind a broken guest.
+                    self.transition(to: self.builtinController)
                     return
                 }
                 if let freeMB = FlekDeckBootPaths.availableSpaceInMegabytes() {
@@ -1687,48 +1711,122 @@ private final class FlekDeckBootViewController: UIViewController {
                 FlekDeckBootTrace.mark("rom-frontboard-upstream-path-ready")
                 FlekDeckBootTrace.mark("rom-nyxian-kmsg-in-documents-captured-on-next-launch")
 
-                // UIKit startup runs outside SwiftUI's representable creation.
-                // The process retains this controller before any nested run loop.
-                let extensionPresent = FileManager.default.fileExists(
-                    atPath: Bundle.main.builtInPlugInsURL?
-                        .appendingPathComponent("LiveProcess.appex", isDirectory: true).path ?? "")
-                FlekDeckBootTrace.mark("rom-nxslotmain-enter name=\(name) liveprocess-present=\(extensionPresent)")
-                guard let raw = slotMain() else {
-                    self.enterRecovery(error: "ERROR: \(name) NXSlotMain returned no view controller")
-                    return
-                }
-                FlekDeckBootTrace.mark("rom-nxslotmain-return")
-                FlekDeckBootTrace.captureNyxianKmsg()
-                let slotRoot = Unmanaged<UIViewController>.fromOpaque(raw).takeRetainedValue()
-                
-                self.changableStatusBarHidden = false
-                UIView.animate(withDuration: 0.3) {
-                    self.setNeedsStatusBarAppearanceUpdate()
-                }
-                
-                if let slotCreateWindow {
-                    FlekDeckBootTrace.mark("rom-create-window-enter")
-                    if let slotWindow = self.makeSlotWindow(slotCreateWindow) {
-                        FlekDeckBootTrace.mark("rom-create-window-return")
-                        self.transition(into: slotWindow, root: slotRoot) {
-                            self.completeROMBoot(didAppear: slotDidAppear)
-                        }
-                    } else {
-                        FlekDeckBootTrace.mark("rom-create-window-unavailable; using-host-window")
-                        self.transition(to: slotRoot) {
-                            self.completeROMBoot(didAppear: slotDidAppear)
-                        }
-                    }
-                } else {
-                    FlekDeckBootTrace.mark("rom-no-window-hook; using-host-window")
-                    self.transition(to: slotRoot) {
-                        self.completeROMBoot(didAppear: slotDidAppear)
-                    }
+                // FlekDeck stays the owning application. Its original Home,
+                // Installer, settings and multitasking are initialized first.
+                // Nyxian's real SpringBoard then starts in the dedicated ROM
+                // WindowServer, and its UIWindow floats above the host.
+                FlekDeckBootTrace.mark("integrated-host-shell-enter")
+                self.transition(to: self.builtinController, style: .crossfade) {
+                    self.startIntegratedSpringBoard(
+                        name: name,
+                        slotMain: slotMain,
+                        slotDidAppear: slotDidAppear,
+                        slotCreateWindow: slotCreateWindow)
                 }
             }
         }
     }
-    
+
+    private func startIntegratedSpringBoard(
+        name: String,
+        slotMain: NXSlotMainFn,
+        slotDidAppear: NXSlotDidAppearFn?,
+        slotCreateWindow: NXSlotCreateWindowFn?
+    ) {
+        guard let slotCreateWindow else {
+            FlekDeckBootTrace.mark("integrated-springboard-window-hook-missing")
+            try? FlekDeckBootPaths.setSessionActive(false)
+            return
+        }
+        let extensionPresent = FileManager.default.fileExists(
+            atPath: Bundle.main.builtInPlugInsURL?
+                .appendingPathComponent("LiveProcess.appex", isDirectory: true).path ?? "")
+        FlekDeckBootTrace.mark("integrated-nxslotmain-enter name=\(name) liveprocess-present=\(extensionPresent)")
+        // This is the REAL ROM initializer, not a SwiftUI SpringBoard clone.
+        // Any synchronous failure leaves the session flag active; a subsequent
+        // launch honors the crash guard instead of retrying indefinitely.
+        guard let raw = slotMain() else {
+            FlekDeckBootTrace.mark("integrated-nxslotmain-returned-nil")
+            try? FlekDeckBootPaths.setSessionActive(false)
+            return
+        }
+        FlekDeckBootTrace.mark("integrated-nxslotmain-return")
+        let guestRoot = Unmanaged<UIViewController>.fromOpaque(raw).takeRetainedValue()
+        FlekDeckBootTrace.captureNyxianKmsg()
+        guard let guestWindow = makeSlotWindow(slotCreateWindow) else {
+            FlekDeckBootTrace.mark("integrated-rom-window-creation-failed")
+            try? FlekDeckBootPaths.setSessionActive(false)
+            return
+        }
+        guard let scene = view.window?.windowScene else {
+            FlekDeckBootTrace.mark("integrated-host-scene-unavailable")
+            try? FlekDeckBootPaths.setSessionActive(false)
+            return
+        }
+
+        activeSlotWindow = guestWindow
+        guestWindow.rootViewController = guestRoot
+        // Keep the original FlekDeck window beneath the ROM's own WindowServer.
+        // Never nil its rootViewController or replace the scene delegate.
+        guestWindow.windowLevel = .normal + 1
+        guestWindow.makeKeyAndVisible()
+        guestRoot.view.layoutIfNeeded()
+        guestHomeIsVisible = true
+        installHomeSwitcher(in: scene)
+        FlekDeckBootTrace.mark("integrated-real-springboard-window-visible")
+        completeROMBoot(didAppear: slotDidAppear)
+    }
+
+    // An independently retained, small native control stays above either
+    // window. It gives users immediate access to FlekDeck's existing launcher,
+    // settings and Installer without terminating Sileo or the guest userspace.
+    private func installHomeSwitcher(in scene: UIWindowScene) {
+        guard homeSwitcherWindow == nil else { return }
+        let size = scene.coordinateSpace.bounds.size
+        let frame = CGRect(x: max(8, size.width - 144),
+                           y: max(55, view.safeAreaInsets.top + 12),
+                           width: 132, height: 42)
+        let surface = UIWindow(windowScene: scene)
+        surface.frame = frame
+        surface.windowLevel = .alert + 1
+        surface.backgroundColor = .clear
+        let container = UIViewController()
+        container.view.backgroundColor = .clear
+        let button = UIButton(type: .system)
+        button.frame = CGRect(x: 0, y: 0, width: 132, height: 42)
+        button.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.95)
+        button.layer.cornerRadius = 21
+        button.layer.borderColor = UIColor.separator.cgColor
+        button.layer.borderWidth = 0.5
+        button.setTitle("FlekDeck", for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
+        button.accessibilityLabel = "Switch between FlekDeck and the real virtual SpringBoard"
+        button.addTarget(self, action: #selector(switchIntegratedHome), for: .touchUpInside)
+        container.view.addSubview(button)
+        surface.rootViewController = container
+        surface.isHidden = false
+        homeSwitcherButton = button
+        homeSwitcherWindow = surface
+        // Restore the interactive SpringBoard as the key scene. The switcher
+        // remains above it and receives touches in its own 132x42 window.
+        activeSlotWindow?.makeKey()
+    }
+
+    @objc private func switchIntegratedHome() {
+        guard let guestWindow = activeSlotWindow else { return }
+        guestHomeIsVisible.toggle()
+        guestWindow.isHidden = !guestHomeIsVisible
+        if guestHomeIsVisible {
+            guestWindow.makeKeyAndVisible()
+            homeSwitcherButton?.setTitle("FlekDeck", for: .normal)
+            FlekDeckBootTrace.mark("integrated-home-switched-to-real-springboard")
+        } else {
+            view.window?.makeKeyAndVisible()
+            homeSwitcherButton?.setTitle("SpringBoard", for: .normal)
+            FlekDeckBootTrace.mark("integrated-home-switched-to-flekdeck")
+        }
+    }
+
     private func completeROMBoot(didAppear: NXSlotDidAppearFn?) {
         FlekDeckBootTrace.mark("rom-didappear-enter")
         didAppear?()
@@ -1736,6 +1834,7 @@ private final class FlekDeckBootViewController: UIViewController {
         FlekDeckBootTrace.captureNyxianKmsg()
         do {
             try FlekDeckBootPaths.setSessionActive(false)
+            UserDefaults.standard.set(false, forKey: Self.guestBootCrashGuardKey)
             FlekDeckBootTrace.mark("rom-boot-ui-ready")
         } catch {
             FlekDeckBootTrace.mark("rom-session-finalize-failed \(error.localizedDescription)")

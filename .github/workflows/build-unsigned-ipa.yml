@@ -350,6 +350,9 @@ jobs:
           grep -q 'rom-registration-get-task-allow-denied' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'previous-nyxian-kmsg.log' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'recordCommittedROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'integrated-real-springboard-window-visible' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckGuestSpringBoardCrashGuard' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'Use Real Procursus SpringBoard' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
           grep -q 'rom-committed-receipt-present-but-manifest-missing' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekShowAppCardBackgrounds' LiveContainerSwiftUI/FlekDeck/Home/FlekDeckModel.swift
           grep -q 'Show App Card Backgrounds' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift

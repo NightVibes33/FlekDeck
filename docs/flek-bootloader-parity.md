@@ -129,3 +129,31 @@ the receipt are removed. Earlier installs without a receipt still boot normally
 when their manifest exists. If installation or resigning deletes the *whole*
 app data container, no local receipt can survive; preserve a ROM backup and
 inspect signing/reinstallation behavior before claiming persistence is fixed.
+
+
+## Integrated real virtual SpringBoard (experimental branch)
+
+FlekDeck's UIKit boot host now retains its own SwiftUI Home/Settings/Installer
+window while starting the **real** Procursus ROM `NXSlotMain` and virtual
+`NXWindowServer` window. The ROM's `SpringBoard.app/SpringBoard` is
+launched by its existing `NXSpringBoardHost`, not cloned or redrawn by
+FlekDeck. A small floating **FlekDeck / SpringBoard** native switcher changes
+the visible host window without destroying either process. All original
+FlekDeck callbacks, app installation and Parallel Mode remain in the original
+host UI. The bootloader remains available by Volume Down for recovery;
+the normal boot does not require opening the recovery menu on every launch.
+
+Personalization has a `Use Real Procursus SpringBoard` setting (default on
+when a committed ROM is present; when no ROM exists, FlekDeck falls back to its
+existing Home). A previously interrupted synchronous ROM boot enables a crash
+guard and starts FlekDeck's original Home on the following launch; turning
+the setting off and back on explicitly permits a retry.
+
+**Scope / remaining validation:** This integrates the actual ROM runtime and
+window server *from the already-flashed, signed slot* but does not package the
+user-uploaded 44 MB ROM ZIP inside the GitHub source or IPA. The ROM must
+initially be installed using recovery until that binary is published as an
+approved build asset. Nyxian's embedded SpringBoard uses a separate guest app
+registry; FlekDeck's imported LiveContainer apps remain accessible in FlekDeck,
+not automatically registered as Procursus packages. Real boot, scene, Sileo,
+and window-switcher function still require testing on a signed device.

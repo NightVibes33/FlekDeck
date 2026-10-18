@@ -25,6 +25,7 @@ struct FlekPersonalizationView: View {
     @AppStorage("darkModeIcon", store: LCUtils.appGroupUserDefault) private var darkModeIcon = false
     @AppStorage("LCFrameShortcutIcons", store: LCUtils.appGroupUserDefault) private var frameShortIcon = false
     @AppStorage(FlekDeckKeys.showAppCardBackgrounds, store: LCUtils.appGroupUserDefault) private var showAppCardBackgrounds = true
+    @AppStorage("FlekDeckUseRealSpringBoard", store: LCUtils.appGroupUserDefault) private var useRealSpringBoard = true
 
     @State private var showCollection = false
     @State private var showPhotoPicker = false
@@ -62,6 +63,26 @@ struct FlekPersonalizationView: View {
                     }
                     .padding(16)
                     .background(card)
+                }
+
+                // MARK: Integrated Procursus Home
+                VStack(alignment: .leading, spacing: 10) {
+                    sectionHeader("Virtual SpringBoard")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Use Real Procursus SpringBoard", isOn: $useRealSpringBoard)
+                        Text("Requires an installed Procursus ROM. When enabled, FlekDeck loads the ROM's real SpringBoard process and keeps its own interface available through a floating switcher. Takes effect after restarting FlekDeck.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(16)
+                    .background(card)
+                }
+                .onChange(of: useRealSpringBoard) { enabled in
+                    if enabled {
+                        // Explicit retry after a failed ROM startup; never
+                        // bypass crash-loop protection implicitly.
+                        UserDefaults.standard.set(false, forKey: "FlekDeckGuestSpringBoardCrashGuard")
+                    }
                 }
 
                 // MARK: App Icons
