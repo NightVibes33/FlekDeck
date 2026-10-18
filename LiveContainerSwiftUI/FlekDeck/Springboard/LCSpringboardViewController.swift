@@ -76,9 +76,20 @@ final class LCSpringboardViewController: UIViewController {
         setupOuterCollectionView()
         setupPageControl()
         setupDragManager()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(cardBackgroundVisibilityDidChange),
+            name: Notification.Name("FlekDeckCardBackgroundVisibilityChanged"),
+            object: nil)
+    }
+
+    @objc private func cardBackgroundVisibilityDidChange() {
+        if !refreshVisibleItems() {
+            outerCollectionView.reloadData()
+        }
     }
 
     deinit {
+        NotificationCenter.default.removeObserver(self)
         if Self.current === self { Self.current = nil }
     }
 

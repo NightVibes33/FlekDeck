@@ -1677,14 +1677,9 @@ private final class FlekDeckBootViewController: UIViewController {
     private static let showGuestName = Notification.Name("FlekDeckProcursusGuestDidLaunch")
 
     private static let guestBootCrashGuardKey = "FlekDeckGuestSpringBoardCrashGuard"
-    // Preserve the old preference key so previous experimental builds migrate
-    // without resetting the user's existing choice.
-    private static let guestHomePreferenceKey = "FlekDeckUseRealSpringBoard"
-
-    private static var wantsProcursusRuntime: Bool {
-        let defaults = LCUtils.appGroupUserDefault
-        return defaults.object(forKey: guestHomePreferenceKey) as? Bool ?? true
-    }
+    // An embedded Procursus ROM boots as part of FlekDeck itself. The old
+    // manual Settings opt-in has been retired; recovery is still available.
+    private static var wantsProcursusRuntime: Bool { true }
 
     init(builtinController: UIViewController) {
         self.builtinController = builtinController
@@ -1973,6 +1968,9 @@ private final class FlekDeckBootViewController: UIViewController {
               let hostWindow = view.window else { return }
         activeSlotWindow?.windowLevel = .normal - 1
         hostWindow.makeKeyAndVisible()
+        NotificationCenter.default.post(
+            name: Notification.Name("FlekDeckProcursusRuntimeReady"),
+            object: nil)
         FlekDeckBootTrace.mark("procursus-guest-app-returned-to-flekdeck")
     }
 
@@ -1985,6 +1983,9 @@ private final class FlekDeckBootViewController: UIViewController {
             try FlekDeckBootPaths.setSessionActive(false)
             UserDefaults.standard.set(false, forKey: Self.guestBootCrashGuardKey)
             FlekDeckBootTrace.mark("rom-boot-ui-ready")
+            NotificationCenter.default.post(
+                name: Notification.Name("FlekDeckProcursusRuntimeReady"),
+                object: nil)
         } catch {
             FlekDeckBootTrace.mark("rom-session-finalize-failed \(error.localizedDescription)")
         }

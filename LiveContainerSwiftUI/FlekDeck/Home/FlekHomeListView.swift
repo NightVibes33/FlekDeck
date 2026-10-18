@@ -208,6 +208,8 @@ struct FlekHomeListView<Menu: View>: View {
             Image(kind.iconAssetName).resizable().scaledToFill()
         case .installed(let app):
             Image(uiImage: app.appInfo.iconIsDarkIcon(darkModeIcon)).resizable().scaledToFill()
+        case .virtualApp(let app):
+            Image(uiImage: app.icon ?? UIImage(systemName: "app.fill")!).resizable().scaledToFill()
         case .installing, .placeholder:
             Color.clear
         }
@@ -217,6 +219,7 @@ struct FlekHomeListView<Menu: View>: View {
         switch item {
         case .defaultApp(let kind): return kind.title
         case .installed(let app): return app.appInfo.displayName() ?? "?"
+        case .virtualApp(let app): return app.title
         case .installing(let inst): return inst.name ?? ""
         case .placeholder: return ""
         }
@@ -243,6 +246,7 @@ enum FlekHomeListRow {
 }
 
 struct FlekAppRow<Icon: View>: View {
+    @AppStorage(FlekDeckKeys.showAppCardBackgrounds, store: LCUtils.appGroupUserDefault) private var showCardBackgrounds = true
     let title: String
     var subtitle: String?
     var isNew: Bool = false
@@ -320,7 +324,9 @@ struct FlekAppRow<Icon: View>: View {
             // are one material. `flekGlassCard` is deliberately not used here:
             // it would take the Liquid Glass path on iOS 26, and rows are not
             // opting into that yet.
-            FlekGlassBackground(cornerRadius: 20, tint: FlekHomeListRow.surfaceTint)
+            if showCardBackgrounds {
+                FlekGlassBackground(cornerRadius: 20, tint: FlekHomeListRow.surfaceTint)
+            }
         }
     }
 }
@@ -373,6 +379,7 @@ private struct CancelInstallContextMenu: UIViewRepresentable {
 
 /// List-layout row for the in-progress install.
 struct FlekInstallRow: View {
+    @AppStorage(FlekDeckKeys.showAppCardBackgrounds, store: LCUtils.appGroupUserDefault) private var showCardBackgrounds = true
     let state: FlekInstallState
 
     var body: some View {
@@ -397,7 +404,9 @@ struct FlekInstallRow: View {
             // are one material. `flekGlassCard` is deliberately not used here:
             // it would take the Liquid Glass path on iOS 26, and rows are not
             // opting into that yet.
-            FlekGlassBackground(cornerRadius: 20, tint: FlekHomeListRow.surfaceTint)
+            if showCardBackgrounds {
+                FlekGlassBackground(cornerRadius: 20, tint: FlekHomeListRow.surfaceTint)
+            }
         }
     }
 }

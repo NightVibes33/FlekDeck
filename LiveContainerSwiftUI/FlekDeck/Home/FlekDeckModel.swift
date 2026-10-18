@@ -62,9 +62,16 @@ enum FlekEditBadge {
 
 /// One tile on the springboard: a built-in app, an installed guest app, the
 /// app currently being installed, or an empty grid slot (placeholder).
+struct FlekVirtualApp: Identifiable {
+    let id: String
+    let title: String
+    let icon: UIImage?
+}
+
 enum FlekHomeItem: Identifiable, DragulaItem {
     case defaultApp(FlekDefaultAppKind)
     case installed(LCAppModel)
+    case virtualApp(FlekVirtualApp)
     case installing(InstallItem)
     /// Empty grid slot that preserves an item's position on the grid.
     case placeholder(String)
@@ -73,6 +80,7 @@ enum FlekHomeItem: Identifiable, DragulaItem {
         switch self {
         case .defaultApp(let kind): return "default.\(kind.rawValue)"
         case .installed(let app): return Self.installedID(for: app.appInfo)
+        case .virtualApp(let app): return "virtual.\(app.id)"
         case .installing(let item): return "installing.\(item.id)"
         case .placeholder(let uid): return "placeholder.\(uid)"
         }
@@ -97,6 +105,8 @@ enum FlekHomeItem: Identifiable, DragulaItem {
         switch self {
         case .installed(let app):
             return "\(id)|\(app.uiIsShared ? "s" : "p")|\(app.appInfo.displayName() ?? "")"
+        case .virtualApp(let app):
+            return "\(id)|\(app.title)"
         default:
             return id
         }

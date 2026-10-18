@@ -25,7 +25,6 @@ struct FlekPersonalizationView: View {
     @AppStorage("darkModeIcon", store: LCUtils.appGroupUserDefault) private var darkModeIcon = false
     @AppStorage("LCFrameShortcutIcons", store: LCUtils.appGroupUserDefault) private var frameShortIcon = false
     @AppStorage(FlekDeckKeys.showAppCardBackgrounds, store: LCUtils.appGroupUserDefault) private var showAppCardBackgrounds = true
-    @AppStorage("FlekDeckUseRealSpringBoard", store: LCUtils.appGroupUserDefault) private var procursusRuntimeEnabled = true
 
     @State private var showCollection = false
     @State private var showPhotoPicker = false
@@ -65,25 +64,6 @@ struct FlekPersonalizationView: View {
                     .background(card)
                 }
 
-                // MARK: Procursus virtual jailbreak (backend only)
-                VStack(alignment: .leading, spacing: 10) {
-                    sectionHeader("Procursus Virtual Jailbreak")
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Enable Procursus Runtime", isOn: $procursusRuntimeEnabled)
-                        Text("Starts the installed ROM's actual virtual SpringBoard and userspace services behind FlekDeck. Your Home Screen, dock, Installer and app layout stay unchanged. Restart FlekDeck to apply.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(16)
-                    .background(card)
-                }
-                .onChange(of: procursusRuntimeEnabled) { enabled in
-                    if enabled {
-                        // An explicit retry is required after a ROM startup crash.
-                        UserDefaults.standard.set(false, forKey: "FlekDeckGuestSpringBoardCrashGuard")
-                    }
-                }
-
                 // MARK: App Icons
                 VStack(alignment: .leading, spacing: 10) {
                     sectionHeader("lc.flek.appIcons".loc)
@@ -101,6 +81,11 @@ struct FlekPersonalizationView: View {
                         Divider().padding(.leading, 16)
                         Toggle("Show App Card Backgrounds", isOn: $showAppCardBackgrounds)
                             .padding(.horizontal, 16).padding(.vertical, 12)
+                            .onChange(of: showAppCardBackgrounds) { _ in
+                                NotificationCenter.default.post(
+                                    name: Notification.Name("FlekDeckCardBackgroundVisibilityChanged"),
+                                    object: nil)
+                            }
                     }
                     .background(card)
                 }
@@ -279,164 +264,3 @@ struct FlekPhotoPicker: UIViewControllerRepresentable {
 }
 
 
-// The original Home Screen stays unchanged; this is a genuine guest-application
-// inventory inside FlekDeck's existing Settings navigation. Sileo, NewTerm and
-// TweakSettings appear only if the ROM actually installed/registered them.
-private struct FlekProcursusGuestEntry: Identifiable {
-    let id: String
-    let title: String
-    let icon: UIImage?
-}
-
-struct FlekProcursusGuestAppsView: View {
-    @State private var apps: [FlekProcursusGuestEntry] = []
-    @State private var loading = false
-    @State private var launchError: String?
-    @State private var hasLoaded = false
-    @AppStorage("FlekDeckProcursusLastInstallError") private var romInstallError = ""
-    @State private var retryInProgress = false
-    @State private var retryMessage: String?
-
-    var body: some View {
-        List {
-            Section {
-                Label("Procursus Jailed is bundled with FlekDeck", systemImage: "shippingbox.fill")
-                Text("On first launch the included ROM is installed automatically. No Files import, bootloader flash, or runtime download is needed. ROM code signing still uses the P12 configured in FlekDeck.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                if !romInstallError.isEmpty {
-                    Label("Automatic ROM installation failed", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                    Text(romInstallError)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Button {
-                        retryBundledInstall()
-                    } label: {
-                        Label("Retry bundled ROM installation", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(retryInProgress)
-                    if retryInProgress {
-                        ProgressView("Installing Procursus ROM")
-                    }
-                }
-                if let retryMessage {
-                    Text(retryMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Section {
-                if loading && !hasLoaded {
-                    ProgressView("Checking virtual application registry")
-                } else if apps.isEmpty {
-                    Text("No registered Procursus apps. The ROM must finish bootstrapping, and Sileo must install successfully before it can appear here.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(apps) { app in
-                        Button {
-                            launch(app)
-                        } label: {
-                            HStack(spacing: 12) {
-                                if let icon = app.icon {
-                                    Image(uiImage: icon)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 42, height: 42)
-                                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                                } else {
-                                    Image(systemName: "app")
-                                        .frame(width: 42, height: 42)
-                                }
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(app.title).foregroundStyle(.primary)
-                                    Text(app.id).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "arrow.up.forward.app")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            } header: {
-                Text("Installed virtual applications")
-            } footer: {
-                Text("Entries come directly from Nyxian's LDEApplicationWorkspace. This does not list iOS apps or invent uninstalled jailbreak packages.")
-            }
-        }
-        .navigationTitle("Procursus Apps")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    refresh()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .disabled(loading)
-            }
-        }
-        .onAppear { refresh() }
-        .alert("Virtual app launch failed",
-               isPresented: Binding(
-                    get: { launchError != nil },
-                    set: { if !$0 { launchError = nil } }
-               )) {
-            Button("OK", role: .cancel) { launchError = nil }
-        } message: {
-            Text(launchError ?? "")
-        }
-    }
-
-    private func retryBundledInstall() {
-        guard !retryInProgress else { return }
-        retryInProgress = true
-        retryMessage = nil
-        FlekDeckRetryBundledProcursus { result in
-            retryInProgress = false
-            switch result {
-            case .success(let message):
-                retryMessage = message
-                UserDefaults.standard.set(
-                    false, forKey: "FlekDeckGuestSpringBoardCrashGuard")
-                refresh()
-            case .failure(let error):
-                retryMessage = "Still unable to install: \(error.localizedDescription). Check your signing certificate under Settings."
-            }
-        }
-    }
-
-    private func refresh() {
-        guard !loading else { return }
-        loading = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let entries = FlekDeckListProcursusApps().compactMap { record -> FlekProcursusGuestEntry? in
-                guard let id = record["bundleID"] as? String,
-                      let title = record["title"] as? String else { return nil }
-                return FlekProcursusGuestEntry(id: id, title: title,
-                                               icon: record["icon"] as? UIImage)
-            }
-            DispatchQueue.main.async {
-                apps = entries
-                loading = false
-                hasLoaded = true
-            }
-        }
-    }
-
-    private func launch(_ app: FlekProcursusGuestEntry) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let didLaunch = FlekDeckLaunchProcursusApp(app.id)
-            DispatchQueue.main.async {
-                if didLaunch {
-                    NotificationCenter.default.post(
-                        name: Notification.Name("FlekDeckProcursusGuestDidLaunch"),
-                        object: nil)
-                } else {
-                    launchError = "Nyxian's bootstrapd did not accept the launch of \(app.title). Verify the ROM is booted and the app is installed."
-                }
-            }
-        }
-    }
-}

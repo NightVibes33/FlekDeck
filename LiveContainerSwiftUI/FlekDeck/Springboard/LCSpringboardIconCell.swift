@@ -473,7 +473,10 @@ final class LCSpringboardIconCell: UICollectionViewCell {
         currentFraction = 0
         contentView.alpha = 1
         contentView.isHidden = false
-        glassBackgroundView?.isHidden = false
+        let backgrounds = LCUtils.appGroupUserDefault.object(
+            forKey: FlekDeckKeys.showAppCardBackgrounds) as? Bool ?? true
+        glassBackgroundView?.isHidden = !backgrounds
+        glassBackgroundView?.alpha = backgrounds ? 1 : 0
         isUserInteractionEnabled = true
         isPlaceholderCell = false
         onDeleteTap = nil
@@ -512,6 +515,15 @@ final class LCSpringboardIconCell: UICollectionViewCell {
             singleBadge.isHidden = !FlekLaunchModeStore.shared.showsSingleBadge(for: app)
             isPlaceholderCell = false
 
+        case .virtualApp(let app):
+            iconImageView.image = Self.roundedImage(
+                app.icon ?? UIImage(systemName: "app.fill"),
+                size: Self.iconSize,
+                radius: Self.iconCornerRadius)
+            setName(app.title, shared: false)
+            singleBadge.isHidden = true
+            isPlaceholderCell = false
+
         case .installing(let inst):
             isPlaceholderCell = false
             configureInstallState(inst.installState)
@@ -529,7 +541,14 @@ final class LCSpringboardIconCell: UICollectionViewCell {
         // viewWillAppear refreshes visible cells after leaving Settings.
         let backgrounds = LCUtils.appGroupUserDefault.object(
             forKey: FlekDeckKeys.showAppCardBackgrounds) as? Bool ?? true
-        glassBackgroundView?.isHidden = isPlaceholderCell || !backgrounds
+        let visible = !isPlaceholderCell && backgrounds
+        glassBackgroundView?.isHidden = !visible
+        glassBackgroundView?.alpha = visible ? 1 : 0
+        if #available(iOS 26, *) {
+            glassBackgroundView?.effect = visible ? UIGlassEffect(style: .regular) : nil
+        } else {
+            glassBackgroundView?.effect = visible ? UIBlurEffect(style: .systemUltraThinMaterial) : nil
+        }
     }
 
     /// Sets the title, prefixed with the shared mark when the app's data lives

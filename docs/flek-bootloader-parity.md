@@ -422,3 +422,26 @@ The user already uploaded the identical Procursus ZIP to GitHub draft release `Z
 ## Draft release access from GitHub Actions
 
 Draft release `Zip` (ID `416553967`) is not accessible using a read-only `GITHUB_TOKEN` (HTTP 403). The unsigned IPA workflow now requests `contents: write` so GitHub REST permits reading this private draft and its verified 45,839,875-byte ZIP. The workflow does not publish, edit or delete the release. It still verifies ZIP size, SHA-256, archive integrity, manifest, and extracted ROM content before packaging.
+
+
+## Single integrated FlekDeck Home (removes the erroneous Procursus settings page)
+
+FlekDeck's existing springboard UIKit cells, drag/page geometry, glass
+appearance, wallpaper, dock and navigation remain the **only visible Home**.
+The standalone "Procursus Apps" Settings page and redundant Procursus
+enable/disable Personalization block were removed. When the genuine virtual
+runtime completes NXSlotMain/NXSlotDidAppear, the host notifies FlekDeck to
+query Nyxian's `LDEApplicationWorkspace.allApplicationObjects`. Every
+returned registered virtual application, and **only** those, is materialized as
+a normal icon/row in FlekDeck's existing launcher. A tap calls the genuine
+virtual app launch API and surfaces its NXWindowServer scene. The existing
+native LiveContainer app entries retain their single/parallel behavior.
+Sileo is not synthesized when absent; installation of a full Sileo package
+is distinct from packaging the Procursus ROM.
+
+The background visibility toggle now notifies UIKit's visible cells to
+reconfigure the Liquid Glass effect on every change, and the SwiftUI list
+layout (including installing rows) checks the same app-group preference.
+The change must be verified on a physical iOS 27 device. A green IPA build
+checks compilation and ROM integrity, not successful guest SpringBoard
+initialization or jailbreak process functionality.

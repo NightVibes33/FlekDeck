@@ -120,6 +120,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State private var launchModeVersion = 0
     @State private var gameWarningTarget: FlekGameWarningTarget?
     @State private var orderedHomeItems: [FlekHomeItem] = []
+    @State private var virtualApps: [FlekVirtualApp] = []
 
     @EnvironmentObject private var sharedModel : SharedModel
     @EnvironmentObject private var sharedAppSortManager : LCAppSortManager
@@ -379,6 +380,15 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 flekstoreSharedModel.appInstallURL = ""
             }
             rebuildOrderedHomeItems()
+            refreshVirtualApps()
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("FlekDeckProcursusRuntimeReady"))) { _ in
+            refreshVirtualApps()
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.didBecomeActiveNotification)) { _ in
+            refreshVirtualApps()
         }
         .onChange(of: sharedAppSortManager.sortedApps.count) { _ in
             rebuildOrderedHomeItems()
@@ -796,6 +806,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             let item = FlekHomeItem.installed(app)
             available[item.id] = item
         }
+        for app in virtualApps {
+            let item = FlekHomeItem.virtualApp(app)
+            available[item.id] = item
+        }
 
         var result: [FlekHomeItem] = []
         var lastNewIdx: Int?
@@ -867,7 +881,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 }
                 return false
             }
-            for newItem in remainingDefaults + remainingInstalled {
+            let remainingVirtual = available.values.compactMap { item -> FlekHomeItem? in
+                if case .virtualApp = item { return item }
+                return nil
+            }.sorted { $0.id < $1.id }
+            for newItem in remainingDefaults + remainingInstalled + remainingVirtual {
                 if let installIdx = result.firstIndex(where: isFreedInstallingSlot) {
                     result[installIdx] = newItem
                     lastNewIdx = installIdx
@@ -883,6 +901,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             // Default layout: settings + installer at the front, then sorted apps
             result = [.defaultApp(.settings), .defaultApp(.installer)]
             result.append(contentsOf: sortedApps.map { .installed($0) })
+            result.append(contentsOf: virtualApps.map { .virtualApp($0) })
         }
 
         // Close the gap a deleted app left, on its own page and nowhere else:
@@ -1096,6 +1115,44 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
     
 
+
+    // Only real Nyxian-installed virtual apps appear. A registry sync may
+    // wait for bootstrapd, so never block FlekDeck's main UI thread.
+    private func refreshVirtualApps() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let entries = FlekDeckListProcursusApps().compactMap { entry -> FlekVirtualApp? in
+                guard let id = entry["bundleID"] as? String, !id.isEmpty,
+                      let title = entry["title"] as? String else { return nil }
+                return FlekVirtualApp(id: id, title: title,
+                                      icon: entry["icon"] as? UIImage)
+            }
+            DispatchQueue.main.async {
+                let before = virtualApps.map { "\($0.id)|\($0.title)" }
+                let after = entries.map { "\($0.id)|\($0.title)" }
+                if before != after {
+                    virtualApps = entries
+                    rebuildOrderedHomeItems()
+                }
+            }
+        }
+    }
+
+    private func launchVirtualApp(_ app: FlekVirtualApp) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let launched = FlekDeckLaunchProcursusApp(app.id)
+            DispatchQueue.main.async {
+                if launched {
+                    NotificationCenter.default.post(
+                        name: Notification.Name("FlekDeckProcursusGuestDidLaunch"),
+                        object: nil)
+                } else {
+                    errorInfo = "The virtual environment could not launch \(app.title). Check the ROM boot log or retry after bootstrapd starts."
+                    errorShow = true
+                }
+            }
+        }
+    }
+
     func handleHomeTap(_ item: FlekHomeItem) {
         switch item {
         case .defaultApp(let kind):
@@ -1120,6 +1177,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     showInstallerCover = true
                 }
             }
+        case .virtualApp(let app):
+            launchVirtualApp(app)
         case .installed(let app):
             FlekLaunchTracker.shared.markLaunched(app)
             let mode = FlekLaunchModeStore.shared.mode(for: app)
@@ -1258,6 +1317,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             return UIMenu(title: "", children: [moveCards])
         case .installed(let app):
             return installedUIMenu(app)
+        case .virtualApp:
+            return nil
         case .installing(let inst):
             let cancel = UIAction(
                 title: "lc.flek.cancelInstall".loc,
@@ -1434,7 +1495,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
         case .installed(let app):
             installedContextMenu(app)
-        case .installing, .placeholder:
+        case .virtualApp, .installing, .placeholder:
             EmptyView()
         }
     }

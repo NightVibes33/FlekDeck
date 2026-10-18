@@ -459,6 +459,10 @@ struct FlekSpringboardView<Menu: View>: View {
             Image(uiImage: app.appInfo.iconIsDarkIcon(darkModeIcon))
                 .resizable()
                 .scaledToFill()
+        case .virtualApp(let app):
+            Image(uiImage: app.icon ?? UIImage(systemName: "app.fill")!)
+                .resizable()
+                .scaledToFill()
         case .installing, .placeholder:
             Color.clear
         }
@@ -468,6 +472,7 @@ struct FlekSpringboardView<Menu: View>: View {
         switch item {
         case .defaultApp(let kind): return kind.title
         case .installed(let app): return app.appInfo.displayName() ?? "?"
+        case .virtualApp(let app): return app.title
         case .installing(let inst): return inst.name ?? ""
         case .placeholder: return ""
         }

@@ -367,12 +367,16 @@ jobs:
           grep -q 'procursus-extracted-rom-symlinks-restored' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'procursus-embedded-first-install-start' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'fileImporter(isPresented: \$showROMImporter' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
-          grep -q 'FlekProcursusGuestAppsView()' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          ! grep -q 'FlekProcursusGuestAppsView()' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          ! grep -q 'Enable Procursus Runtime' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
+          grep -q 'case virtualApp(FlekVirtualApp)' LiveContainerSwiftUI/FlekDeck/Home/FlekDeckModel.swift
+          grep -q 'FlekDeckListProcursusApps()' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'FlekDeckLaunchProcursusApp(app.id)' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'FlekDeckCardBackgroundVisibilityChanged' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
           ! grep -q 'homeSwitcherWindow' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'switchIntegratedHome' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckGuestSpringBoardCrashGuard' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
-          grep -q 'Enable Procursus Runtime' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
           ! grep -q 'floating switcher' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
           grep -q 'LCSpringboardRepresentable(' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -q 'rom-committed-receipt-present-but-manifest-missing' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
