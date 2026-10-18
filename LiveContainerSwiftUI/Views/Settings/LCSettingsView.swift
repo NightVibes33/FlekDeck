@@ -203,6 +203,9 @@ struct LCSettingsView: View {
                     NavigationLink { LCTweaksView() } label: {
                         categoryRow("Tweaks", "wrench.and.screwdriver.fill", .orange, iconSize: 17)
                     }
+                    NavigationLink { FlekProcursusGuestAppsView() } label: {
+                        categoryRow("Procursus Apps", "shippingbox.fill", .purple, iconSize: 17)
+                    }
                 }
                 Section {
                     linkRow("FlekIconFlekStore", "FlekSt0re.com", action: openFlekstore)

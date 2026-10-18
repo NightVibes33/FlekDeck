@@ -22,6 +22,8 @@ on:
       - 'Tools/PEClientVRoot.c'
       - 'Tools/test_flek_rom_archive.m'
       - 'ThirdParty/FlekDeckPERuntime-NOTICE.md'
+      - 'ThirdParty/ProcursusJailed/**'
+      - 'Tools/prepare_embedded_procursus.py'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -44,6 +46,39 @@ jobs:
           ref: ${{ github.sha }}
           submodules: false
           fetch-depth: 1
+
+      - name: Verify required Procursus Jailed release asset
+        env:
+          ROM_SHA256: 8e213e8893cfc8a00f19783f9ae954a7ac6d3c36363df108dc9e6a8c75fcbf6c
+        run: |
+          set -euo pipefail
+          mkdir -p build/embedded-rom
+          ROM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/procursus-jailed-1.0/procursus-jailed.zip"
+          curl -fL --retry 2 --connect-timeout 15 -o build/embedded-rom/procursus-jailed.zip "$ROM_URL" || {
+            echo "::error::Missing release asset: create release procursus-jailed-1.0 and attach the original procursus-jailed.zip. This exact ZIP is required; no substitute allowed."
+            exit 1
+          }
+          echo "$ROM_SHA256  build/embedded-rom/procursus-jailed.zip" | shasum -a 256 -c -
+          python3 - <<'PY_ROM'
+          import zipfile, plistlib
+          with zipfile.ZipFile('build/embedded-rom/procursus-jailed.zip') as z:
+              if z.testzip() is not None:
+                  raise SystemExit('Corrupt Procursus ROM')
+              m = plistlib.loads(z.read('ROM/manifest.plist'))
+              for key, value in {
+                  'NXRomIdentifier':'org.emexlabs.procursus.jailed',
+                  'NXRomVersion':'1.0',
+                  'NXRomExecutable':'System/Rom/init'
+              }.items():
+                  if m.get(key) != value:
+                      raise SystemExit('Unexpected ROM manifest: '+key)
+              if 'ROM/System/Library/CoreServices/SpringBoard.app/SpringBoard' not in z.namelist():
+                  raise SystemExit('Real guest SpringBoard missing')
+          PY_ROM
+          python3 Tools/prepare_embedded_procursus.py             build/embedded-rom/procursus-jailed.zip             build/embedded-rom/unpacked
+          test -s build/embedded-rom/unpacked/ROM/manifest.plist
+          test -s build/embedded-rom/unpacked/ROM/System/Rom/init
+          test -s build/embedded-rom/unpacked/symlinks.plist
 
       - name: Fetch pinned VibeContainers and OpenSSL
         run: |
@@ -351,6 +386,15 @@ jobs:
           grep -q 'previous-nyxian-kmsg.log' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'recordCommittedROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'procursus-backend-window-under-flekdeck-home' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckLaunchProcursusApp' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          grep -q 'allApplicationObjects' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          grep -q 'FlekDeckInstallBundledProcursus' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'restoreEmbeddedProcursusROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'procursus-extracted-rom-symlinks-restored' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'procursus-embedded-first-install-start' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          ! grep -q 'fileImporter(isPresented: \$showROMImporter' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
+          grep -q 'FlekProcursusGuestAppsView()' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
           ! grep -q 'homeSwitcherWindow' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'switchIntegratedHome' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckGuestSpringBoardCrashGuard' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
@@ -515,6 +559,16 @@ jobs:
           done
           du -sh "$APP/Shared" "$APP/Frameworks/bootstrapd.dylib" "$APP/Frameworks/MobileDevelopmentService.dylib"
           cp ThirdParty/FlekDeckPERuntime-NOTICE.md "$APP/PE-Runtime-NOTICE.md"
+          mkdir -p "$APP/EmbeddedROM"
+          cp -R build/embedded-rom/unpacked/ROM "$APP/EmbeddedROM/ROM"
+          cp build/embedded-rom/unpacked/symlinks.plist "$APP/EmbeddedROM/symlinks.plist"
+          cp build/embedded-rom/unpacked/files-sha256.plist "$APP/EmbeddedROM/files-sha256.plist"
+          test -s "$APP/EmbeddedROM/ROM/System/Rom/init"
+          test -s "$APP/EmbeddedROM/ROM/bootstrap.tar.zst"
+          if find "$APP/EmbeddedROM" -type l | grep -q .; then
+            echo "Unexpected symlink inside signer-compatible IPA resources"
+            exit 1
+          fi
           ldid -S "$EXTENSION/Frameworks/FlekDeckPERuntime.dylib"
           ldid -S "$EXTENSION/Frameworks/LiveShim.framework/LiveShim"
           ldid -S "$EXTENSION/Frameworks/libBroadpatch.dylib"
@@ -583,7 +637,20 @@ jobs:
                       raise SystemExit('Nonportable ZIP extra field in ' + member.filename)
               if ipa.testzip() is not None:
                   raise SystemExit('Damaged IPA entry')
-              print(f'Canonical SideStore IPA validated: {len(names)} entries, no ZIP extras or symlinks')
+              import hashlib
+              root = 'Payload/FlekDeck.app/EmbeddedROM/'
+              if root + 'procursus-jailed.zip' in names:
+                  raise SystemExit('Nested Procursus ZIP is not allowed')
+              checksums = plistlib.loads(ipa.read(root + 'files-sha256.plist'))
+              links = plistlib.loads(ipa.read(root + 'symlinks.plist'))
+              if len(checksums) != 40 or len(links) != 101:
+                  raise SystemExit('Incomplete Procursus ROM files or symlink metadata')
+              for relative, expected in checksums.items():
+                  actual = hashlib.sha256(ipa.read(root + 'ROM/' + relative)).hexdigest()
+                  if actual != expected:
+                      raise SystemExit('Extracted ROM file checksum failed: ' + relative)
+              print(f'Validated IPA with {len(checksums)} expanded ROM files, '
+                    f'{len(links)} relative symlinks to restore, and {len(names)} IPA members')
           PY
           unzip -Z1 FlekDeck.ipa > FlekDeck-ipa-entries.txt
           for required in \
@@ -593,7 +660,13 @@ jobs:
             Shared/LaunchServices/org.emexlabs.compilerd.plist \
             Frameworks/bootstrapd.dylib Frameworks/MobileDevelopmentService.dylib Frameworks/libBroadpatch.dylib \
             Frameworks/MobileDevelopmentKit.framework/Frameworks/CoreCompiler.framework/CoreCompiler \
-            Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit; do
+            Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit \
+            EmbeddedROM/ROM/manifest.plist \
+            EmbeddedROM/ROM/System/Rom/init \
+            EmbeddedROM/ROM/System/Library/CoreServices/SpringBoard.app/SpringBoard \
+            EmbeddedROM/ROM/bootstrap.tar.zst \
+            EmbeddedROM/files-sha256.plist \
+            EmbeddedROM/symlinks.plist; do
             grep -Fxq "Payload/FlekDeck.app/$required" FlekDeck-ipa-entries.txt || { echo "IPA missing Nyxian runtime asset: $required"; exit 1; }
           done
           shasum -a 256 FlekDeck.ipa | tee FlekDeck.sha256

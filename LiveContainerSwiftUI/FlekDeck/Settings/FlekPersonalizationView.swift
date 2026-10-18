@@ -277,3 +277,124 @@ struct FlekPhotoPicker: UIViewControllerRepresentable {
         }
     }
 }
+
+
+// The original Home Screen stays unchanged; this is a genuine guest-application
+// inventory inside FlekDeck's existing Settings navigation. Sileo, NewTerm and
+// TweakSettings appear only if the ROM actually installed/registered them.
+private struct FlekProcursusGuestEntry: Identifiable {
+    let id: String
+    let title: String
+    let icon: UIImage?
+}
+
+struct FlekProcursusGuestAppsView: View {
+    @State private var apps: [FlekProcursusGuestEntry] = []
+    @State private var loading = false
+    @State private var launchError: String?
+    @State private var hasLoaded = false
+
+    var body: some View {
+        List {
+            Section {
+                Label("Procursus Jailed is bundled with FlekDeck", systemImage: "shippingbox.fill")
+                Text("On first launch the included ROM is installed automatically. No Files import, bootloader flash, or runtime download is needed. ROM code signing still uses the P12 configured in FlekDeck.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                if loading && !hasLoaded {
+                    ProgressView("Checking virtual application registry")
+                } else if apps.isEmpty {
+                    Text("No registered Procursus apps. The ROM must finish bootstrapping, and Sileo must install successfully before it can appear here.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(apps) { app in
+                        Button {
+                            launch(app)
+                        } label: {
+                            HStack(spacing: 12) {
+                                if let icon = app.icon {
+                                    Image(uiImage: icon)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 42, height: 42)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                } else {
+                                    Image(systemName: "app")
+                                        .frame(width: 42, height: 42)
+                                }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(app.title).foregroundStyle(.primary)
+                                    Text(app.id).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.up.forward.app")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } header: {
+                Text("Installed virtual applications")
+            } footer: {
+                Text("Entries come directly from Nyxian's LDEApplicationWorkspace. This does not list iOS apps or invent uninstalled jailbreak packages.")
+            }
+        }
+        .navigationTitle("Procursus Apps")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    refresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(loading)
+            }
+        }
+        .onAppear { refresh() }
+        .alert("Virtual app launch failed",
+               isPresented: Binding(
+                    get: { launchError != nil },
+                    set: { if !$0 { launchError = nil } }
+               )) {
+            Button("OK", role: .cancel) { launchError = nil }
+        } message: {
+            Text(launchError ?? "")
+        }
+    }
+
+    private func refresh() {
+        guard !loading else { return }
+        loading = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let entries = FlekDeckListProcursusApps().compactMap { record -> FlekProcursusGuestEntry? in
+                guard let id = record["bundleID"] as? String,
+                      let title = record["title"] as? String else { return nil }
+                return FlekProcursusGuestEntry(id: id, title: title,
+                                               icon: record["icon"] as? UIImage)
+            }
+            DispatchQueue.main.async {
+                apps = entries
+                loading = false
+                hasLoaded = true
+            }
+        }
+    }
+
+    private func launch(_ app: FlekProcursusGuestEntry) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let didLaunch = FlekDeckLaunchProcursusApp(app.id)
+            DispatchQueue.main.async {
+                if didLaunch {
+                    NotificationCenter.default.post(
+                        name: Notification.Name("FlekDeckProcursusGuestDidLaunch"),
+                        object: nil)
+                } else {
+                    launchError = "Nyxian's bootstrapd did not accept the launch of \(app.title). Verify the ROM is booted and the app is installed."
+                }
+            }
+        }
+    }
+}

@@ -20,4 +20,13 @@ FOUNDATION_EXPORT void FlekDeckTraceROMProcessEnvironment(void);
 /// Returns nil when the signed app has no usable application-group entitlement.
 FOUNDATION_EXPORT NSURL * _Nullable FlekDeckBootSharedRootURL(void);
 
+/// Enumerate actual installed Procursus guest applications through Nyxian's
+/// LDEApplicationWorkspace; an empty result means bootstrap is not ready or no
+/// guest apps exist. Never fabricate Sileo or other app entries.
+FOUNDATION_EXPORT NSArray<NSDictionary<NSString *, id> *> *FlekDeckListProcursusApps(void);
+
+/// Launch one *registered* guest application through the ROM's genuine
+/// bootstrapd / PEProcessManager / NXWindowServer pipeline.
+FOUNDATION_EXPORT BOOL FlekDeckLaunchProcursusApp(NSString *bundleID);
+
 NS_ASSUME_NONNULL_END

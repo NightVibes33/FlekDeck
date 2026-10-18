@@ -161,3 +161,44 @@ ability to run behind a non-key UIWindow require on-device integration tests.
 A green CI build does not establish a working virtual jailbreak. Do not
 present fake Sileo icons or claim real jailbreak functionality until the
 guest apps and process services are verified.
+
+
+## Actual guest package inventory and launching
+
+FlekDeck's existing Settings screen includes **Procursus Apps**, a native
+list populated by the loaded ROM's real `LDEApplicationWorkspace
+allApplicationObjects` API. Sileo and other package apps appear **only when
+installed and registered**. Icons, names and identifiers are drawn from
+guest application objects, never fabricated. Selecting an entry calls
+`openApplicationWithBundleID:` in the original workspace, which uses
+Nyxian's own bootstrapd, PE process and virtual window-server stack. A
+successful launch foregrounds the retained ROM guest window. An edge swipe
+from the left returns to FlekDeck. No floating button or replacement
+SpringBoard is drawn, and the original FlekDeck launcher remains untouched.
+
+This is a runtime bridge, not a claim that the user's ZIP has been bundled,
+Sileo downloaded successfully, or that any particular guest starts on iOS 27.
+The uploaded ROM still requires initial installation and signed-device testing.
+
+
+### Bundled *extracted* Procursus Jailed ROM
+
+The original ZIP is SHA-256 pinned (`8e213e8893cfc8a00f19783f9ae954a7ac6d3c36363df108dc9e6a8c75fcbf6c`).
+The CI build unpacks it into `EmbeddedROM/ROM/`, shipping the real
+`manifest.plist`, `System/Rom/init`, guest SpringBoard executable,
+`usr/libexec/bootstrapd` and `bootstrap.tar.zst`, not a nested ZIP.
+Forty regular ROM files are hashed in `files-sha256.plist`.
+
+The source ROM also contains 101 relative symbolic links. To keep the
+unsigned SideStore IPA portable, links are represented by
+`EmbeddedROM/symlinks.plist`. On first launch FlekDeck verifies the real
+files, copies the directory into the writable ROM staging slot, validates
+and recreates the original symlinks there, then uses existing ZSign/NXT2
+signing and atomic slot commit. The inner bootstrap.tar.zst is left in
+its expected compressed format because Procursus uses it at runtime.
+
+The build still requires the original uploaded archive as a GitHub release
+asset `procursus-jailed.zip` tagged `procursus-jailed-1.0`. The build
+downloads and unpacks that verified asset; no ROM ZIP ships in the IPA
+and no user import is needed. A missing asset fails CI. A P12 and
+on-device boot testing are still required to prove Sileo/Procursus works.

@@ -267,3 +267,82 @@ NSURL * _Nullable FlekDeckBootSharedRootURL(void)
     }
     return [appGroupURL URLByAppendingPathComponent:@"FlekDeck/Boot" isDirectory:YES];
 }
+
+
+#pragma mark - Integrated Procursus workspace bridge
+
+// Use Nyxian's own LDEApplicationWorkspace runtime object loaded by ROM init.
+// DO NOT create a second process manager, parse a fake app list, launch Mach-O
+// in the host, or bypass the ROM's entitlement/process-registration checks.
+static id FlekDeckProcursusWorkspace(void)
+{
+    Class workspaceClass = NSClassFromString(@"LDEApplicationWorkspace");
+    SEL shared = @selector(shared);
+    if (!workspaceClass || ![workspaceClass respondsToSelector:shared]) return nil;
+    return ((id (*)(id, SEL))objc_msgSend)(workspaceClass, shared);
+}
+
+NSArray<NSDictionary<NSString *, id> *> *FlekDeckListProcursusApps(void)
+{
+    id workspace = FlekDeckProcursusWorkspace();
+    SEL query = NSSelectorFromString(@"allApplicationObjects");
+    if (!workspace || ![workspace respondsToSelector:query]) {
+        FlekROMTrace("procursus-app-registry-not-ready");
+        return @[];
+    }
+    NSArray *objects = ((id (*)(id, SEL))objc_msgSend)(workspace, query);
+    if (![objects isKindOfClass:NSArray.class]) return @[];
+    NSMutableArray<NSDictionary<NSString *, id> *> *result = [NSMutableArray array];
+    for (id app in objects) {
+        SEL identifierSel = NSSelectorFromString(@"bundleIdentifier");
+        SEL titleSel = NSSelectorFromString(@"localizedName");
+        SEL iconSel = NSSelectorFromString(@"icon");
+        if (![app respondsToSelector:identifierSel]) continue;
+        id identifier = ((id (*)(id, SEL))objc_msgSend)(app, identifierSel);
+        if (![identifier isKindOfClass:NSString.class] || ![identifier length]) continue;
+        // The ROM's own SpringBoard is a system process, not a tappable app.
+        if ([identifier isEqualToString:@"com.apple.springboard"]) continue;
+        id title = [app respondsToSelector:titleSel] ?
+            ((id (*)(id, SEL))objc_msgSend)(app, titleSel) : nil;
+        id icon = [app respondsToSelector:iconSel] ?
+            ((id (*)(id, SEL))objc_msgSend)(app, iconSel) : nil;
+        NSMutableDictionary *entry = [@{
+            @"bundleID": identifier,
+            @"title": ([title isKindOfClass:NSString.class] && [title length])
+                     ? title : identifier
+        } mutableCopy];
+        if ([icon isKindOfClass:NSClassFromString(@"UIImage")]) {
+            entry[@"icon"] = icon;
+        }
+        [result addObject:entry];
+    }
+    [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"title"] localizedCaseInsensitiveCompare:b[@"title"]];
+    }];
+    FlekROMTrace("procursus-app-registry-enumerated");
+    return result;
+}
+
+BOOL FlekDeckLaunchProcursusApp(NSString *bundleID)
+{
+    if (![bundleID isKindOfClass:NSString.class] || !bundleID.length) return NO;
+    id workspace = FlekDeckProcursusWorkspace();
+    SEL present = NSSelectorFromString(@"openApplicationWithBundleID:");
+    if (!workspace || ![workspace respondsToSelector:present]) {
+        FlekROMTrace("procursus-app-launch-workspace-unavailable");
+        return NO;
+    }
+    // Confirm the target is actually present before asking bootstrapd to
+    // launch it. Never show a pre-populated/fake installed application.
+    BOOL exists = NO;
+    for (NSDictionary *entry in FlekDeckListProcursusApps()) {
+        if ([entry[@"bundleID"] isEqual:bundleID]) { exists = YES; break; }
+    }
+    if (!exists) {
+        FlekROMTrace("procursus-app-launch-target-not-installed");
+        return NO;
+    }
+    BOOL launched = ((BOOL (*)(id, SEL, id))objc_msgSend)(workspace, present, bundleID);
+    FlekROMTrace(launched ? "procursus-app-launch-accepted" : "procursus-app-launch-rejected");
+    return launched;
+}

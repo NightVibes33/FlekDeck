@@ -340,13 +340,15 @@ private let romQueue = DispatchQueue(label: "org.emexlabs.nyxian.bootloader.rom"
 private var romOperationInProgress = false
 
 private struct RomLog {
-    let controller: NXRecoveryViewController
-    
+    let controller: NXRecoveryViewController?
+
     func info(_ message: String) {
+        guard let controller else { NSLog("FlekDeck ROM installer: %@", message); return }
         DispatchQueue.main.async { controller.recoveryLog(message) }
     }
-    
+
     func error(_ message: String) {
+        guard let controller else { NSLog("FlekDeck ROM installer error: %@", message); return }
         DispatchQueue.main.async { controller.recoveryLogError(message) }
     }
     
@@ -984,6 +986,59 @@ func recoveryShowUnflash(recoveryController c: NXRecoveryViewController) {
     )
 }
 
+/// Restore symlinks only after copying signed IPA resources to writable
+/// staging storage. The unsigned IPA itself must never include symlinks.
+private func restoreEmbeddedProcursusROM(from source: URL, into slot: URL) throws {
+    let fm = FileManager.default
+    guard let expected = FlekDeckBootPaths.embeddedProcursusRoot,
+          source.standardizedFileURL == expected.standardizedFileURL else {
+        throw romError("Unrecognized bundled Procursus root")
+    }
+    let container = source.deletingLastPathComponent()
+    guard let files = NSDictionary(contentsOf: container.appendingPathComponent("files-sha256.plist")) as? [String: String],
+          let links = NSDictionary(contentsOf: container.appendingPathComponent("symlinks.plist")) as? [String: String],
+          files.count == 40, links.count == 101 else {
+        throw romError("Procursus extracted ROM metadata is missing or incomplete")
+    }
+    func validRelative(_ name: String) -> Bool {
+        !name.isEmpty && !name.hasPrefix("/") && !name.contains("\\")
+            && name.split(separator: "/", omittingEmptySubsequences: false)
+                .allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+    // Verify each regular file before executing any ROM code.
+    for (relative, digest) in files {
+        guard validRelative(relative), digest.count == 64 else {
+            throw romError("Unsafe embedded ROM file: \(relative)")
+        }
+        let data = try Data(contentsOf: source.appendingPathComponent(relative),
+                            options: .mappedIfSafe)
+        let actual = SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }.joined()
+        guard actual == digest else {
+            throw romError("Embedded ROM checksum mismatch: \(relative)")
+        }
+    }
+    try fm.removeItem(at: slot)
+    try fm.copyItem(at: source, to: slot)
+    let root = slot.standardizedFileURL.path
+    for (relative, target) in links.sorted(by: { $0.key < $1.key }) {
+        guard validRelative(relative), !target.isEmpty,
+              !target.hasPrefix("/"), !target.contains("\\") else {
+            throw romError("Unsafe embedded ROM symlink: \(relative)")
+        }
+        let link = slot.appendingPathComponent(relative).standardizedFileURL
+        let targetURL = link.deletingLastPathComponent()
+            .appendingPathComponent(target).standardizedFileURL
+        guard link.path.hasPrefix(root + "/"),
+              targetURL.path.hasPrefix(root + "/"),
+              !fm.fileExists(atPath: link.path) else {
+            throw romError("ROM symlink outside staging slot: \(relative)")
+        }
+        try fm.createSymbolicLink(atPath: link.path, withDestinationPath: target)
+    }
+    FlekDeckBootTrace.mark("procursus-extracted-rom-symlinks-restored")
+}
+
 private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
     let fm = FileManager.default
     let finalSlot = flashedSlotURL()
@@ -1000,9 +1055,13 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
     }
     try fm.createDirectory(at: slot, withIntermediateDirectories: true, attributes: [:])
     
-    var extractionError: NSError?
-    guard FlekDeckExtractROMArchive(archive, slot, &extractionError) else {
-        throw extractionError ?? romError("failed to extract ROM")
+    if archive.hasDirectoryPath {
+        try restoreEmbeddedProcursusROM(from: archive, into: slot)
+    } else {
+        var extractionError: NSError?
+        guard FlekDeckExtractROMArchive(archive, slot, &extractionError) else {
+            throw extractionError ?? romError("failed to extract ROM")
+        }
     }
     
     log.info("extracted rom")
@@ -1155,6 +1214,44 @@ private func recoveryFlashROM(_ c: NXRecoveryViewController, archive: URL) {
                     recoveryShowMenu(recoveryController: c)
                 })
             }
+        }
+    }
+}
+
+/// Install a user-selected Procursus ROM from FlekDeck's Settings, using
+/// the SAME verified/signing NXT2 flash path as Nyxian Recovery. The ROM
+/// stays persistent under Slot/A; selecting the ZIP is a one-time step.
+/// No side-loaded binary is run before signature and manifest verification.
+func FlekDeckInstallBundledProcursus(
+    _ source: URL,
+    completion: @escaping (Result<String, Error>) -> Void
+) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    guard !romOperationInProgress else {
+        completion(.failure(romError("A ROM operation is already running")))
+        return
+    }
+    guard source.standardizedFileURL ==
+        FlekDeckBootPaths.embeddedProcursusRoot?.standardizedFileURL else {
+        completion(.failure(romError("Procursus folder is not the embedded IPA asset")))
+        return
+    }
+    romOperationInProgress = true
+    FlekDeckBootTrace.mark("procursus-embedded-install-enter")
+    romQueue.async {
+        let outcome: Result<String, Error>
+        do {
+            let manifest = try flashROM(archive: source, log: RomLog(controller: nil))
+            FlekDeckBootTrace.mark("procursus-embedded-install-committed")
+            outcome = .success("\(manifest.name) \(manifest.version) installed. Restart FlekDeck to initialize the virtual environment.")
+        } catch {
+            try? FileManager.default.removeItem(at: FlekDeckBootPaths.stagingSlot)
+            FlekDeckBootTrace.mark("procursus-embedded-install-failed \(error.localizedDescription)")
+            outcome = .failure(error)
+        }
+        DispatchQueue.main.async {
+            romOperationInProgress = false
+            completion(outcome)
         }
     }
 }
@@ -1348,6 +1445,13 @@ private enum FlekDeckBootPaths {
     static let previousSlot: URL = root.appendingPathComponent("Slot/.A.previous", isDirectory: true)
     static let imports: URL = root.appendingPathComponent("Imports", isDirectory: true)
     private static let committedReceipt = root.appendingPathComponent("committed-rom.plist")
+    /// Real unpacked ROM filesystem, not an archive nested in the IPA.
+    static var embeddedProcursusRoot: URL? {
+        let root = Bundle.main.bundleURL.appendingPathComponent("EmbeddedROM/ROM", isDirectory: true)
+        return FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("manifest.plist").path) ? root : nil
+    }
+
 
     static var expectedFlashedROM: Bool {
         FileManager.default.fileExists(atPath: committedReceipt.path)
@@ -1387,7 +1491,13 @@ private enum FlekDeckBootPaths {
             "Frameworks/MobileDevelopmentKit.framework/MobileDevelopmentKit",
             "PlugIns/LiveProcess.appex/Frameworks/FlekDeckPERuntime.dylib",
             "PlugIns/LiveProcess.appex/Frameworks/LiveShim.framework/LiveShim",
-            "PlugIns/LiveProcess.appex/Frameworks/libBroadpatch.dylib"
+            "PlugIns/LiveProcess.appex/Frameworks/libBroadpatch.dylib",
+            "EmbeddedROM/ROM/manifest.plist",
+            "EmbeddedROM/ROM/System/Rom/init",
+            "EmbeddedROM/ROM/System/Library/CoreServices/SpringBoard.app/SpringBoard",
+            "EmbeddedROM/ROM/bootstrap.tar.zst",
+            "EmbeddedROM/files-sha256.plist",
+            "EmbeddedROM/symlinks.plist"
         ]
         return resources.filter {
             !FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent($0).path)
@@ -1544,6 +1654,8 @@ private final class FlekDeckBootViewController: UIViewController {
     private var activeSlotWindow: UIWindow?
     private var didStartBoot = false
 
+    private static let showGuestName = Notification.Name("FlekDeckProcursusGuestDidLaunch")
+
     private static let guestBootCrashGuardKey = "FlekDeckGuestSpringBoardCrashGuard"
     // Preserve the old preference key so previous experimental builds migrate
     // without resetting the user's existing choice.
@@ -1577,6 +1689,9 @@ private final class FlekDeckBootViewController: UIViewController {
         didStartBoot = true
         BootConfig.registerDefaults()
         FlekDeckBootTrace.begin()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(presentProcursusGuest),
+            name: Self.showGuestName, object: nil)
         
         self.view.backgroundColor = .systemBackground
         
@@ -1649,7 +1764,31 @@ private final class FlekDeckBootViewController: UIViewController {
                 }
                 return
             }
-            if !FileManager.default.fileExists(atPath: flashedSlotURL().appendingPathComponent("manifest.plist").path) {
+            // First launch: FlekDeck stays interactive while this exact
+            // IPA-embedded ROM is signed and committed on the ROM serial queue.
+            let installedManifest = flashedSlotURL().appendingPathComponent("manifest.plist")
+            if !FileManager.default.fileExists(atPath: installedManifest.path),
+               !FlekDeckBootPaths.expectedFlashedROM,
+               let root = FlekDeckBootPaths.embeddedProcursusRoot {
+                FlekDeckBootTrace.mark("procursus-embedded-first-install-start")
+                DispatchQueue.main.async {
+                    self.transition(to: self.builtinController, style: .crossfade) {
+                        FlekDeckInstallBundledProcursus(root) { result in
+                            switch result {
+                            case .success(let message):
+                                FlekDeckBootTrace.mark("procursus-embedded-first-install-success \(message)")
+                                // Restart for a clean NXSlotMain initialization.
+                                restartSelf()
+                            case .failure(let error):
+                                FlekDeckBootTrace.mark("procursus-embedded-first-install-failed \(error.localizedDescription)")
+                                // Never crash FlekDeck when a P12 is missing.
+                            }
+                        }
+                    }
+                }
+                return
+            }
+            if !FileManager.default.fileExists(atPath: installedManifest.path) {
                 if FlekDeckBootPaths.expectedFlashedROM {
                     FlekDeckBootTrace.mark("rom-committed-receipt-present-but-manifest-missing")
                     DispatchQueue.main.async {
@@ -1775,6 +1914,40 @@ private final class FlekDeckBootViewController: UIViewController {
         hostWindow.makeKeyAndVisible()
         FlekDeckBootTrace.mark("procursus-backend-window-under-flekdeck-home")
         completeROMBoot(didAppear: slotDidAppear)
+    }
+
+    // A real guest app is displayed only after a successful workspace launch.
+    // This is normal full-screen app navigation, not a second launcher or
+    // floating switcher. Swipe from the left edge to return to FlekDeck's
+    // exact existing Home / Settings / Installer and app-switcher state.
+    @objc private func presentProcursusGuest() {
+        guard let guestWindow = activeSlotWindow,
+              let hostWindow = view.window else { return }
+        guestWindow.windowLevel = .normal + 1
+        if let rootView = guestWindow.rootViewController?.view {
+            let alreadyPresent = rootView.gestureRecognizers?.contains {
+                $0 is UIScreenEdgePanGestureRecognizer &&
+                ($0 as? UIScreenEdgePanGestureRecognizer)?.edges == .left
+            } ?? false
+            if !alreadyPresent {
+                let back = UIScreenEdgePanGestureRecognizer(
+                    target: self, action: #selector(procursusGuestBackGesture(_:)))
+                back.edges = .left
+                rootView.addGestureRecognizer(back)
+            }
+        }
+        guestWindow.makeKeyAndVisible()
+        FlekDeckBootTrace.mark("procursus-guest-app-presented")
+        _ = hostWindow // Keep FlekDeck's window alive underneath.
+    }
+
+    @objc private func procursusGuestBackGesture(_ recognizer: UIScreenEdgePanGestureRecognizer) {
+        guard recognizer.state == .ended,
+              recognizer.translation(in: recognizer.view).x > 70,
+              let hostWindow = view.window else { return }
+        activeSlotWindow?.windowLevel = .normal - 1
+        hostWindow.makeKeyAndVisible()
+        FlekDeckBootTrace.mark("procursus-guest-app-returned-to-flekdeck")
     }
 
     private func completeROMBoot(didAppear: NXSlotDidAppearFn?) {
