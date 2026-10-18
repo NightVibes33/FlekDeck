@@ -1538,18 +1538,18 @@ struct FlekDeckRecoveryView: UIViewControllerRepresentable {
 */
 private final class FlekDeckBootViewController: UIViewController {
     private let builtinController: UIViewController
-    // Keep FlekDeck's own UIWindow mounted under the genuine ROM WindowServer.
-    // This is one app with two coordinated scenes, not a fake icon-grid clone.
+    // Retain the ROM window only as a native bootstrap/guest scene host.
+    // FlekDeck's original UIKit/SwiftUI Home always stays frontmost.
+    // Never replace its launcher, icon ordering, Installer, or multitask dock.
     private var activeSlotWindow: UIWindow?
-    private var homeSwitcherWindow: UIWindow?
-    private var homeSwitcherButton: UIButton?
-    private var guestHomeIsVisible = false
     private var didStartBoot = false
 
     private static let guestBootCrashGuardKey = "FlekDeckGuestSpringBoardCrashGuard"
+    // Preserve the old preference key so previous experimental builds migrate
+    // without resetting the user's existing choice.
     private static let guestHomePreferenceKey = "FlekDeckUseRealSpringBoard"
 
-    private static var wantsRealSpringBoard: Bool {
+    private static var wantsProcursusRuntime: Bool {
         let defaults = LCUtils.appGroupUserDefault
         return defaults.object(forKey: guestHomePreferenceKey) as? Bool ?? true
     }
@@ -1639,10 +1639,10 @@ private final class FlekDeckBootViewController: UIViewController {
             }
 
             // FlekDeck's own shell is the built-in slot, replacing SuperSlot.
-            if mode == 1 || !Self.wantsRealSpringBoard ||
+            if mode == 1 || !Self.wantsProcursusRuntime ||
                 UserDefaults.standard.bool(forKey: Self.guestBootCrashGuardKey) {
                 let reason = mode == 1 ? "volume-override" :
-                    (!Self.wantsRealSpringBoard ? "disabled-by-user" : "previous-guest-boot-failed")
+                    (!Self.wantsProcursusRuntime ? "disabled-by-user" : "previous-guest-boot-failed")
                 FlekDeckBootTrace.mark("builtin-shell-selected-\(reason)")
                 DispatchQueue.main.async {
                     self.transition(to: self.builtinController)
@@ -1711,11 +1711,10 @@ private final class FlekDeckBootViewController: UIViewController {
                 FlekDeckBootTrace.mark("rom-frontboard-upstream-path-ready")
                 FlekDeckBootTrace.mark("rom-nyxian-kmsg-in-documents-captured-on-next-launch")
 
-                // FlekDeck stays the owning application. Its original Home,
-                // Installer, settings and multitasking are initialized first.
-                // Nyxian's real SpringBoard then starts in the dedicated ROM
-                // WindowServer, and its UIWindow floats above the host.
-                FlekDeckBootTrace.mark("integrated-host-shell-enter")
+                // FlekDeck remains the *only* visible Home Screen. The ROM's
+                // genuine SpringBoard is an internal userspace service,
+                // not a second launcher or an overlay covering FlekDeck.
+                FlekDeckBootTrace.mark("procursus-host-shell-enter")
                 self.transition(to: self.builtinController, style: .crossfade) {
                     self.startIntegratedSpringBoard(
                         name: name,
@@ -1758,73 +1757,24 @@ private final class FlekDeckBootViewController: UIViewController {
             try? FlekDeckBootPaths.setSessionActive(false)
             return
         }
-        guard let scene = view.window?.windowScene else {
-            FlekDeckBootTrace.mark("integrated-host-scene-unavailable")
+        guard let hostWindow = view.window else {
+            FlekDeckBootTrace.mark("procursus-host-window-unavailable")
             try? FlekDeckBootPaths.setSessionActive(false)
             return
         }
 
+        // A window is needed by the ROM's NXWindowServer and its guest
+        // SpringBoard process. Keeping it *below* FlekDeck's existing window
+        // lets those services run while the exact original FlekDeck Home,
+        // dock, Installer and gestures retain every on-screen touch.
         activeSlotWindow = guestWindow
         guestWindow.rootViewController = guestRoot
-        // Keep the original FlekDeck window beneath the ROM's own WindowServer.
-        // Never nil its rootViewController or replace the scene delegate.
-        guestWindow.windowLevel = .normal + 1
+        guestWindow.windowLevel = .normal - 1
         guestWindow.makeKeyAndVisible()
         guestRoot.view.layoutIfNeeded()
-        guestHomeIsVisible = true
-        installHomeSwitcher(in: scene)
-        FlekDeckBootTrace.mark("integrated-real-springboard-window-visible")
+        hostWindow.makeKeyAndVisible()
+        FlekDeckBootTrace.mark("procursus-backend-window-under-flekdeck-home")
         completeROMBoot(didAppear: slotDidAppear)
-    }
-
-    // An independently retained, small native control stays above either
-    // window. It gives users immediate access to FlekDeck's existing launcher,
-    // settings and Installer without terminating Sileo or the guest userspace.
-    private func installHomeSwitcher(in scene: UIWindowScene) {
-        guard homeSwitcherWindow == nil else { return }
-        let size = scene.coordinateSpace.bounds.size
-        let frame = CGRect(x: max(8, size.width - 144),
-                           y: max(55, view.safeAreaInsets.top + 12),
-                           width: 132, height: 42)
-        let surface = UIWindow(windowScene: scene)
-        surface.frame = frame
-        surface.windowLevel = .alert + 1
-        surface.backgroundColor = .clear
-        let container = UIViewController()
-        container.view.backgroundColor = .clear
-        let button = UIButton(type: .system)
-        button.frame = CGRect(x: 0, y: 0, width: 132, height: 42)
-        button.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.95)
-        button.layer.cornerRadius = 21
-        button.layer.borderColor = UIColor.separator.cgColor
-        button.layer.borderWidth = 0.5
-        button.setTitle("FlekDeck", for: .normal)
-        button.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
-        button.accessibilityLabel = "Switch between FlekDeck and the real virtual SpringBoard"
-        button.addTarget(self, action: #selector(switchIntegratedHome), for: .touchUpInside)
-        container.view.addSubview(button)
-        surface.rootViewController = container
-        surface.isHidden = false
-        homeSwitcherButton = button
-        homeSwitcherWindow = surface
-        // Restore the interactive SpringBoard as the key scene. The switcher
-        // remains above it and receives touches in its own 132x42 window.
-        activeSlotWindow?.makeKey()
-    }
-
-    @objc private func switchIntegratedHome() {
-        guard let guestWindow = activeSlotWindow else { return }
-        guestHomeIsVisible.toggle()
-        guestWindow.isHidden = !guestHomeIsVisible
-        if guestHomeIsVisible {
-            guestWindow.makeKeyAndVisible()
-            homeSwitcherButton?.setTitle("FlekDeck", for: .normal)
-            FlekDeckBootTrace.mark("integrated-home-switched-to-real-springboard")
-        } else {
-            view.window?.makeKeyAndVisible()
-            homeSwitcherButton?.setTitle("SpringBoard", for: .normal)
-            FlekDeckBootTrace.mark("integrated-home-switched-to-flekdeck")
-        }
     }
 
     private func completeROMBoot(didAppear: NXSlotDidAppearFn?) {

@@ -25,7 +25,7 @@ struct FlekPersonalizationView: View {
     @AppStorage("darkModeIcon", store: LCUtils.appGroupUserDefault) private var darkModeIcon = false
     @AppStorage("LCFrameShortcutIcons", store: LCUtils.appGroupUserDefault) private var frameShortIcon = false
     @AppStorage(FlekDeckKeys.showAppCardBackgrounds, store: LCUtils.appGroupUserDefault) private var showAppCardBackgrounds = true
-    @AppStorage("FlekDeckUseRealSpringBoard", store: LCUtils.appGroupUserDefault) private var useRealSpringBoard = true
+    @AppStorage("FlekDeckUseRealSpringBoard", store: LCUtils.appGroupUserDefault) private var procursusRuntimeEnabled = true
 
     @State private var showCollection = false
     @State private var showPhotoPicker = false
@@ -65,22 +65,21 @@ struct FlekPersonalizationView: View {
                     .background(card)
                 }
 
-                // MARK: Integrated Procursus Home
+                // MARK: Procursus virtual jailbreak (backend only)
                 VStack(alignment: .leading, spacing: 10) {
-                    sectionHeader("Virtual SpringBoard")
+                    sectionHeader("Procursus Virtual Jailbreak")
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Use Real Procursus SpringBoard", isOn: $useRealSpringBoard)
-                        Text("Requires an installed Procursus ROM. When enabled, FlekDeck loads the ROM's real SpringBoard process and keeps its own interface available through a floating switcher. Takes effect after restarting FlekDeck.")
+                        Toggle("Enable Procursus Runtime", isOn: $procursusRuntimeEnabled)
+                        Text("Starts the installed ROM's actual virtual SpringBoard and userspace services behind FlekDeck. Your Home Screen, dock, Installer and app layout stay unchanged. Restart FlekDeck to apply.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                     .padding(16)
                     .background(card)
                 }
-                .onChange(of: useRealSpringBoard) { enabled in
+                .onChange(of: procursusRuntimeEnabled) { enabled in
                     if enabled {
-                        // Explicit retry after a failed ROM startup; never
-                        // bypass crash-loop protection implicitly.
+                        // An explicit retry is required after a ROM startup crash.
                         UserDefaults.standard.set(false, forKey: "FlekDeckGuestSpringBoardCrashGuard")
                     }
                 }
