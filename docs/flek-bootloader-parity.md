@@ -202,3 +202,8 @@ asset `procursus-jailed.zip` tagged `procursus-jailed-1.0`. The build
 downloads and unpacks that verified asset; no ROM ZIP ships in the IPA
 and no user import is needed. A missing asset fails CI. A P12 and
 on-device boot testing are still required to prove Sileo/Procursus works.
+
+
+## CI validation and automatic Procursus install failure recovery
+
+The unsigned host and PE runtime compile before the mandatory ROM release asset is downloaded. Packaging remains strictly gated on the exact approved ZIP. When the on-device install fails, Settings > Procursus Apps displays the actual error, pauses automatic repeated attempts, and offers retry of the same extracted IPA resources after signing identity repair. There is no user ROM file picker and the existing FlekDeck Home stays unchanged.

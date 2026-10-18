@@ -293,6 +293,9 @@ struct FlekProcursusGuestAppsView: View {
     @State private var loading = false
     @State private var launchError: String?
     @State private var hasLoaded = false
+    @AppStorage("FlekDeckProcursusLastInstallError") private var romInstallError = ""
+    @State private var retryInProgress = false
+    @State private var retryMessage: String?
 
     var body: some View {
         List {
@@ -301,6 +304,27 @@ struct FlekProcursusGuestAppsView: View {
                 Text("On first launch the included ROM is installed automatically. No Files import, bootloader flash, or runtime download is needed. ROM code signing still uses the P12 configured in FlekDeck.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if !romInstallError.isEmpty {
+                    Label("Automatic ROM installation failed", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text(romInstallError)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        retryBundledInstall()
+                    } label: {
+                        Label("Retry bundled ROM installation", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(retryInProgress)
+                    if retryInProgress {
+                        ProgressView("Installing Procursus ROM")
+                    }
+                }
+                if let retryMessage {
+                    Text(retryMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
             Section {
                 if loading && !hasLoaded {
@@ -362,6 +386,24 @@ struct FlekProcursusGuestAppsView: View {
             Button("OK", role: .cancel) { launchError = nil }
         } message: {
             Text(launchError ?? "")
+        }
+    }
+
+    private func retryBundledInstall() {
+        guard !retryInProgress else { return }
+        retryInProgress = true
+        retryMessage = nil
+        FlekDeckRetryBundledProcursus { result in
+            retryInProgress = false
+            switch result {
+            case .success(let message):
+                retryMessage = message
+                UserDefaults.standard.set(
+                    false, forKey: "FlekDeckGuestSpringBoardCrashGuard")
+                refresh()
+            case .failure(let error):
+                retryMessage = "Still unable to install: \(error.localizedDescription). Check your signing certificate under Settings."
+            }
         }
     }
 

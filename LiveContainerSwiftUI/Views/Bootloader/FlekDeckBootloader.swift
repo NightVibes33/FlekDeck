@@ -1251,9 +1251,29 @@ func FlekDeckInstallBundledProcursus(
         }
         DispatchQueue.main.async {
             romOperationInProgress = false
+            switch outcome {
+            case .success:
+                UserDefaults.standard.removeObject(forKey: "FlekDeckProcursusLastInstallError")
+            case .failure(let error):
+                UserDefaults.standard.set(
+                    error.localizedDescription,
+                    forKey: "FlekDeckProcursusLastInstallError")
+            }
             completion(outcome)
         }
     }
+}
+
+/// Retry the same already-unpacked IPA resources after importing a P12.
+/// Never ask the user to find or flash a ZIP.
+func FlekDeckRetryBundledProcursus(
+    completion: @escaping (Result<String, Error>) -> Void
+) {
+    guard let source = FlekDeckBootPaths.embeddedProcursusRoot else {
+        completion(.failure(romError("This FlekDeck IPA is missing its unpacked Procursus ROM")))
+        return
+    }
+    FlekDeckInstallBundledProcursus(source, completion: completion)
 }
 
 // Cuz it is weak
@@ -1767,8 +1787,14 @@ private final class FlekDeckBootViewController: UIViewController {
             // First launch: FlekDeck stays interactive while this exact
             // IPA-embedded ROM is signed and committed on the ROM serial queue.
             let installedManifest = flashedSlotURL().appendingPathComponent("manifest.plist")
+            let autoInstallPaused = UserDefaults.standard.string(
+                forKey: "FlekDeckProcursusLastInstallError") != nil
+            if autoInstallPaused {
+                FlekDeckBootTrace.mark("procursus-automatic-install-paused-after-failure")
+            }
             if !FileManager.default.fileExists(atPath: installedManifest.path),
                !FlekDeckBootPaths.expectedFlashedROM,
+               !autoInstallPaused,
                let root = FlekDeckBootPaths.embeddedProcursusRoot {
                 FlekDeckBootTrace.mark("procursus-embedded-first-install-start")
                 DispatchQueue.main.async {

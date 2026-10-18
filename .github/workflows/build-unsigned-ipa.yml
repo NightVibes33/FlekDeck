@@ -47,39 +47,6 @@ jobs:
           submodules: false
           fetch-depth: 1
 
-      - name: Verify required Procursus Jailed release asset
-        env:
-          ROM_SHA256: 8e213e8893cfc8a00f19783f9ae954a7ac6d3c36363df108dc9e6a8c75fcbf6c
-        run: |
-          set -euo pipefail
-          mkdir -p build/embedded-rom
-          ROM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/procursus-jailed-1.0/procursus-jailed.zip"
-          curl -fL --retry 2 --connect-timeout 15 -o build/embedded-rom/procursus-jailed.zip "$ROM_URL" || {
-            echo "::error::Missing release asset: create release procursus-jailed-1.0 and attach the original procursus-jailed.zip. This exact ZIP is required; no substitute allowed."
-            exit 1
-          }
-          echo "$ROM_SHA256  build/embedded-rom/procursus-jailed.zip" | shasum -a 256 -c -
-          python3 - <<'PY_ROM'
-          import zipfile, plistlib
-          with zipfile.ZipFile('build/embedded-rom/procursus-jailed.zip') as z:
-              if z.testzip() is not None:
-                  raise SystemExit('Corrupt Procursus ROM')
-              m = plistlib.loads(z.read('ROM/manifest.plist'))
-              for key, value in {
-                  'NXRomIdentifier':'org.emexlabs.procursus.jailed',
-                  'NXRomVersion':'1.0',
-                  'NXRomExecutable':'System/Rom/init'
-              }.items():
-                  if m.get(key) != value:
-                      raise SystemExit('Unexpected ROM manifest: '+key)
-              if 'ROM/System/Library/CoreServices/SpringBoard.app/SpringBoard' not in z.namelist():
-                  raise SystemExit('Real guest SpringBoard missing')
-          PY_ROM
-          python3 Tools/prepare_embedded_procursus.py             build/embedded-rom/procursus-jailed.zip             build/embedded-rom/unpacked
-          test -s build/embedded-rom/unpacked/ROM/manifest.plist
-          test -s build/embedded-rom/unpacked/ROM/System/Rom/init
-          test -s build/embedded-rom/unpacked/symlinks.plist
-
       - name: Fetch pinned VibeContainers and OpenSSL
         run: |
           set -euo pipefail
@@ -377,6 +344,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m py_compile Tools/prepare_flekdeck_pe_runtime.py
+          python3 -m py_compile Tools/prepare_embedded_procursus.py
+          grep -q 'Procursus source ZIP digest mismatch' Tools/prepare_embedded_procursus.py
+          grep -q 'Procursus extracted ROM metadata is missing or incomplete' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckProcursusLastInstallError' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           plutil -lint LiveProcess/LiveProcess.entitlements LiveProcess/LiveProcessRelease.entitlements
           grep -q FlekDeckRunPERequest LiveProcess/main.m
           grep -q FlekDeckPrepareROMRuntime LiveProcess/main.m
@@ -464,6 +435,39 @@ jobs:
         run: |
           set -euo pipefail
           brew install ldid
+
+      - name: Verify required Procursus Jailed release asset
+        env:
+          ROM_SHA256: 8e213e8893cfc8a00f19783f9ae954a7ac6d3c36363df108dc9e6a8c75fcbf6c
+        run: |
+          set -euo pipefail
+          mkdir -p build/embedded-rom
+          ROM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/procursus-jailed-1.0/procursus-jailed.zip"
+          curl -fL --retry 2 --connect-timeout 15 -o build/embedded-rom/procursus-jailed.zip "$ROM_URL" || {
+            echo "::error::Missing release asset: create release procursus-jailed-1.0 and attach the original procursus-jailed.zip. This exact ZIP is required; no substitute allowed."
+            exit 1
+          }
+          echo "$ROM_SHA256  build/embedded-rom/procursus-jailed.zip" | shasum -a 256 -c -
+          python3 - <<'PY_ROM'
+          import zipfile, plistlib
+          with zipfile.ZipFile('build/embedded-rom/procursus-jailed.zip') as z:
+              if z.testzip() is not None:
+                  raise SystemExit('Corrupt Procursus ROM')
+              m = plistlib.loads(z.read('ROM/manifest.plist'))
+              for key, value in {
+                  'NXRomIdentifier':'org.emexlabs.procursus.jailed',
+                  'NXRomVersion':'1.0',
+                  'NXRomExecutable':'System/Rom/init'
+              }.items():
+                  if m.get(key) != value:
+                      raise SystemExit('Unexpected ROM manifest: '+key)
+              if 'ROM/System/Library/CoreServices/SpringBoard.app/SpringBoard' not in z.namelist():
+                  raise SystemExit('Real guest SpringBoard missing')
+          PY_ROM
+          python3 Tools/prepare_embedded_procursus.py             build/embedded-rom/procursus-jailed.zip             build/embedded-rom/unpacked
+          test -s build/embedded-rom/unpacked/ROM/manifest.plist
+          test -s build/embedded-rom/unpacked/ROM/System/Rom/init
+          test -s build/embedded-rom/unpacked/symlinks.plist
 
       - name: Package signer-compatible IPA
         run: |
