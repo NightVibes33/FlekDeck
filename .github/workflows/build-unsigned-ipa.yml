@@ -436,17 +436,32 @@ jobs:
           set -euo pipefail
           brew install ldid
 
-      - name: Verify required Procursus Jailed release asset
+      - name: Verify attached Procursus ROM from existing GitHub draft
         env:
+          GH_TOKEN: ${{ github.token }}
           ROM_SHA256: 8e213e8893cfc8a00f19783f9ae954a7ac6d3c36363df108dc9e6a8c75fcbf6c
+          ROM_RELEASE_ID: "416553967"
+          ROM_EXPECTED_SIZE: "45839875"
         run: |
           set -euo pipefail
           mkdir -p build/embedded-rom
-          ROM_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/procursus-jailed-1.0/procursus-jailed.zip"
-          curl -fL --retry 2 --connect-timeout 15 -o build/embedded-rom/procursus-jailed.zip "$ROM_URL" || {
-            echo "::error::Missing release asset: create release procursus-jailed-1.0 and attach the original procursus-jailed.zip. This exact ZIP is required; no substitute allowed."
+          # The user already attached the exact binary to draft release "Zip".
+          # Its REST release/asset IDs remain accessible before publication.
+          # Do not depend on an untagged release browser download URL.
+          ASSET_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${ROM_RELEASE_ID}" --jq \
+            ".assets[] | select(.name == \"procursus-jailed.zip\" and .size == ${ROM_EXPECTED_SIZE} and .digest == \"sha256:${ROM_SHA256}\") | .id")"
+          if [[ ! "$ASSET_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::The exact Procursus ZIP was not found on draft release ${ROM_RELEASE_ID}."
             exit 1
-          }
+          fi
+          echo "Using existing draft release ${ROM_RELEASE_ID}, asset ${ASSET_ID}."
+          curl --fail --location --silent --show-error --retry 2 \
+            -H "Accept: application/octet-stream" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}" \
+            --output build/embedded-rom/procursus-jailed.zip
+          test "$(stat -f '%z' build/embedded-rom/procursus-jailed.zip)" = "$ROM_EXPECTED_SIZE"
           echo "$ROM_SHA256  build/embedded-rom/procursus-jailed.zip" | shasum -a 256 -c -
           python3 - <<'PY_ROM'
           import zipfile, plistlib
