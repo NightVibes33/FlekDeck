@@ -426,7 +426,9 @@ jobs:
           grep -q 'rom-registration-get-task-allow-denied' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'previous-nyxian-kmsg.log' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'recordCommittedROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
-          grep -q 'procursus-backend-window-under-flekdeck-home' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'procursus-real-springboard-window-transition' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'rom-slot-dlopen-crash-guard-armed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          ! grep -q 'procursus-backend-window-under-flekdeck-home' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckLaunchProcursusApp' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'procursus-reusing-flekdeck-app-signing-identity' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           ! grep -q 'FlekROMCertificateFromBuiltinSideStore' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
