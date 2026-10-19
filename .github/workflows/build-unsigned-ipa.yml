@@ -363,7 +363,11 @@ jobs:
           grep -q 'Procursus extracted ROM metadata is missing or incomplete' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'Embedded ROM checksum mismatch' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckProcursusLastInstallError' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
-          grep -q 'FlekDeckProcursusAutoRepairEpoch' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'procursus-install-deferred-to-settings' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          ! grep -q 'procursus-embedded-first-install-start' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'procursusSetupSection' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'Open Signing Settings' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'FlekDeckRetryBundledProcursus' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'FlekDeckProcursusInstallFailed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'Retry bundled setup' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -q 'FlekDeckRestartAfterProcursusInstall' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
@@ -385,7 +389,6 @@ jobs:
           grep -q 'FlekDeckInstallBundledProcursus' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'restoreEmbeddedProcursusROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'procursus-extracted-rom-symlinks-restored' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
-          grep -q 'procursus-embedded-first-install-start' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'fileImporter(isPresented: \$showROMImporter' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
           ! grep -q 'FlekProcursusGuestAppsView()' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           ! grep -q 'Enable Procursus Runtime' LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
