@@ -415,6 +415,12 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             refreshVirtualApps()
         }
         .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("FlekDeckProcursusAppsChanged"))) { _ in
+            // Upstream bootstrapd reports actual installation and removal.
+            // This is how Sileo becomes visible, never a hard-coded icon.
+            refreshVirtualApps()
+        }
+        .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.didBecomeActiveNotification)) { _ in
             refreshVirtualApps()
         }
