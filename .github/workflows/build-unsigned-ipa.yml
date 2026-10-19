@@ -14,6 +14,7 @@ on:
       - 'LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift'
       - 'LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h'
       - 'LiveContainerSwiftUI/Views/Bootloader/**'
+      - 'LiveContainerSwiftUI/Views/AppList/LCAppListView.swift'
       - 'LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift'
       - 'docs/flek-bootloader-parity.md'
       - 'LiveProcess/**'
