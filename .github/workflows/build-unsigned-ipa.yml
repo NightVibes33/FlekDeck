@@ -367,7 +367,8 @@ jobs:
           ! grep -q 'procursus-embedded-first-install-start' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'procursusSetupSection' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'NavigationLink { procursusPage }' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
-          grep -q 'GitHub - NightVibes33' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'linkRow("NightVibes33Avatar", "GitHub - NightVibes33"' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          test -f Resources/Assets.xcassets/NightVibes33Avatar.imageset/Contents.json
           ! grep -q 'linkRow("FlekIconFlekStore", "FlekSt0re.com"' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'procursus-nxt2-host-signer-unavailable' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'procursus-nxt2-runtime-load-enter' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
@@ -442,6 +443,26 @@ jobs:
           grep -q 'LCSharedUtils.launchToGuestApp' LiveContainerSwiftUI/Models/LCAppModel.swift
           test "$(git hash-object LiveContainerSwiftUI/Models/LCAppModel.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Models/LCAppModel.swift")"
           test "$(git hash-object LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift")"
+
+      - name: Bundle actual NightVibes33 GitHub profile photo
+        run: |
+          set -euo pipefail
+          # Avatar URL returned for the authenticated GitHub account.
+          # Fetch at BUILD time so FlekDeck displays the genuine account photo
+          # from its offline asset catalog, not a generic GitHub icon.
+          PROFILE_AVATAR="https://avatars.githubusercontent.com/u/214680657?v=4"
+          temp_avatar="$(mktemp)"
+          trap 'rm -f "$temp_avatar"' EXIT
+          curl --fail --location --retry 3 --retry-delay 2 \
+            --connect-timeout 15 --max-time 60 --silent --show-error \
+            "$PROFILE_AVATAR" --output "$temp_avatar"
+          test "$(stat -f %z "$temp_avatar")" -gt 100
+          file -b "$temp_avatar" | grep -Eq 'PNG|JPEG|GIF|TIFF|HEIF|HEIC|WebP'
+          DEST="Resources/Assets.xcassets/NightVibes33Avatar.imageset/NightVibes33Avatar.png"
+          sips -s format png "$temp_avatar" --out "$DEST"
+          test -s "$DEST"
+          sips -g pixelWidth -g pixelHeight "$DEST"
+          echo "Bundled genuine NightVibes33 GitHub avatar in asset catalog"
 
       - name: Build unsigned real-device archive
         run: |

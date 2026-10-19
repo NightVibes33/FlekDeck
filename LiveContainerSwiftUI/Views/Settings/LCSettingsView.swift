@@ -325,7 +325,7 @@ struct LCSettingsView: View {
                     }
                 }
                 Section {
-                    linkRow("GitHub", "GitHub - NightVibes33", action: openUserGitHub)
+                    linkRow("NightVibes33Avatar", "GitHub - NightVibes33", action: openUserGitHub)
                     linkRow("GitHub", "GitHub - LiveContainer", action: openGitHub)
                     linkRow("Twitter", "khanhduytran0", action: openTwitter)
                     linkRow("GitHub", "GitHub - Huge_Black", action: openGitHub2)
@@ -347,8 +347,13 @@ struct LCSettingsView: View {
                             sharedModel.developerMode = true
                         }
                     
-                    HStack(spacing:0){
+                    HStack(spacing:5){
                         Text("Build: ")
+                        Image("NightVibes33Avatar")
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 18, height: 18)
+                            .clipShape(Circle())
                             .foregroundStyle(.gray)
                         // A Link here would take over the whole Form row and swallow
                         // the version tap above it, so open the URL by hand instead.
