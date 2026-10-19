@@ -290,6 +290,21 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     }
     
     var body: some View {
+        baseHomeContent
+            .overlay {
+                if procursusProgressVisible {
+                    procursusInstallationOverlay
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: Notification.Name("FlekDeckProcursusInstallProgress"))) { event in
+                if let progress = event.userInfo as? [String: Any] {
+                    updateProcursusProgress(progress)
+                }
+            }
+    }
+
+    private var baseHomeContent: some View {
         ZStack {
             ZStack {
                 FlekWallpaperView()
@@ -372,11 +387,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 .transition(.opacity)
             }
         }
-        .overlay {
-            if procursusProgressVisible {
-                procursusInstallationOverlay
-            }
-        }
         .animation(.easeOut(duration: 0.25), value: showSearch)
         .onAppear {
             homeBottomSafeInset = LCDeviceSafeArea.bottomInset()
@@ -393,12 +403,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             refreshVirtualApps()
             restoreProcursusProgressSnapshot()
             presentPendingProcursusFailure()
-        }
-        .onReceive(NotificationCenter.default.publisher(
-            for: Notification.Name("FlekDeckProcursusInstallProgress"))) { event in
-            if let progress = event.userInfo as? [String: Any] {
-                updateProcursusProgress(progress)
-            }
         }
         .onReceive(NotificationCenter.default.publisher(
             for: Notification.Name("FlekDeckProcursusInstallFailed"))) { _ in
