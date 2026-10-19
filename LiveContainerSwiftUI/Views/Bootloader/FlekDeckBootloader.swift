@@ -1185,7 +1185,7 @@ private func flashROM(archive: URL, log: RomLog,
     FlekDeckBootTrace.mark("procursus-nxt2-host-preflight requested=\(requiredNXT2.count)")
     if !requiredNXT2.isEmpty && FlekDeckNXT2HostSigner() == nil {
         FlekDeckBootTrace.mark("procursus-nxt2-host-signer-unavailable")
-        throw romError("Procursus could not be installed: this FlekDeck build lacks the native Nyxian NXT2 trust signer. The ROM was not committed. This is a runtime integration issue, not a .p12 certificate problem.")
+        throw romError("Procursus NXT2 native signer is unavailable. Check Boot Logs for a library or device keychain failure. The ROM was not committed.")
     }
     FlekDeckBootTrace.mark("procursus-nxt2-host-preflight-passed")
     stage(3, "Signing executables",
@@ -1356,7 +1356,7 @@ func FlekDeckInstallBundledProcursus(
        manifest.paths.contains(where: { $0.codesigning.neededNXT2 }),
        FlekDeckNXT2HostSigner() == nil {
         let failure = romError(
-            "Procursus needs Nyxian's native NXT2 trust signer, which is not integrated into this FlekDeck build. Installation is unavailable until that runtime is built in. Your .p12 certificate is not the issue.")
+            "Procursus NXT2 signer could not initialize. Check Boot Logs for the packaged native library or device keychain error; installation was not started.")
         FlekDeckBootTrace.mark("procursus-nxt2-host-preflight-before-staging-unavailable")
         UserDefaults.standard.set(failure.localizedDescription,
                                   forKey: "FlekDeckProcursusLastInstallError")
@@ -1776,14 +1776,32 @@ private typealias FlekDeckNXT2SignFunction =
     @convention(c) (UnsafePointer<CChar>, CFDictionary, Bool, UnsafePointer<CChar>?) -> Int32
 
 private func FlekDeckNXT2HostSigner() -> FlekDeckNXT2SignFunction? {
-    // Resolve the real Nyxian trust implementation *only* from libraries
-    // already loaded into FlekDeck. Never load guest System/Rom/init here:
-    // its static initializers are not safe before the ROM bootstrap exists.
-    let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2)
-    guard let symbol = dlsym(defaultHandle, "trust_nxt2_sign") else {
+    // A dedicated, safely loadable dylib contains pinned Nyxian signing.c,
+    // cdhash.c and key.c. Loading the guest System/Rom/init here executes
+    // pre-bootstrap guest initializers and previously crashed iOS 27.
+    guard let file = Bundle.main.privateFrameworksURL?
+        .appendingPathComponent("FlekDeckNXT2Signer.dylib"),
+          FileManager.default.isReadableFile(atPath: file.path) else {
+        FlekDeckBootTrace.mark("procursus-nxt2-native-library-not-packaged")
         return nil
     }
-    return unsafeBitCast(symbol, to: FlekDeckNXT2SignFunction.self)
+    dlerror()
+    guard let handle = dlopen(file.path, RTLD_NOW | RTLD_LOCAL) else {
+        FlekDeckBootTrace.mark("procursus-nxt2-native-dlopen-error \(lastDlError())")
+        return nil
+    }
+    guard let ready = dlsym(handle, "FlekDeckNXT2SignerReady"),
+          let signingFunction = dlsym(handle, "trust_nxt2_sign") else {
+        FlekDeckBootTrace.mark("procursus-nxt2-native-signer-symbols-missing")
+        return nil
+    }
+    let selfTest = unsafeBitCast(ready, to: (@convention(c) () -> Int32).self)
+    guard selfTest() == 1 else {
+        FlekDeckBootTrace.mark("procursus-nxt2-native-keychain-initialization-failed")
+        return nil
+    }
+    FlekDeckBootTrace.mark("procursus-nxt2-native-signer-and-key-ready")
+    return unsafeBitCast(signingFunction, to: FlekDeckNXT2SignFunction.self)
 }
 
 private func FlekDeckNXT2Sign(hostSigner: FlekDeckNXT2SignFunction,
