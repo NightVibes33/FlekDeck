@@ -305,6 +305,47 @@ NSURL * _Nullable FlekDeckBootSharedRootURL(void)
 
 #pragma mark - Integrated Procursus workspace bridge
 
+// Forward real Nyxian bootstrapd application registry changes to the
+// existing FlekDeck Home. No synthetic Sileo/DEB icon or app list is created.
+@interface FlekDeckProcursusWorkspaceObserver : NSObject
+@end
+
+@implementation FlekDeckProcursusWorkspaceObserver
+- (void)signalActualWorkspaceChange
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:@"FlekDeckProcursusAppsChanged"
+                                                          object:nil];
+    });
+}
+- (void)applicationInitialPopulationDone { [self signalActualWorkspaceChange]; }
+- (void)applicationWasInstalled:(id)app
+{
+    (void)app;
+    [self signalActualWorkspaceChange];
+}
+- (void)applicationWithBundleIdentifierWasUninstalled:(NSString *)bundleID
+{
+    (void)bundleID;
+    [self signalActualWorkspaceChange];
+}
+@end
+
+static void FlekDeckObserveProcursusWorkspace(id workspace)
+{
+    // Upstream LDEApplicationWorkspace holds weak observer references.
+    // Retain the adapter for the lifetime of the real ROM process.
+    static FlekDeckProcursusWorkspaceObserver *observer;
+    static dispatch_once_t once;
+    if (!workspace || ![workspace respondsToSelector:NSSelectorFromString(@"addObserver:")]) return;
+    dispatch_once(&once, ^{
+        observer = [FlekDeckProcursusWorkspaceObserver new];
+        ((void (*)(id, SEL, id))objc_msgSend)(
+            workspace, NSSelectorFromString(@"addObserver:"), observer);
+        FlekROMTrace("procursus-real-workspace-observer-attached");
+    });
+}
+
 // Use Nyxian's own LDEApplicationWorkspace runtime object loaded by ROM init.
 // DO NOT create a second process manager, parse a fake app list, launch Mach-O
 // in the host, or bypass the ROM's entitlement/process-registration checks.
@@ -313,7 +354,9 @@ static id FlekDeckProcursusWorkspace(void)
     Class workspaceClass = NSClassFromString(@"LDEApplicationWorkspace");
     SEL shared = @selector(shared);
     if (!workspaceClass || ![workspaceClass respondsToSelector:shared]) return nil;
-    return ((id (*)(id, SEL))objc_msgSend)(workspaceClass, shared);
+    id workspace = ((id (*)(id, SEL))objc_msgSend)(workspaceClass, shared);
+    FlekDeckObserveProcursusWorkspace(workspace);
+    return workspace;
 }
 
 NSArray<NSDictionary<NSString *, id> *> *FlekDeckListProcursusApps(void)
