@@ -23,7 +23,7 @@ def patch(path: Path) -> None:
     src = replace_one(src, '#include "zsigner.h"',
                        '#include "zsigner.h"\n'
                        '#include <fcntl.h>\n#include <unistd.h>\n'
-                       '#include <time.h>\n#include <stdio.h>\n#include <limits.h>\n',
+                       '#include <time.h>\n#include <stdio.h>\n#include <limits.h>\n#include <string.h>\n',
                        "includes")
     helper = r'''
 // Logs are limited to the FlekDeck ROM staging slot. No user IPA signing
@@ -62,6 +62,12 @@ static void flekdeck_zsign_trace(const char *stage, NSString *path) {
                       "logging helper")
     # Trace the destructive refresh operation separately: a crash while the
     # signer is refreshing a vnode must be distinguishable from Mach-O Sign().
+    src = replace_one(src,
+        '    NSError* error;\n'
+        '    [NSFileManager.defaultManager copyItemAtPath:path toPath:newPath error:&error];',
+        '    NSError* error = nil;\n'
+        '    [NSFileManager.defaultManager copyItemAtPath:path toPath:newPath error:&error];',
+        "initialize refresh error")
     src = replace_one(src,
         'void refreshFile(NSString* path) {\n',
         'void refreshFile(NSString* path) {\n'
