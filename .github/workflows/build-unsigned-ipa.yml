@@ -283,6 +283,35 @@ jobs:
             test -s "build/pe-runtime/Release-iphoneos/${target}.dylib"
           done
 
+      - name: Build genuine Nyxian NXT2 host signer
+        run: |
+          set -euo pipefail
+          python3 -m py_compile Tools/prepare_flekdeck_nxt2_signer.py
+          python3 Tools/prepare_flekdeck_nxt2_signer.py /tmp/flek-pe-source build/nxt2
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          NX_ROOT="/tmp/flek-pe-source"
+          CRYPTO="$NX_ROOT/Nyxian/LindChain/OpenSSL.xcframework/ios-arm64"
+          test -s "$CRYPTO/OpenSSL.framework/OpenSSL"
+          xcrun --sdk iphoneos clang \
+            -target arm64-apple-ios18.0 -isysroot "$SDK" \
+            -dynamiclib -O2 -fvisibility=default \
+            -DHOST_ENV=1 -D__NXTOOL=0 -UCLIENT_ENV \
+            -I "$NX_ROOT" -I "$NX_ROOT/Nyxian" \
+            -F "$CRYPTO" \
+            build/nxt2/FlekDeckNXT2Signer.c \
+            "$NX_ROOT/Nyxian/LindChain/ProcEnvironment/Surface/trust/cdhash.c" \
+            "$NX_ROOT/Nyxian/LindChain/ProcEnvironment/Surface/key.c" \
+            -framework CoreFoundation -framework Security -framework Foundation \
+            -framework OpenSSL \
+            -Wl,-install_name,@rpath/FlekDeckNXT2Signer.dylib \
+            -Wl,-undefined,error \
+            -o build/nxt2/FlekDeckNXT2Signer.dylib
+          nm -gU build/nxt2/FlekDeckNXT2Signer.dylib > build/nxt2/signer-symbols.txt
+          grep -q '_trust_nxt2_sign' build/nxt2/signer-symbols.txt
+          grep -q '_FlekDeckNXT2SignerReady' build/nxt2/signer-symbols.txt
+          test -s build/nxt2/FlekDeckNXT2Signer.dylib
+          echo "Real Nyxian NXT2 EC signer and persistent-key code linked"
+
       # Pin an upstream Nyxian build after MobileDevelopmentService was added.
       # Nyxian 0.11.4 predates the service and cannot supply this boot runtime.
       - name: Download upstream Nyxian userspace service dependencies
@@ -371,6 +400,8 @@ jobs:
           test -f Resources/Assets.xcassets/NightVibes33Avatar.imageset/Contents.json
           ! grep -q 'linkRow("FlekIconFlekStore", "FlekSt0re.com"' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'procursus-nxt2-host-signer-unavailable' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckNXT2Signer.dylib' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          test -s Tools/prepare_flekdeck_nxt2_signer.py
           ! grep -q 'procursus-nxt2-runtime-load-enter' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'Open Signing Settings' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'FlekDeckRetryBundledProcursus' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
@@ -588,6 +619,9 @@ jobs:
           # successful host build is insufficient if the signer is omitted.
           test -s "$APP/Frameworks/ZSign.dylib"
           test -s "$APP/Frameworks/OpenSSL.framework/OpenSSL"
+          # Signer is compiled from upstream Nyxian source and must ship in
+          # host Frameworks, not inside LiveProcess or guest System/Rom/init.
+          test -s build/nxt2/FlekDeckNXT2Signer.dylib
           nm -gU "$APP/Frameworks/ZSign.dylib" > build/FlekDeck-ZSign-symbols.txt
           grep -Fq 'OBJC_CLASS_$_ZSigner' build/FlekDeck-ZSign-symbols.txt
           test "$(/usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$PWD/build/FlekDeck-host-entitlements.plist")" = "true"
@@ -620,6 +654,10 @@ jobs:
           test -s "$NYXIAN_SOURCE/Shared/kernel/ksurface_abi.h"
           cp -R "$NYXIAN_SOURCE/Shared" "$APP/Shared"
           mkdir -p "$APP/Frameworks"
+          test -s build/nxt2/FlekDeckNXT2Signer.dylib
+          cp build/nxt2/FlekDeckNXT2Signer.dylib "$APP/Frameworks/FlekDeckNXT2Signer.dylib"
+          ldid -S "$APP/Frameworks/FlekDeckNXT2Signer.dylib"
+          cp build/nxt2/PINNED-NYXIAN-AGPL.txt "$APP/NXT2-Signer-NOTICE.txt"
           cp "$PE_PRODUCTS/bootstrapd.dylib" "$APP/Frameworks/bootstrapd.dylib"
           cp "$PE_PRODUCTS/libBroadpatch.dylib" "$APP/Frameworks/libBroadpatch.dylib"
           cp "$PE_PREBUILT/MobileDevelopmentService.dylib" "$APP/Frameworks/MobileDevelopmentService.dylib"
