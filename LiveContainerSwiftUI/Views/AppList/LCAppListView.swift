@@ -1176,7 +1176,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                             Text("Procursus installation")
                                 .font(.headline)
                             Text(status == "failed" ? "Installation stopped" :
-                                 status == "complete" ? "Installed successfully" : "Installing virtual environment")
+                                 status == "complete" ? "ROM files installed — checking guest runtime" : "Installing virtual environment")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1238,9 +1238,13 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                             .buttonStyle(.bordered)
                         }
                     } else if status == "complete" {
-                        Text("Initializing Procursus inside FlekDeck.")
+                        Text("Procursus files are installed. Runtime boot and Sileo are verified separately.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Button("Return to FlekDeck") {
+                            procursusProgressVisible = false
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
                     Text("Stage counts reflect completed operations, not a time estimate. Detailed events are saved in FlekDeck boot logs.")
                         .font(.caption2)
