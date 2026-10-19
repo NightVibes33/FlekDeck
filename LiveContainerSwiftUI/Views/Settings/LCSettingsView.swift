@@ -250,7 +250,7 @@ struct LCSettingsView: View {
                 procursusInstalled = FlekDeckHasInstalledProcursusROM()
                 procursusInstallStatus = message
                 if procursusInstalled {
-                    FlekDeckRestartAfterProcursusInstall()
+                    FlekDeckActivateProcursusAfterInstall()
                 }
             case .failure(let error):
                 procursusInstallStatus = error.localizedDescription
