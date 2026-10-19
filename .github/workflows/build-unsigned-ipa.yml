@@ -440,6 +440,15 @@ jobs:
           ! grep -q 'FlekHostDevelopmentSigningError' LiveContainerSwiftUI/Models/LCAppModel.swift
           ! grep -q 'FlekDeck host does not have get-task-allow' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
           grep -q 'LCUtils.validateJITLessSetup' LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift
+          # FlekDeck must not regress the original certificate-adjacent diagnostic entry.
+          grep -q 'LCJITLessDiagnoseView()' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          python3 - <<'PY_JIT_ENTRY'
+          from pathlib import Path
+          source=Path('LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift').read_text()
+          assert source.index('LCJITLessDiagnoseView()') > source.index('certificateImportFromBuiltInSideStoreAlert')
+          assert source.index('LCJITLessDiagnoseView()') < source.index('// MARK: - Categories')
+          print('JIT-Less Mode Diagnose restored below certificate controls')
+          PY_JIT_ENTRY
           grep -q 'LCSharedUtils.launchToGuestApp' LiveContainerSwiftUI/Models/LCAppModel.swift
           test "$(git hash-object LiveContainerSwiftUI/Models/LCAppModel.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Models/LCAppModel.swift")"
           test "$(git hash-object LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift)" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/LiveContainerSwiftUI/Views/Settings/LCJITLessDiagnoseView.swift")"
