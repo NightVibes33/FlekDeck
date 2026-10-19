@@ -112,26 +112,15 @@ def main():
     signer = once(signer, SIGN_HASH_OLD, SIGN_HASH_NEW, "sign CDHash")
     signer = once(signer, READ_HASH_OLD, READ_HASH_NEW, "verify CDHash")
     signer = once(signer, SURFACE_PUBLIC_OLD, SURFACE_PUBLIC_NEW, "public key")
-    # PAGE_SIZE was supplied by Nyxian's guest-kernel headers; in the real
-    # iOS host, enforce the same cap using the device's active VM page size.
-    signer = once(signer, "    if(len > PAGE_SIZE)",
-                  "    if(len > (size_t)getpagesize())", "host page-size bound")
-    # Preserve Nyxian's exact PAGE_SIZE comparison. Import Apple's real
-    # Darwin virtual-memory parameter header instead of replacing or
-    # hardcoding its check (arm64 userland exposes vm_page_size here).
-    signer = once(
-        signer,
-        "#include <sys/param.h>\\n#include <unistd.h>\\n#include <fcntl.h>\\n",
-        "#include <sys/param.h>\\n#include <mach/vm_param.h>\\n"
-        "#include <unistd.h>\\n#include <fcntl.h>\\n",
-        "native PAGE_SIZE declaration"
-    )
+    # Preserve Nyxian's literal PAGE_SIZE bound and use Darwin's public
+    # mach/vm_param.h declaration for the current arm64 host.
     signer = once(
         signer,
         "#include <LindChain/ProcEnvironment/Surface/surface.h>\n"
         "#include <LindChain/ProcEnvironment/LiveContainer/LCMachOUtils.h>\n",
         "#include <LindChain/ProcEnvironment/Surface/key.h>\n"
-        "#include <sys/param.h>\n#include <unistd.h>\n#include <fcntl.h>\n",
+        "#include <sys/param.h>\n#include <mach/vm_param.h>\n"
+        "#include <unistd.h>\n#include <fcntl.h>\n",
         "guest-only Mach-O imports"
     ) + READY
     if ("trust_nxt2_public_key_read" not in signer or
