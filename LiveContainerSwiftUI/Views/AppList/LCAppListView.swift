@@ -545,7 +545,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 .disabled(retryingProcursus)
             Button("Later", role: .cancel) {}
         } message: {
-            Text("The virtual environment has not installed. \(procursusInstallFailure)\n\nIf this is a signing error, import your own .p12 in FlekDeck Settings → Signing before retrying.")
+            Text("The virtual environment has not installed. \(procursusInstallFailure)")
         }
         .alert("lc.common.error".loc, isPresented: $errorShow){
             Button("lc.common.ok".loc, action: {

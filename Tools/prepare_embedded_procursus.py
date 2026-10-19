@@ -16,7 +16,8 @@ def main(zip_path: Path, destination: Path):
     if destination.exists():
         raise SystemExit("Procursus output directory already exists")
     destination.mkdir(parents=True)
-    symlinks, checksums, seen = {}, {}, set()
+    symlinks, seen = {}, set()
+    regular_files = 0
     total = 0
     with zipfile.ZipFile(zip_path) as z:
         if z.testzip() is not None:
@@ -60,24 +61,20 @@ def main(zip_path: Path, destination: Path):
                 if total > 150_000_000:
                     raise SystemExit("ROM expanded file limit exceeded")
                 output.parent.mkdir(parents=True, exist_ok=True)
-                h = hashlib.sha256()
                 with z.open(member) as source, output.open("wb") as sink:
                     while True:
                         chunk = source.read(1024 * 1024)
                         if not chunk:
                             break
-                        h.update(chunk)
                         sink.write(chunk)
                 output.chmod((mode & 0o777) or 0o644)
-                checksums[rel] = h.hexdigest()
+                regular_files += 1
             else:
                 raise SystemExit("Unsupported ROM member type: " + rel)
-    if len(symlinks) != 101 or len(checksums) != 40:
+    if len(symlinks) != 101 or regular_files != 40:
         raise SystemExit("Wrong Procursus ROM file/link count")
     (destination / "symlinks.plist").write_bytes(
         plistlib.dumps(symlinks, fmt=plistlib.FMT_XML))
-    (destination / "files-sha256.plist").write_bytes(
-        plistlib.dumps(checksums, fmt=plistlib.FMT_XML))
     print("Expanded real Procursus ROM: 40 files, 101 symlink definitions, "
           + str(total) + " bytes. No nested ZIP.")
 

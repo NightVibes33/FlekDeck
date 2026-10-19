@@ -1001,9 +1001,8 @@ private func restoreEmbeddedProcursusROM(from source: URL, into slot: URL) throw
         throw romError("Unrecognized bundled Procursus root")
     }
     let container = source.deletingLastPathComponent()
-    guard let files = NSDictionary(contentsOf: container.appendingPathComponent("files-sha256.plist")) as? [String: String],
-          let links = NSDictionary(contentsOf: container.appendingPathComponent("symlinks.plist")) as? [String: String],
-          files.count == 40, links.count == 101 else {
+    guard let links = NSDictionary(contentsOf: container.appendingPathComponent("symlinks.plist")) as? [String: String],
+          links.count == 101 else {
         throw romError("Procursus extracted ROM metadata is missing or incomplete")
     }
     func validRelative(_ name: String) -> Bool {
@@ -1011,21 +1010,18 @@ private func restoreEmbeddedProcursusROM(from source: URL, into slot: URL) throw
             && name.split(separator: "/", omittingEmptySubsequences: false)
                 .allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
-    // Verify each regular file before executing any ROM code.
-    for (relative, digest) in files {
-        guard validRelative(relative), digest.count == 64 else {
-            throw romError("Unsafe embedded ROM file: \(relative)")
-        }
-        let data = try Data(contentsOf: source.appendingPathComponent(relative),
-                            options: .mappedIfSafe)
-        let actual = SHA256.hash(data: data)
-            .map { String(format: "%02x", $0) }.joined()
-        guard actual == digest else {
-            throw romError("Embedded ROM checksum mismatch: \(relative)")
-        }
-    }
+    // IPA re-signers can rewrite embedded Mach-O code signatures.
+    // Stage the signed binaries and re-sign manifest-listed guest programs.
     try fm.removeItem(at: slot)
     try fm.copyItem(at: source, to: slot)
+    for required in ["manifest.plist", "System/Rom/init", "usr/libexec/bootstrapd",
+                     "System/Library/CoreServices/SpringBoard.app/SpringBoard",
+                     "bootstrap.tar.zst"] {
+        guard fm.fileExists(atPath: slot.appendingPathComponent(required).path) else {
+            throw romError("Required Procursus ROM file missing: " + required)
+        }
+    }
+    FlekDeckBootTrace.mark("procursus-staged-with-resigned-binaries")
     let root = slot.standardizedFileURL.path
     for (relative, target) in links.sorted(by: { $0.key < $1.key }) {
         guard validRelative(relative), !target.isEmpty,
@@ -1525,7 +1521,6 @@ private enum FlekDeckBootPaths {
             "EmbeddedROM/ROM/System/Rom/init",
             "EmbeddedROM/ROM/System/Library/CoreServices/SpringBoard.app/SpringBoard",
             "EmbeddedROM/ROM/bootstrap.tar.zst",
-            "EmbeddedROM/files-sha256.plist",
             "EmbeddedROM/symlinks.plist"
         ]
         return resources.filter {

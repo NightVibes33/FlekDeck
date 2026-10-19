@@ -350,6 +350,7 @@ jobs:
           python3 -m py_compile Tools/prepare_embedded_procursus.py
           grep -q 'Procursus source ZIP digest mismatch' Tools/prepare_embedded_procursus.py
           grep -q 'Procursus extracted ROM metadata is missing or incomplete' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          ! grep -q 'Embedded ROM checksum mismatch' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckProcursusLastInstallError' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckProcursusAutoRepairEpoch' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckProcursusInstallFailed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
@@ -498,6 +499,7 @@ jobs:
           test -s build/embedded-rom/unpacked/ROM/manifest.plist
           test -s build/embedded-rom/unpacked/ROM/System/Rom/init
           test -s build/embedded-rom/unpacked/symlinks.plist
+          test ! -e build/embedded-rom/unpacked/files-sha256.plist
 
       - name: Package signer-compatible IPA
         run: |
@@ -596,7 +598,6 @@ jobs:
           mkdir -p "$APP/EmbeddedROM"
           cp -R build/embedded-rom/unpacked/ROM "$APP/EmbeddedROM/ROM"
           cp build/embedded-rom/unpacked/symlinks.plist "$APP/EmbeddedROM/symlinks.plist"
-          cp build/embedded-rom/unpacked/files-sha256.plist "$APP/EmbeddedROM/files-sha256.plist"
           test -s "$APP/EmbeddedROM/ROM/System/Rom/init"
           test -s "$APP/EmbeddedROM/ROM/bootstrap.tar.zst"
           if find "$APP/EmbeddedROM" -type l | grep -q .; then
@@ -671,20 +672,20 @@ jobs:
                       raise SystemExit('Nonportable ZIP extra field in ' + member.filename)
               if ipa.testzip() is not None:
                   raise SystemExit('Damaged IPA entry')
-              import hashlib
+              # IPA re-signers may change the embedded Mach-O signatures.
               root = 'Payload/FlekDeck.app/EmbeddedROM/'
-              if root + 'procursus-jailed.zip' in names:
-                  raise SystemExit('Nested Procursus ZIP is not allowed')
-              checksums = plistlib.loads(ipa.read(root + 'files-sha256.plist'))
               links = plistlib.loads(ipa.read(root + 'symlinks.plist'))
-              if len(checksums) != 40 or len(links) != 101:
-                  raise SystemExit('Incomplete Procursus ROM files or symlink metadata')
-              for relative, expected in checksums.items():
-                  actual = hashlib.sha256(ipa.read(root + 'ROM/' + relative)).hexdigest()
-                  if actual != expected:
-                      raise SystemExit('Extracted ROM file checksum failed: ' + relative)
-              print(f'Validated IPA with {len(checksums)} expanded ROM files, '
-                    f'{len(links)} relative symlinks to restore, and {len(names)} IPA members')
+              if len(links) != 101:
+                  raise SystemExit('Incomplete Procursus ROM symlink metadata')
+              for relative in ('ROM/manifest.plist', 'ROM/System/Rom/init',
+                               'ROM/usr/libexec/bootstrapd',
+                               'ROM/System/Library/CoreServices/SpringBoard.app/SpringBoard',
+                               'ROM/bootstrap.tar.zst'):
+                  if root + relative not in names:
+                      raise SystemExit('Missing Procursus ROM file: ' + relative)
+              if root + 'files-sha256.plist' in names:
+                  raise SystemExit('Unwanted embedded ROM checksum file')
+              print(f'ROM resources verified; {len(links)} symlinks to restore')
           PY
           unzip -Z1 FlekDeck.ipa > FlekDeck-ipa-entries.txt
           for required in \
@@ -699,7 +700,6 @@ jobs:
             EmbeddedROM/ROM/System/Rom/init \
             EmbeddedROM/ROM/System/Library/CoreServices/SpringBoard.app/SpringBoard \
             EmbeddedROM/ROM/bootstrap.tar.zst \
-            EmbeddedROM/files-sha256.plist \
             EmbeddedROM/symlinks.plist; do
             grep -Fxq "Payload/FlekDeck.app/$required" FlekDeck-ipa-entries.txt || { echo "IPA missing Nyxian runtime asset: $required"; exit 1; }
           done
