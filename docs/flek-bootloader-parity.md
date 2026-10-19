@@ -445,3 +445,10 @@ layout (including installing rows) checks the same app-group preference.
 The change must be verified on a physical iOS 27 device. A green IPA build
 checks compilation and ROM integrity, not successful guest SpringBoard
 initialization or jailbreak process functionality.
+
+
+## iPhone failure recovery and independent simulator smoke
+
+First-launch installation failures previously persisted but disabled all retries after the standalone Settings panel was removed. The original Home now shows a recovery prompt only when ROM install fails, with the actual error and **Retry bundled setup**. A newly built integration automatically retries one prior failed install once, while preserving the existing signed ROM slot. It records the prior error in the boot log. Do not embed private user `.p12` keys or provisioning profiles in a public repository or IPA.
+
+GitHub CI now attempts a host-only iOS Simulator build and boot, captures simulator logs/screenshots when possible, and reports its result separately from the green **real-device unsigned IPA**. The real Procursus `System/Rom/init`, `SpringBoard`, and `bootstrapd` binaries are Mach-O platform 2 (iOS device), not simulator platform 7. The simulator guard is therefore intentionally FlekDeck Home-only. Simulator success is **not** evidence that Nyxian process registration, JIT, bootstrapd or Sileo works on an iPhone 16; that requires actual device logs after signed ROM installation.

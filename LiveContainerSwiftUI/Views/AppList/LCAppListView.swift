@@ -121,6 +121,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State private var gameWarningTarget: FlekGameWarningTarget?
     @State private var orderedHomeItems: [FlekHomeItem] = []
     @State private var virtualApps: [FlekVirtualApp] = []
+    @State private var procursusInstallFailure = ""
+    @State private var showProcursusRetry = false
+    @State private var retryingProcursus = false
 
     @EnvironmentObject private var sharedModel : SharedModel
     @EnvironmentObject private var sharedAppSortManager : LCAppSortManager
@@ -381,6 +384,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
             rebuildOrderedHomeItems()
             refreshVirtualApps()
+            presentPendingProcursusFailure()
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("FlekDeckProcursusInstallFailed"))) { _ in
+            presentPendingProcursusFailure()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: Notification.Name("FlekDeckProcursusRuntimeReady"))) { _ in
@@ -531,6 +539,13 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
                 try await installIpaFile(fileURL, item: item)
             }
+        }
+        .alert("Procursus setup", isPresented: $showProcursusRetry) {
+            Button("Retry bundled setup") { retryProcursusInstallation() }
+                .disabled(retryingProcursus)
+            Button("Later", role: .cancel) {}
+        } message: {
+            Text("The virtual environment has not installed. \(procursusInstallFailure)\n\nIf this is a signing error, import your own .p12 in FlekDeck Settings → Signing before retrying.")
         }
         .alert("lc.common.error".loc, isPresented: $errorShow){
             Button("lc.common.ok".loc, action: {
@@ -1115,6 +1130,34 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
     
 
+
+
+    private func presentPendingProcursusFailure() {
+        guard !retryingProcursus,
+              let error = UserDefaults.standard.string(
+                forKey: "FlekDeckProcursusLastInstallError"),
+              !error.isEmpty else { return }
+        procursusInstallFailure = error
+        showProcursusRetry = true
+    }
+
+    private func retryProcursusInstallation() {
+        guard !retryingProcursus else { return }
+        retryingProcursus = true
+        FlekDeckRetryBundledProcursus { outcome in
+            retryingProcursus = false
+            switch outcome {
+            case .success:
+                UserDefaults.standard.set(
+                    false, forKey: "FlekDeckGuestSpringBoardCrashGuard")
+                // NXSlotMain must initialize in a fresh process.
+                restartSelf()
+            case .failure(let error):
+                procursusInstallFailure = error.localizedDescription
+                showProcursusRetry = true
+            }
+        }
+    }
 
     // Only real Nyxian-installed virtual apps appear. A registry sync may
     // wait for bootstrapd, so never block FlekDeck's main UI thread.

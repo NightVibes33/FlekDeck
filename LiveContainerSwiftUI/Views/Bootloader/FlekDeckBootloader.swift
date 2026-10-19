@@ -1258,6 +1258,9 @@ func FlekDeckInstallBundledProcursus(
                 UserDefaults.standard.set(
                     error.localizedDescription,
                     forKey: "FlekDeckProcursusLastInstallError")
+                NotificationCenter.default.post(
+                    name: Notification.Name("FlekDeckProcursusInstallFailed"),
+                    object: nil)
             }
             completion(outcome)
         }
@@ -1677,6 +1680,10 @@ private final class FlekDeckBootViewController: UIViewController {
     private static let showGuestName = Notification.Name("FlekDeckProcursusGuestDidLaunch")
 
     private static let guestBootCrashGuardKey = "FlekDeckGuestSpringBoardCrashGuard"
+    // New integration build permits ONE transparent retry of older failed ROM
+    // installs. Subsequent failures require a user-initiated retry.
+    private static let romAutoRepairEpoch = "expanded-rom-signing-20261018-v2"
+    private static let romAutoRepairKey = "FlekDeckProcursusAutoRepairEpoch"
     // An embedded Procursus ROM boots as part of FlekDeck itself. The old
     // manual Settings opt-in has been retired; recovery is still available.
     private static var wantsProcursusRuntime: Bool { true }
@@ -1734,6 +1741,15 @@ private final class FlekDeckBootViewController: UIViewController {
             logoView.widthAnchor.constraint(equalToConstant: 125),
         ])
         
+        #if targetEnvironment(simulator)
+        // Simulator's kernel / FrontBoard cannot register Nyxian real-device
+        // guest Mach-O executables (LC_BUILD_VERSION platform iOS=2,
+        // simulator=7). Smoke-test the unchanged FlekDeck Home ONLY.
+        FlekDeckBootTrace.mark("simulator-host-smoke-only-real-rom-unsupported")
+        self.transition(to: self.builtinController)
+        return
+        #endif
+
         DispatchQueue.global(qos: .utility).async {
             let mode = NXVolumeButtonMonitor.scan(for: 1.0)
             NXVolumeButtonMonitor.disarm()
@@ -1782,16 +1798,32 @@ private final class FlekDeckBootViewController: UIViewController {
             // First launch: FlekDeck stays interactive while this exact
             // IPA-embedded ROM is signed and committed on the ROM serial queue.
             let installedManifest = flashedSlotURL().appendingPathComponent("manifest.plist")
-            let autoInstallPaused = UserDefaults.standard.string(
-                forKey: "FlekDeckProcursusLastInstallError") != nil
+            let oldInstallError = UserDefaults.standard.string(
+                forKey: "FlekDeckProcursusLastInstallError")
+            let previousEpoch = UserDefaults.standard.string(
+                forKey: Self.romAutoRepairKey)
+            let canRepairOldFailure = oldInstallError != nil
+                && previousEpoch != Self.romAutoRepairEpoch
+            let autoInstallPaused = oldInstallError != nil && !canRepairOldFailure
+            if let oldInstallError {
+                FlekDeckBootTrace.mark("procursus-previous-install-error \(oldInstallError)")
+            }
             if autoInstallPaused {
                 FlekDeckBootTrace.mark("procursus-automatic-install-paused-after-failure")
+            } else if canRepairOldFailure {
+                FlekDeckBootTrace.mark("procursus-automatic-install-retrying-old-failure")
             }
             if !FileManager.default.fileExists(atPath: installedManifest.path),
                !FlekDeckBootPaths.expectedFlashedROM,
                !autoInstallPaused,
                let root = FlekDeckBootPaths.embeddedProcursusRoot {
                 FlekDeckBootTrace.mark("procursus-embedded-first-install-start")
+                UserDefaults.standard.set(Self.romAutoRepairEpoch,
+                    forKey: Self.romAutoRepairKey)
+                if canRepairOldFailure {
+                    UserDefaults.standard.removeObject(
+                        forKey: "FlekDeckProcursusLastInstallError")
+                }
                 DispatchQueue.main.async {
                     self.transition(to: self.builtinController, style: .crossfade) {
                         FlekDeckInstallBundledProcursus(root) { result in

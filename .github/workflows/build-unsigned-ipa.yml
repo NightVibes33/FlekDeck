@@ -351,6 +351,10 @@ jobs:
           grep -q 'Procursus source ZIP digest mismatch' Tools/prepare_embedded_procursus.py
           grep -q 'Procursus extracted ROM metadata is missing or incomplete' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckProcursusLastInstallError' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckProcursusAutoRepairEpoch' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckProcursusInstallFailed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'Retry bundled setup' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'simulator-host-smoke-only-real-rom-unsupported' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           plutil -lint LiveProcess/LiveProcess.entitlements LiveProcess/LiveProcessRelease.entitlements
           grep -q FlekDeckRunPERequest LiveProcess/main.m
           grep -q FlekDeckPrepareROMRuntime LiveProcess/main.m
@@ -711,3 +715,79 @@ jobs:
             build/pe-liveshim-symbols.txt
           if-no-files-found: error
 
+      - name: Validate real Procursus binary platform
+        run: |
+          python3 - <<'PY_PLATFORM'
+          import struct
+          from pathlib import Path
+          root = Path("build/embedded-rom/unpacked/ROM")
+          for name in ("System/Rom/init", "System/Library/CoreServices/SpringBoard.app/SpringBoard", "usr/libexec/bootstrapd"):
+              data = (root / name).read_bytes()
+              if struct.unpack_from("<I", data)[0] != 0xfeedfacf:
+                  raise SystemExit(f"Unsupported Mach-O format: {name}")
+              cmd_count = struct.unpack_from("<I", data, 16)[0]
+              at, platform = 32, None
+              for _ in range(cmd_count):
+                  cmd, size = struct.unpack_from("<II", data, at)
+                  if cmd == 0x32:
+                      platform = struct.unpack_from("<I", data, at + 8)[0]
+                  at += size
+              if platform != 2:
+                  raise SystemExit(f"Unexpected guest Mach-O platform {platform} in {name}")
+              print(f"{name}: real iOS-device Mach-O, platform={platform}, not Simulator=7")
+          PY_PLATFORM
+
+      - name: Attempt FlekDeck iOS Simulator host smoke test
+        id: ios_simulator
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p build/sim-smoke
+          xcrun simctl list devices available > build/sim-smoke/available-devices.txt
+          set +e
+          xcodebuild build \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/SimulatorDerived \
+            CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            > build/sim-smoke/compile.log 2>&1
+          result=$?
+          set -e
+          if [ "$result" -ne 0 ]; then
+            echo "iOS Simulator host build blocked; see compile.log" | tee build/sim-smoke/result.txt
+            grep -E 'error:|Undefined symbols|fatal error:|ld:' build/sim-smoke/compile.log | tail -80 || true
+            exit 1
+          fi
+          APP="build/SimulatorDerived/Build/Products/Debug-iphonesimulator/FlekDeck.app"
+          test -d "$APP"
+          UDID="$(xcrun simctl list -j devices available | python3 -c \
+            'import json,sys; x=json.load(sys.stdin)["devices"]; a=[d["udid"] for g in x.values() for d in g if d.get("isAvailable") and "iPhone" in d.get("name","")]; print(a[0] if a else "")')"
+          test -n "$UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$APP"
+          ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")"
+          xcrun simctl launch "$UDID" "$ID" | tee build/sim-smoke/launch.txt
+          sleep 5
+          xcrun simctl io "$UDID" screenshot build/sim-smoke/host-screenshot.png
+          xcrun simctl spawn "$UDID" log show --last 2m --style compact \
+            --predicate 'process == "FlekDeck"' > build/sim-smoke/host-logs.txt || true
+          grep -q 'simulator-host-smoke-only-real-rom-unsupported' \
+            build/sim-smoke/host-logs.txt || {
+              echo "No FlekDeck simulator-host boot breadcrumb" | tee build/sim-smoke/result.txt
+              exit 1
+            }
+          echo "FlekDeck host simulator smoke passed. This CANNOT prove real Procursus boot." \
+            | tee build/sim-smoke/result.txt
+          xcrun simctl shutdown "$UDID" || true
+
+      - name: Upload simulator probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-ios-simulator-probe
+          path: build/sim-smoke/
+          if-no-files-found: ignore
