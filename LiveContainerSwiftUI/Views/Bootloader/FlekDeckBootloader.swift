@@ -1347,6 +1347,23 @@ func FlekDeckInstallBundledProcursus(
         completion(.failure(romError("Procursus folder is not the embedded IPA asset")))
         return
     }
+    // Validate NXT2 native capability BEFORE copying and relinking the full
+    // Procursus filesystem. Logs from iOS 27 show 101 links and 31 manifest
+    // entries were repeatedly staged only to fail at the known host preflight.
+    // This intentionally does not claim NXT2 signing can be skipped.
+    if let manifest = try? ROMManifest(
+        manifestPlistURL: source.appendingPathComponent("manifest.plist")),
+       manifest.paths.contains(where: { $0.codesigning.neededNXT2 }),
+       FlekDeckNXT2HostSigner() == nil {
+        let failure = romError(
+            "Procursus needs Nyxian's native NXT2 trust signer, which is not integrated into this FlekDeck build. Installation is unavailable until that runtime is built in. Your .p12 certificate is not the issue.")
+        FlekDeckBootTrace.mark("procursus-nxt2-host-preflight-before-staging-unavailable")
+        UserDefaults.standard.set(failure.localizedDescription,
+                                  forKey: "FlekDeckProcursusLastInstallError")
+        reportProcursusFailure(failure)
+        completion(.failure(failure))
+        return
+    }
     romOperationInProgress = true
     // A native SIGKILL/SIGABRT does not run Swift's catch block. Persist the
     // attempt before native signing so the next launch can stop a crash loop.
