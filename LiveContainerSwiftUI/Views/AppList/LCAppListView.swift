@@ -402,11 +402,13 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             rebuildOrderedHomeItems()
             refreshVirtualApps()
             restoreProcursusProgressSnapshot()
-            presentPendingProcursusFailure()
+            // Previous ROM errors are shown in Settings. Do not interrupt
+            // first-run certificate import with a blocking setup alert.
         }
         .onReceive(NotificationCenter.default.publisher(
             for: Notification.Name("FlekDeckProcursusInstallFailed"))) { _ in
-            if !procursusProgressVisible { presentPendingProcursusFailure() }
+            // Errors remain visible in Procursus Settings and Boot Logs.
+            // Never replace the Home screen with a mandatory install prompt.
         }
         .onReceive(NotificationCenter.default.publisher(
             for: Notification.Name("FlekDeckProcursusRuntimeReady"))) { _ in

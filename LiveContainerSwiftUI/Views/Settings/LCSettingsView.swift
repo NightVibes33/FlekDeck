@@ -39,6 +39,10 @@ struct LCSettingsView: View {
     @State var successInfo = ""
     @StateObject private var installLC2Alert = AlertHelper<Int>()
     @State private var certificateDataFound = false
+    @State private var procursusInstalled = false
+    @State private var procursusInstalling = false
+    @State private var procursusInstallStatus = ""
+    @State private var procursusProgress: [String: Any] = [:]
     
     @StateObject private var certificateImportAlert = YesNoHelper()
     @StateObject private var certificateImportFromBuiltInSideStoreAlert = YesNoHelper()
@@ -141,9 +145,111 @@ struct LCSettingsView: View {
         )
     }
 
+
+    private var procursusSetupSection: some View {
+        Section {
+            if procursusInstalled {
+                Label("Procursus ROM installed", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("The ROM is installed. Restart FlekDeck to initialize its virtual environment. Installing is separate from guest boot verification.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Optional virtual environment. FlekDeck Home and Settings remain usable without installing Procursus.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if !certificateDataFound {
+                    Label("Signing identity not configured", systemImage: "exclamationmark.circle")
+                        .foregroundStyle(.orange)
+                    Text("Import a .p12 in Signing before attempting to install executable guest programs. Signing the host IPA alone does not provide its private key.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    NavigationLink {
+                        signingPage
+                    } label: {
+                        Label("Open Signing Settings", systemImage: "signature")
+                    }
+                }
+                Button {
+                    startProcursusInstallation()
+                } label: {
+                    Label(procursusInstalling ? "Installing Procursus…" : "Install Procursus",
+                          systemImage: "square.and.arrow.down")
+                }
+                .disabled(procursusInstalling || !certificateDataFound)
+                if procursusInstalling {
+                    let stage = min(6, max(0, procursusProgress["completedStages"] as? Int ?? 0))
+                    let count = procursusProgress["current"] as? Int ?? 0
+                    let total = procursusProgress["total"] as? Int ?? 0
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(procursusProgress["title"] as? String ?? "Preparing ROM")
+                            .font(.subheadline.bold())
+                        Text(procursusProgress["detail"] as? String ?? "")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ProgressView(value: Double(stage), total: 6)
+                        Text("\(stage) of 6 stages completed")
+                            .font(.caption.monospacedDigit())
+                        if total > 0 {
+                            ProgressView(value: Double(min(count, total)), total: Double(total))
+                            Text("\(count) / \(total)")
+                                .font(.caption.monospacedDigit())
+                        } else {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+                if !procursusInstallStatus.isEmpty && !procursusInstalling {
+                    Label(procursusInstallStatus, systemImage: "info.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+        } header: {
+            Text("Procursus Virtual Environment")
+        } footer: {
+            Text("Installation is always started manually. No guest executables are signed or loaded just to open FlekDeck.")
+        }
+    }
+
+    private func startProcursusInstallation() {
+        guard !procursusInstalling, !FlekDeckHasInstalledProcursusROM() else { return }
+        guard LCUtils.certificateData() != nil,
+              LCSharedUtils.certificatePassword() != nil else {
+            certificateDataFound = false
+            procursusInstallStatus = "Import your signing certificate before installing Procursus."
+            return
+        }
+        procursusInstallStatus = ""
+        procursusInstalling = true
+        procursusProgress = [
+            "pid": Int(ProcessInfo.processInfo.processIdentifier),
+            "title": "Preparing ROM",
+            "detail": "Starting user-requested installation",
+            "completedStages": 0, "status": "running", "current": 0, "total": 0
+        ]
+        FlekDeckRetryBundledProcursus { result in
+            procursusInstalling = false
+            switch result {
+            case .success(let message):
+                procursusInstalled = FlekDeckHasInstalledProcursusROM()
+                procursusInstallStatus = message
+                if procursusInstalled {
+                    FlekDeckRestartAfterProcursusInstall()
+                }
+            case .failure(let error):
+                procursusInstallStatus = error.localizedDescription
+            }
+        }
+    }
+
     var body: some View {
         NavigationView {
             Form {
+                procursusSetupSection
                 // Vibe certificate controls, exposed once in the Flek settings shell.
                 if sharedModel.multiLCStatus != 2 {
                     Section{
@@ -390,6 +496,8 @@ struct LCSettingsView: View {
         .onAppear {
             // Refresh persisted certificate state whenever Settings is shown.
             certificateDataFound = LCUtils.certificateData() != nil && LCSharedUtils.certificatePassword() != nil
+            procursusInstalled = FlekDeckHasInstalledProcursusROM()
+            procursusInstallStatus = UserDefaults.standard.string(forKey: "FlekDeckProcursusLastInstallError") ?? ""
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .settings, let link = sharedModel.deepLink else { return }
                 sharedModel.deepLink = nil
@@ -398,6 +506,17 @@ struct LCSettingsView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("FlekDeckProcursusInstallProgress"))) { notification in
+            guard let event = notification.userInfo as? [String: Any],
+                  (event["pid"] as? Int) == Int(ProcessInfo.processInfo.processIdentifier) else {
+                return
+            }
+            procursusProgress = event
+            if (event["status"] as? String) == "failed" {
+                procursusInstallStatus = event["detail"] as? String ?? "Procursus setup failed."
+            }
+        }
         .onChange(of: sharedModel.deepLink) { link in
             guard sharedModel.selectedTab == .settings, let link else { return }
             sharedModel.deepLink = nil

@@ -1382,6 +1382,17 @@ func FlekDeckInstallBundledProcursus(
     }
 }
 
+
+/// True only after a valid Procursus manifest is committed to the persistent
+/// boot slot. This does not imply NXSlotMain or SpringBoard has booted.
+func FlekDeckHasInstalledProcursusROM() -> Bool {
+    let manifestURL = flashedSlotURL().appendingPathComponent("manifest.plist")
+    guard let manifest = try? ROMManifest(manifestPlistURL: manifestURL) else {
+        return false
+    }
+    return manifest.identifier == "org.emexlabs.procursus.jailed"
+}
+
 /// Retry the same already-unpacked IPA resources after importing a P12.
 /// Never ask the user to find or flash a ZIP.
 func FlekDeckRetryBundledProcursus(
@@ -1794,12 +1805,9 @@ private final class FlekDeckBootViewController: UIViewController {
     private static let showGuestName = Notification.Name("FlekDeckProcursusGuestDidLaunch")
 
     private static let guestBootCrashGuardKey = "FlekDeckGuestSpringBoardCrashGuard"
-    // New integration build permits ONE transparent retry of older failed ROM
-    // installs. Subsequent failures require a user-initiated retry.
-    private static let romAutoRepairEpoch = "rom-checksum-removal-progress-20261019-v3"
-    private static let romAutoRepairKey = "FlekDeckProcursusAutoRepairEpoch"
-    // An embedded Procursus ROM boots as part of FlekDeck itself. The old
-    // manual Settings opt-in has been retired; recovery is still available.
+    // Never block a first run behind Procursus provisioning. A valid
+    // certificate may be imported from FlekDeck Settings before a user
+    // explicitly starts the optional ROM installation.
     private static var wantsProcursusRuntime: Bool { true }
 
     init(builtinController: UIViewController) {
@@ -1927,52 +1935,17 @@ private final class FlekDeckBootViewController: UIViewController {
                 }
                 return
             }
-            // First launch: FlekDeck stays interactive while this exact
-            // IPA-embedded ROM is signed and committed on the ROM serial queue.
+            // FlekDeck Home/Settings are ALWAYS available before Procursus
+            // is installed. Never sign or dlopen guest binaries on cold start:
+            // a signed host IPA does not carry its P12 private key.
+            // The user can import signing identity and explicitly install
+            // the optional ROM in FlekDeck Settings -> Procursus.
             let installedManifest = flashedSlotURL().appendingPathComponent("manifest.plist")
-            let oldInstallError = UserDefaults.standard.string(
-                forKey: "FlekDeckProcursusLastInstallError")
-            let previousEpoch = UserDefaults.standard.string(
-                forKey: Self.romAutoRepairKey)
-            let interruptedInstall = oldInstallError?.contains(
-                "previous Procursus installation terminated unexpectedly") == true
-            let canRepairOldFailure = oldInstallError != nil
-                && !interruptedInstall
-                && previousEpoch != Self.romAutoRepairEpoch
-            let autoInstallPaused = oldInstallError != nil && !canRepairOldFailure
-            if let oldInstallError {
-                FlekDeckBootTrace.mark("procursus-previous-install-error \(oldInstallError)")
-            }
-            if autoInstallPaused {
-                FlekDeckBootTrace.mark("procursus-automatic-install-paused-after-failure")
-            } else if canRepairOldFailure {
-                FlekDeckBootTrace.mark("procursus-automatic-install-retrying-old-failure")
-            }
             if !FileManager.default.fileExists(atPath: installedManifest.path),
-               !FlekDeckBootPaths.expectedFlashedROM,
-               !autoInstallPaused,
-               let root = FlekDeckBootPaths.embeddedProcursusRoot {
-                FlekDeckBootTrace.mark("procursus-embedded-first-install-start")
-                UserDefaults.standard.set(Self.romAutoRepairEpoch,
-                    forKey: Self.romAutoRepairKey)
-                if canRepairOldFailure {
-                    UserDefaults.standard.removeObject(
-                        forKey: "FlekDeckProcursusLastInstallError")
-                }
+               !FlekDeckBootPaths.expectedFlashedROM {
+                FlekDeckBootTrace.mark("procursus-install-deferred-to-settings")
                 DispatchQueue.main.async {
-                    self.transition(to: self.builtinController, style: .crossfade) {
-                        FlekDeckInstallBundledProcursus(root) { result in
-                            switch result {
-                            case .success(let message):
-                                FlekDeckBootTrace.mark("procursus-embedded-first-install-success \(message)")
-                                // Restart for a clean NXSlotMain initialization.
-                                restartSelf()
-                            case .failure(let error):
-                                FlekDeckBootTrace.mark("procursus-embedded-first-install-failed \(error.localizedDescription)")
-                                // Never crash FlekDeck when a P12 is missing.
-                            }
-                        }
-                    }
+                    self.transition(to: self.builtinController)
                 }
                 return
             }
