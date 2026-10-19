@@ -805,27 +805,20 @@ jobs:
           from pathlib import Path
           utils = Path("LiveContainer/LCSharedUtils.m")
           source = utils.read_text()
-          old = (
-              '                __asm__ __volatile__ (\\n'
-              '                    "mov x0, #31\\n"\\n'
-              '                    "mov x16, #26\\n"\\n'
-              '                    "svc #0x80\\n"\\n'
-              '                );'
-          )
-          # Match the literal backslash-n escape in the Objective-C source,
-          # not newline characters inside the C assembly string.
-          old = (
-              '                __asm__ __volatile__ (\\n'
-              '                    "mov x0, #31\\\\n"\\n'
-              '                    "mov x16, #26\\\\n"\\n'
-              '                    "svc #0x80\\\\n"\\n'
-              '                );'
-          )
-          if source.count(old) != 1:
+          begin = source.find('                __asm__ __volatile__ (')
+          if begin < 0 or source.count('                __asm__ __volatile__ (') != 1:
               raise SystemExit("Expected exactly one Vibe AArch64 ptrace trap")
-          source = source.replace(
-              old, '#if defined(__aarch64__)\\n' + old +
-              '\\n#else\\n                /* x86 Simulator: no private trap. */\\n#endif'
+          end = source.find('                );', begin)
+          if end < 0:
+              raise SystemExit("Expected matching Vibe ptrace trap terminator")
+          end += len('                );')
+          arm_only = source[begin:end]
+          source = (
+              source[:begin] +
+              '#if defined(__aarch64__)' + chr(10) + arm_only + chr(10) +
+              '#else' + chr(10) +
+              '                /* Simulator: no private trap. */' + chr(10) +
+              '#endif' + source[end:]
           )
           utils.write_text(source)
 
