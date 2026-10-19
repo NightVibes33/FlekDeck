@@ -470,6 +470,12 @@ private enum SlotLoadResult: @unchecked Sendable {
 
 private typealias RestartSelfFn = @convention(c) () -> Void
 
+// Public API used by the existing FlekDeck Home after the ROM install
+// completed; the actual restart primitive remains private to this file.
+func FlekDeckRestartAfterProcursusInstall() {
+    restartSelf()
+}
+
 private func restartSelf() {
     let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
     guard let sym = dlsym(RTLD_DEFAULT, "PERestartSelf") else {

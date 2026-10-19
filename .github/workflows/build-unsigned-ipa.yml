@@ -354,6 +354,8 @@ jobs:
           grep -q 'FlekDeckProcursusAutoRepairEpoch' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckProcursusInstallFailed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'Retry bundled setup' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'FlekDeckRestartAfterProcursusInstall' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'func FlekDeckRestartAfterProcursusInstall' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'simulator-host-smoke-only-real-rom-unsupported' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           plutil -lint LiveProcess/LiveProcess.entitlements LiveProcess/LiveProcessRelease.entitlements
           grep -q FlekDeckRunPERequest LiveProcess/main.m

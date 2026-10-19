@@ -1151,7 +1151,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 UserDefaults.standard.set(
                     false, forKey: "FlekDeckGuestSpringBoardCrashGuard")
                 // NXSlotMain must initialize in a fresh process.
-                restartSelf()
+                FlekDeckRestartAfterProcursusInstall()
             case .failure(let error):
                 procursusInstallFailure = error.localizedDescription
                 showProcursusRetry = true
