@@ -161,11 +161,22 @@ struct LCSettingsView: View {
     private var procursusSetupSection: some View {
         Section {
             if procursusInstalled {
-                Label("Procursus ROM installed", systemImage: "checkmark.circle.fill")
+                Label("Procursus ROM files installed", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                Text("The ROM is installed. Restart FlekDeck to initialize its virtual environment. Installing is separate from guest boot verification.")
+                Text("Procursus was installed into FlekDeck's local ROM slot. The guest process, package manager and Sileo appear only after the real runtime boots. FlekDeck does not restart into another phone interface.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if UserDefaults.standard.bool(forKey: "FlekDeckGuestSpringBoardCrashGuard") {
+                    Label("Previous guest boot aborted. FlekDeck remains usable; review Boot Logs before retrying.", systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                } else {
+                    Button {
+                        FlekDeckActivateProcursusAfterInstall()
+                    } label: {
+                        Label("Activate Procursus inside FlekDeck", systemImage: "bolt.circle")
+                    }
+                }
             } else {
                 Text("Optional virtual environment. FlekDeck Home and Settings remain usable without installing Procursus.")
                     .font(.footnote)
