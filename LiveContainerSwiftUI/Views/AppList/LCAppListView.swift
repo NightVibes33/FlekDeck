@@ -1238,7 +1238,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                             .buttonStyle(.bordered)
                         }
                     } else if status == "complete" {
-                        Text("Restarting to initialize Procursus.")
+                        Text("Initializing Procursus inside FlekDeck.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1298,8 +1298,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             case .success:
                 UserDefaults.standard.set(
                     false, forKey: "FlekDeckGuestSpringBoardCrashGuard")
-                // NXSlotMain must initialize in a fresh process.
-                FlekDeckRestartAfterProcursusInstall()
+                // Start genuine Procursus services inside this running FlekDeck app.
+                FlekDeckActivateProcursusAfterInstall()
             case .failure(let error):
                 procursusInstallFailure = error.localizedDescription
                 if !procursusProgressVisible {
