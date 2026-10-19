@@ -288,6 +288,11 @@ struct LCSettingsView: View {
                                 }
                             }
                         }
+                        NavigationLink {
+                            LCJITLessDiagnoseView()
+                        } label: {
+                            Label("lc.settings.jitlessDiagnose".loc, systemImage: "stethoscope")
+                        }
 
                     } header: {
                         Text("lc.settings.jitLess".loc)
