@@ -366,6 +366,11 @@ jobs:
           grep -q 'procursus-install-deferred-to-settings' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'procursus-embedded-first-install-start' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'procursusSetupSection' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'NavigationLink { procursusPage }' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'GitHub - NightVibes33' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          ! grep -q 'linkRow("FlekIconFlekStore", "FlekSt0re.com"' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'procursus-nxt2-host-signer-unavailable' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          ! grep -q 'procursus-nxt2-runtime-load-enter' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'Open Signing Settings' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'FlekDeckRetryBundledProcursus' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'FlekDeckProcursusInstallFailed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
