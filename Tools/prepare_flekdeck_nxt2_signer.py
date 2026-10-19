@@ -112,6 +112,10 @@ def main():
     signer = once(signer, SIGN_HASH_OLD, SIGN_HASH_NEW, "sign CDHash")
     signer = once(signer, READ_HASH_OLD, READ_HASH_NEW, "verify CDHash")
     signer = once(signer, SURFACE_PUBLIC_OLD, SURFACE_PUBLIC_NEW, "public key")
+    # PAGE_SIZE was supplied by Nyxian's guest-kernel headers; in the real
+    # iOS host, enforce the same cap using the device's active VM page size.
+    signer = once(signer, "    if(len > PAGE_SIZE)",
+                  "    if(len > (size_t)getpagesize())", "host page-size bound")
     # Nyxian's guest compilation context defines PAGE_SIZE internally.
     # The iOS host SDK doesn't expose that constant here; getpagesize()
     # preserves the on-device limit without assuming 4K or 16K pages.
