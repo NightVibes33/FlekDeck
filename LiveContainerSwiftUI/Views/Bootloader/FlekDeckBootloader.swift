@@ -1860,6 +1860,7 @@ private final class FlekDeckBootViewController: UIViewController {
     // Never replace its launcher, icon ordering, Installer, or multitask dock.
     private var activeSlotWindow: UIWindow?
     private var didStartBoot = false
+    private var guestActivationInProgress = false
 
     private static let showGuestName = Notification.Name("FlekDeckProcursusGuestDidLaunch")
 
@@ -2027,77 +2028,18 @@ private final class FlekDeckBootViewController: UIViewController {
                 return
             }
 
-            // NXSlotInit executes inside the guest dylib's Mach-O initializer.
-            // It can abort before dlopen returns if PE bootstrap fails.
-            // Arm the persistent boot guard BEFORE loading the ROM.
-            do {
-                try FlekDeckBootPaths.setSessionActive(true)
-                FlekDeckBootTrace.mark("rom-slot-dlopen-crash-guard-armed")
-            } catch {
-                FlekDeckBootTrace.mark("rom-slot-guard-failed \(error.localizedDescription)")
-                DispatchQueue.main.async { self.transition(to: self.builtinController) }
-                return
-            }
-            // Collect genuine extension diagnostics before the fatal
-            // initializer: never fake a PE process or bypass trust.
-            FlekDeckTraceROMProcessEnvironment()
-            FlekDeckBootTrace.mark("rom-slot-load-enter")
-            let slot = loadSlot(loadSuperslotForcefully: false)
-            FlekDeckBootTrace.mark("rom-slot-load-return")
-            
+            // This is FlekDeck's own Home, not another bootable phone.
+            // Show it BEFORE loading ROM services. The ROM initializer may
+            // terminate the process on a real PE failure; a persistent boot
+            // guard protects the next launch, while the user never sees
+            // another standalone SpringBoard as the default interface.
+            FlekDeckBootTrace.mark("procursus-home-first-activation")
             DispatchQueue.main.async {
-                guard case let .loaded(name, slotMain, slotDidAppear, slotCreateWindow) = slot else {
-                    if case let .failed(message) = slot {
-                        FlekDeckBootTrace.mark("rom-slot-load-failed \(message)")
-                        try? FlekDeckBootPaths.setSessionActive(false)
-                        self.enterRecovery(error: "ERROR: \(message)")
-                    }
-                    return
-                }
-                
-                FlekDeckBootTrace.mark("rom-runtime-preflight-enter")
-                let missingAssets = FlekDeckBootPaths.missingNyxianBootAssets()
-                if !missingAssets.isEmpty {
-                    let message = "Required Nyxian userspace boot resources are missing from this IPA: " +
-                        missingAssets.joined(separator: ", ") +
-                        ". Install a complete FlekDeck build; the flashed ROM was not modified."
-                    FlekDeckBootTrace.mark("rom-runtime-preflight-failed \(message)")
-                    try? FlekDeckBootPaths.setSessionActive(false)
-                    self.transition(to: self.builtinController)
-                    return
-                }
-                if let freeMB = FlekDeckBootPaths.availableSpaceInMegabytes() {
-                    FlekDeckBootTrace.mark("rom-runtime-preflight-free-storage-mb=\(freeMB)")
-                    if freeMB < 4000 {
-                        FlekDeckBootTrace.mark("rom-runtime-preflight-warning-low-storage bootstrap-needs-room")
-                    }
-                }
-                FlekDeckBootTrace.mark("rom-runtime-preflight-ready")
-
-                // Session already armed before ROM dlopen. Keep it armed
-                // until the guest has reached the real SpringBoard.
-
-                // Preserve Nyxian's upstream FBProcessManager registration
-                // path. A previous iOS 27 constructor compatibility hook
-                // rejected this ROM even though native Nyxian boots on the
-                // same device; do not preempt its process lifecycle.
-                FlekDeckTraceROMProcessEnvironment()
-                FlekDeckBootTrace.mark("rom-frontboard-upstream-path-ready")
-                FlekDeckBootTrace.mark("rom-nyxian-kmsg-in-documents-captured-on-next-launch")
-
-                // Procursus installs INTO the existing FlekDeck experience:
-                // its SpringBoard and launch services run natively inside
-                // the ROM while FlekDeck remains the visible and interactive
-                // launcher, app manager, settings and package entrypoint.
-                FlekDeckBootTrace.mark("procursus-integrated-services-boot-enter")
                 self.transition(to: self.builtinController, style: .crossfade) {
-                    self.startIntegratedSpringBoard(
-                        name: name,
-                        slotMain: slotMain,
-                        slotDidAppear: slotDidAppear,
-                        slotCreateWindow: slotCreateWindow)
+                    self.activateInstalledProcursus()
                 }
             }
+            return
         }
     }
 
@@ -2106,6 +2048,10 @@ private final class FlekDeckBootViewController: UIViewController {
     // persist a crash-guard marker first and never retry automatically
     // after the corresponding crash. No fake process state is reported.
     @objc private func activateInstalledProcursus() {
+        guard !guestActivationInProgress, activeSlotWindow == nil else {
+            FlekDeckBootTrace.mark("procursus-live-activation-already-running")
+            return
+        }
         guard FlekDeckHasInstalledProcursusROM() else {
             FlekDeckBootTrace.mark("procursus-live-activation-no-committed-rom")
             return
@@ -2114,15 +2060,27 @@ private final class FlekDeckBootViewController: UIViewController {
             FlekDeckBootTrace.mark("procursus-live-activation-crash-guard-blocked")
             return
         }
+        guestActivationInProgress = true
         DispatchQueue.global(qos: .utility).async {
+            // Validate actual packaged PE services before calling dyld.
+            // Never load the guest constructor with a missing runtime.
+            let missing = FlekDeckBootPaths.missingNyxianBootAssets()
+            guard missing.isEmpty else {
+                FlekDeckBootTrace.mark("procursus-live-missing-assets \(missing.joined(separator: ","))")
+                DispatchQueue.main.async { self.guestActivationInProgress = false }
+                return
+            }
             if FlekDeckBootPaths.previousSessionWasActive() {
                 FlekDeckBootTrace.mark("procursus-live-activation-already-active")
+                DispatchQueue.main.async { self.guestActivationInProgress = false }
                 return
             }
             do {
                 try FlekDeckBootPaths.setSessionActive(true)
+                FlekDeckBootTrace.mark("procursus-live-dlopen-crash-guard-armed")
             } catch {
                 FlekDeckBootTrace.mark("procursus-live-activation-session-error \(error.localizedDescription)")
+                DispatchQueue.main.async { self.guestActivationInProgress = false }
                 return
             }
             FlekDeckTraceROMProcessEnvironment()
@@ -2130,17 +2088,12 @@ private final class FlekDeckBootViewController: UIViewController {
             let result = loadSlot(loadSuperslotForcefully: false)
             FlekDeckBootTrace.mark("procursus-live-dlopen-return")
             DispatchQueue.main.async {
+                self.guestActivationInProgress = false
                 switch result {
                 case let .failed(error):
                     try? FlekDeckBootPaths.setSessionActive(false)
                     FlekDeckBootTrace.mark("procursus-live-dlopen-failed \(error)")
                 case let .loaded(name, main, appeared, createWindow):
-                    let missing = FlekDeckBootPaths.missingNyxianBootAssets()
-                    guard missing.isEmpty else {
-                        try? FlekDeckBootPaths.setSessionActive(false)
-                        FlekDeckBootTrace.mark("procursus-live-missing-assets \(missing.joined(separator: ","))")
-                        return
-                    }
                     FlekDeckBootTrace.mark("procursus-live-integrated-boot-enter")
                     self.startIntegratedSpringBoard(name: name,
                         slotMain: main,
