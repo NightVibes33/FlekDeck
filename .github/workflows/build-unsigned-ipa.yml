@@ -367,6 +367,8 @@ jobs:
           grep -q 'recordCommittedROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'procursus-backend-window-under-flekdeck-home' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckLaunchProcursusApp' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          grep -q 'procursus-reusing-flekdeck-app-signing-identity' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          ! grep -q 'FlekROMCertificateFromBuiltinSideStore' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'allApplicationObjects' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'FlekDeckInstallBundledProcursus' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'restoreEmbeddedProcursusROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift

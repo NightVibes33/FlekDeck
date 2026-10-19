@@ -127,51 +127,25 @@ void FlekDeckTraceROMProcessEnvironment(void)
     FlekROMTrace("rom-frontboard-native-nyxian-registration-unmodified");
 }
 
-static NSData *FlekROMCertificateFromBuiltinSideStore(void)
-{
-    // Same keychain entry and lookup already used by the existing Settings
-    // "Import from SideStore" flow. Do not log, persist, or expose its bytes.
-    NSDictionary *query = @{
-        (__bridge NSString *)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge NSString *)kSecAttrAccount: @"signingCertificate",
-        (__bridge NSString *)kSecAttrService: @"com.kdt.livecontainer",
-        (__bridge NSString *)kSecReturnData: @YES,
-        (__bridge NSString *)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
-        (__bridge NSString *)kSecAttrSynchronizable: (__bridge id)kSecAttrSynchronizableAny,
-    };
-    CFTypeRef item = NULL;
-    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &item);
-    if (status != errSecSuccess || item == NULL) {
-        if (item) CFRelease(item);
-        return nil;
-    }
-    id value = CFBridgingRelease(item);
-    return [value isKindOfClass:NSData.class] && [value length] > 0 ? value : nil;
-}
+// Procursus reuses the same active identity as FlekDeck's imported IPA apps.
+// No independently selected ROM certificate or SideStore keychain fallback.
 
 BOOL FlekDeckSignROMFilesWithZSign(NSArray<NSURL *> *files, NSError **error)
 {
     if (files.count == 0) return YES;
 
+    // Same identity readers used by LCUtils.signFilesWithZSignWithURLs
+    // when FlekDeck signs imported applications. No additional ROM identity.
     NSData *certificate = LCUtils.certificateData;
     NSString *password = LCSharedUtils.certificatePassword;
-    if (![certificate isKindOfClass:NSData.class] || certificate.length == 0) {
-        id fallback = [NSUserDefaults.standardUserDefaults objectForKey:@"LCCertificateData"];
-        certificate = [fallback isKindOfClass:NSData.class] ? fallback : nil;
-    }
-    if (![certificate isKindOfClass:NSData.class] || certificate.length == 0) {
-        certificate = FlekROMCertificateFromBuiltinSideStore();
-        if (certificate.length > 0) password = @"";
-    }
-    if (![certificate isKindOfClass:NSData.class] || certificate.length == 0) {
+    if (![certificate isKindOfClass:NSData.class] || certificate.length == 0 ||
+        ![password isKindOfClass:NSString.class]) {
+        FlekROMTrace("procursus-flekdeck-shared-signing-identity-unavailable");
         if (error) *error = FlekROMSigningError(2,
-            @"No ROM signing certificate is available. In FlekDeck Settings > Signing, import your SideStore/ESign .p12 or use Import from SideStore, then flash the ZIP again.");
+            @"FlekDeck cannot read its existing app-signing certificate and password. The Procursus ROM reuses the same signing identity configured under FlekDeck Settings > Signing, not a separate ROM certificate. If that identity is unavailable, import the same .p12 used to sign FlekDeck; a signed IPA cannot provide the private key.");
         return NO;
     }
-
-    // An empty p12 password is valid. Nil is NOT a valid C-string and must
-    // never reach ZSignAsset's implicit std::string constructor.
-    if (![password isKindOfClass:NSString.class]) password = @"";
+    FlekROMTrace("procursus-reusing-flekdeck-app-signing-identity");
     NSString *bundleID = NSBundle.mainBundle.bundleIdentifier;
     if (![bundleID isKindOfClass:NSString.class] || bundleID.length == 0) {
         bundleID = NSBundle.mainBundle.infoDictionary[@"CFBundleIdentifier"];

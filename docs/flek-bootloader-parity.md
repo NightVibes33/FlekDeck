@@ -452,3 +452,17 @@ initialization or jailbreak process functionality.
 First-launch installation failures previously persisted but disabled all retries after the standalone Settings panel was removed. The original Home now shows a recovery prompt only when ROM install fails, with the actual error and **Retry bundled setup**. A newly built integration automatically retries one prior failed install once, while preserving the existing signed ROM slot. It records the prior error in the boot log. Do not embed private user `.p12` keys or provisioning profiles in a public repository or IPA.
 
 GitHub CI now attempts a host-only iOS Simulator build and boot, captures simulator logs/screenshots when possible, and reports its result separately from the green **real-device unsigned IPA**. The real Procursus `System/Rom/init`, `SpringBoard`, and `bootstrapd` binaries are Mach-O platform 2 (iOS device), not simulator platform 7. The simulator guard is therefore intentionally FlekDeck Home-only. Simulator success is **not** evidence that Nyxian process registration, JIT, bootstrapd or Sileo works on an iPhone 16; that requires actual device logs after signed ROM installation.
+
+
+## Identity reuse for embedded virtual ROM
+
+Procursus now uses **only** the existing `LCUtils.certificateData` and
+`LCSharedUtils.certificatePassword` readers used by FlekDeck's imported-app
+signer; it does not look up or request an independent ROM signing certificate.
+The genuine ROM manifest marks virtual SpringBoard, bootstrapd and binpack
+executables as `NXRequiresCodeSigning`, so those binaries still need normal
+Mach-O signing and additional NXT2 virtual entitlements where specified.
+The installed IPA's signature contains a public identity, not the private
+signing key: if FlekDeck's own imported-app signer cannot access its P12, the
+runtime reports that shared-identity error instead of trying an unrelated
+keychain entry. No separate signing panel or second P12 is introduced.
