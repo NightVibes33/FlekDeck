@@ -19,6 +19,8 @@
 #import <stdlib.h>
 #import <unistd.h>
 #import <dlfcn.h>
+#import <time.h>
+#import <sys/stat.h>
 
 // The pinned Vibe signer is loaded dynamically; ROMs use the same native
 // ZSigner, but must validate arguments before its asynchronous C++ worker.
@@ -50,8 +52,13 @@ static void FlekROMTrace(const char *event)
     if (snprintf(path, sizeof(path), "%s/Documents/BootLogs/current-boot.log", home) >= sizeof(path)) return;
     int fd = open(path, O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0600);
     if (fd < 0) return;
-    char line[180];
-    int n = snprintf(line, sizeof(line), "pid=%d %s\n", getpid(), event);
+    char line[768];
+    struct timespec now = {0};
+    clock_gettime(CLOCK_REALTIME, &now);
+    int n = snprintf(line, sizeof(line),
+                     "epoch=%lld.%03ld pid=%d %s\n",
+                     (long long)now.tv_sec, now.tv_nsec / 1000000,
+                     getpid(), event);
     if (n > 0 && n < sizeof(line)) {
         (void)write(fd, line, (size_t)n);
         (void)fsync(fd);
@@ -127,6 +134,22 @@ void FlekDeckTraceROMProcessEnvironment(void)
     FlekROMTrace("rom-frontboard-native-nyxian-registration-unmodified");
 }
 
+
+static void FlekROMTraceSigningPath(const char *phase, NSString *path)
+{
+    // Never log host signing credentials, contents, P12 passwords, or tokens.
+    NSString *relative = path ?: @"";
+    NSRange slot = [relative rangeOfString:@"/.A.installing/"];
+    if (slot.location != NSNotFound) {
+        relative = [relative substringFromIndex:NSMaxRange(slot)];
+    } else if (relative.length > 0) {
+        relative = relative.lastPathComponent;
+    }
+    NSString *event = [NSString stringWithFormat:
+        @"rom-zsign-%s file=%@", phase, relative];
+    FlekROMTrace(event.UTF8String);
+}
+
 // Procursus reuses the same active identity as FlekDeck's imported IPA apps.
 // No independently selected ROM certificate or SideStore keychain fallback.
 
@@ -163,7 +186,16 @@ BOOL FlekDeckSignROMFilesWithZSign(NSArray<NSURL *> *files, NSError **error)
             return NO;
         }
         [paths addObject:[entry path]];
+        NSDictionary *attributes =
+            [NSFileManager.defaultManager attributesOfItemAtPath:[entry path] error:nil];
+        NSString *details = [NSString stringWithFormat:
+            @"file-preflight count=%lu bytes=%lld",
+            (unsigned long)paths.count,
+            (long long)[attributes[NSFileSize] longLongValue]];
+        FlekROMTrace(details.UTF8String);
+        FlekROMTraceSigningPath("queued", [entry path]);
     }
+    FlekROMTrace("rom-zsign-preflight-all-files-readable");
 
     // ZSign.dylib is bundled with FlekDeck. Load it from the host bundle
     // explicitly: the UI's lazy LCUtils loader can return without registering
@@ -208,10 +240,16 @@ BOOL FlekDeckSignROMFilesWithZSign(NSArray<NSURL *> *files, NSError **error)
         return NO;
     }
     FlekROMTrace("rom-zsign-ready");
+    NSString *batch = [NSString stringWithFormat:
+        @"rom-zsign-batch-ready files=%lu", (unsigned long)paths.count];
+    FlekROMTrace(batch.UTF8String);
+    FlekROMTraceSigningPath("first-file", paths.firstObject);
+    FlekROMTraceSigningPath("last-file", paths.lastObject);
 
     dispatch_semaphore_t completed = dispatch_semaphore_create(0);
     __block BOOL succeeded = NO;
     __block NSError *signingError = nil;
+    FlekROMTrace("rom-zsign-native-call-enter");
     NSProgress *progress = [signer signMachOPathArr:paths
                                          bundleId:bundleID
                                              cert:certificate
@@ -219,13 +257,35 @@ BOOL FlekDeckSignROMFilesWithZSign(NSArray<NSURL *> *files, NSError **error)
                                 completionHandler:^(BOOL success, NSError * _Nullable callbackError) {
         succeeded = success && callbackError == nil;
         signingError = callbackError;
+        NSString *event = [NSString stringWithFormat:
+            @"rom-zsign-native-callback success=%d error-domain=%@ error-code=%ld",
+            success, callbackError.domain ?: @"none", (long)callbackError.code];
+        FlekROMTrace(event.UTF8String);
         dispatch_semaphore_signal(completed);
     }];
+    FlekROMTrace(progress != nil ? "rom-zsign-native-call-returned-progress" :
+                                   "rom-zsign-native-call-returned-nil");
     if (progress == nil) {
         if (error) *error = FlekROMSigningError(5, @"Could not start the native ROM signer.");
         return NO;
     }
-    dispatch_semaphore_wait(completed, DISPATCH_TIME_FOREVER);
+    // Periodic, fsync-backed heartbeat: after a native crash the last
+    // completed counter distinguishes signer dispatch from per-file faults.
+    // Never fabricate progress and never abort merely because signing is slow.
+    NSUInteger heartbeat = 0;
+    while (dispatch_semaphore_wait(completed,
+               dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) != 0) {
+        heartbeat++;
+        NSString *event = [NSString stringWithFormat:
+            @"rom-zsign-heartbeat seconds=%lu completed=%lld total=%lld cancelled=%d",
+            (unsigned long)(heartbeat * 2), progress.completedUnitCount,
+            progress.totalUnitCount, progress.cancelled];
+        FlekROMTrace(event.UTF8String);
+    }
+    NSString *done = [NSString stringWithFormat:
+        @"rom-zsign-done success=%d completed=%lld total=%lld",
+        succeeded, progress.completedUnitCount, progress.totalUnitCount];
+    FlekROMTrace(done.UTF8String);
     if (!succeeded && error) {
         *error = signingError ?: FlekROMSigningError(1, @"The selected certificate could not sign the ROM executables.");
     }

@@ -25,6 +25,7 @@ on:
       - 'ThirdParty/FlekDeckPERuntime-NOTICE.md'
       - 'ThirdParty/ProcursusJailed/**'
       - 'Tools/prepare_embedded_procursus.py'
+      - 'Tools/patch_procursus_zsign_tracing.py'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -176,6 +177,15 @@ jobs:
           VIBE_OPENSSL="$(git -C OpenSSL rev-parse HEAD)"
           test "$VIBE_OPENSSL" = "$(git -C /tmp/vibe rev-parse "$VIBE_SHA:LiveContainer-3.8.0/OpenSSL")"
           echo "Exact Vibe signing/JIT parity proven; FlekDeck owns the LiveProcess ROM request adapter."
+
+      - name: Add crash-persistent Procursus ZSign worker diagnostics
+        run: |
+          set -euo pipefail
+          python3 -m py_compile Tools/patch_procursus_zsign_tracing.py
+          python3 Tools/patch_procursus_zsign_tracing.py ZSign/zsign.mm
+          grep -q 'flekdeck_zsign_trace' ZSign/zsign.mm
+          grep -q 'rom-zsign-native-call-enter' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          echo "Native ROM signer breadcrumbs installed without modifying signing behavior."
 
       # Vibe intentionally overwrites several guest/runtime files above. Every
       # Flek-specific Single switcher/PiP/viewport layer MUST be reconstructed after
