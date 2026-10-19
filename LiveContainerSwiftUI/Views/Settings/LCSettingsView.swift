@@ -146,6 +146,18 @@ struct LCSettingsView: View {
     }
 
 
+    @ViewBuilder private var procursusPage: some View {
+        Form {
+            procursusSetupSection
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Procursus").font(.headline)
+            }
+        }
+    }
+
     private var procursusSetupSection: some View {
         Section {
             if procursusInstalled {
@@ -249,7 +261,6 @@ struct LCSettingsView: View {
     var body: some View {
         NavigationView {
             Form {
-                procursusSetupSection
                 // Vibe certificate controls, exposed once in the Flek settings shell.
                 if sharedModel.multiLCStatus != 2 {
                     Section{
@@ -309,9 +320,12 @@ struct LCSettingsView: View {
                     NavigationLink { LCTweaksView() } label: {
                         categoryRow("Tweaks", "wrench.and.screwdriver.fill", .orange, iconSize: 17)
                     }
+                    NavigationLink { procursusPage } label: {
+                        categoryRow("Procursus", "shippingbox.fill", .indigo, iconSize: 18)
+                    }
                 }
                 Section {
-                    linkRow("FlekIconFlekStore", "FlekSt0re.com", action: openFlekstore)
+                    linkRow("GitHub", "GitHub - NightVibes33", action: openUserGitHub)
                     linkRow("GitHub", "GitHub - LiveContainer", action: openGitHub)
                     linkRow("Twitter", "khanhduytran0", action: openTwitter)
                     linkRow("GitHub", "GitHub - Huge_Black", action: openGitHub2)
@@ -338,10 +352,10 @@ struct LCSettingsView: View {
                             .foregroundStyle(.gray)
                         // A Link here would take over the whole Form row and swallow
                         // the version tap above it, so open the URL by hand instead.
-                        Text("FlekSt0re")
+                        Text("NightVibes33")
                             .foregroundStyle(.blue)
                             .contentShape(Rectangle())
-                            .onTapGesture(perform: openFlekstore)
+                            .onTapGesture(perform: openUserGitHub)
                     }
                     // Centred on its own, against a version line that fills the width
                     // to sit leading. The stack's own alignment cannot do both.
@@ -842,6 +856,11 @@ struct LCSettingsView: View {
 
     func openFlekstore() {
         UIApplication.shared.open(URL(string: "https://flekstore.com")!)
+    }
+
+    func openUserGitHub() {
+        guard let url = URL(string: "https://github.com/NightVibes33") else { return }
+        UIApplication.shared.open(url)
     }
 
     func openGitHub() {
