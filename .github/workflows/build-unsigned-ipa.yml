@@ -774,6 +774,30 @@ jobs:
           path.write_text(source[:begin] + shim + source[end:])
           print("Simulator-only kernel-trap stub applied; real iOS build remains unchanged")
           PY_SIM_HOST
+          # A second upstream ARM-only trap in litehook is also incompatible
+          # with the x86 simulator host. Disable it in this simulator build only.
+          # Do not link any pretend virtual-kernel implementation.
+          python3 - <<'PY_SIM_LITEHOOK'
+          from pathlib import Path
+          path = Path("litehook/src/litehook.c")
+          source = path.read_text()
+          begin = source.find("__attribute__((noinline, naked)) volatile kern_return_t litehook_vm_protect")
+          end = source.find("\nkern_return_t litehook_unprotect", begin)
+          if begin < 0 or end < 0:
+              raise SystemExit("Expected upstream litehook trap not found")
+          real_impl = source[begin:end]
+          stub = (
+              "#if defined(__aarch64__)\n" + real_impl
+              + "\n#else\n"
+              + "kern_return_t litehook_vm_protect(mach_port_name_t task, "
+              + "mach_vm_address_t address, mach_vm_size_t size, "
+              + "boolean_t set_maximum, vm_prot_t new_protection) {\n"
+              + "    return KERN_FAILURE; /* No guest kernel features in Simulator. */\n"
+              + "}\n#endif\n"
+          )
+          path.write_text(source[:begin] + stub + source[end:])
+          print("Simulator-only litehook trap stubbed; device build unchanged")
+          PY_SIM_LITEHOOK
           set +e
           xcodebuild build \
             -project LiveContainer.xcodeproj \
