@@ -1228,13 +1228,18 @@ private func flashROM(archive: URL, log: RomLog,
             for (index, file) in nxt2Files.enumerated() {
                 FlekDeckBootTrace.mark("procursus-nxt2-sign-enter \(index + 1)/\(nxt2Files.count) \(file.path)")
                 let target = try slotFile(file.path, in: slot)
-                let kr = FlekDeckNXT2Sign(hostSigner: hostSign,
+                let kr = FlekDeckNXT2Sign(hostSigner: hostSign.sign,
                                           path: target.path,
                                           entitlements: file.codesigning.nxt2 as CFDictionary)
                 FlekDeckBootTrace.mark("procursus-nxt2-sign-result \(index + 1)/\(nxt2Files.count) kr=\(kr)")
                 guard kr == KERN_SUCCESS else {
                     throw romError("failed to add NXT2 entitlements to \(file.path): \(String(cString: mach_error_string(kr)))")
                 }
+                FlekDeckBootTrace.mark("procursus-nxt2-verify-enter \(file.path)")
+                guard target.path.withCString({ hostSign.verify($0) }) == 1 else {
+                    throw romError("Nyxian NXT2 verification failed for \(file.path): signed blob, code hash, or EC signature is invalid")
+                }
+                FlekDeckBootTrace.mark("procursus-nxt2-verify-success \(file.path)")
                 FlekDeckBootTrace.mark("procursus-nxt2-refresh-enter \(file.path)")
                 guard refreshVnode(atPath: target.path) else {
                     throw romError("failed to refresh NXT2-signed file \(file.path)")
@@ -1774,8 +1779,15 @@ private enum FlekDeckBootPaths {
 
 private typealias FlekDeckNXT2SignFunction =
     @convention(c) (UnsafePointer<CChar>, CFDictionary, Bool, UnsafePointer<CChar>?) -> Int32
+private typealias FlekDeckNXT2VerifyFunction =
+    @convention(c) (UnsafePointer<CChar>) -> Int32
 
-private func FlekDeckNXT2HostSigner() -> FlekDeckNXT2SignFunction? {
+private struct FlekDeckNXT2HostServices {
+    let sign: FlekDeckNXT2SignFunction
+    let verify: FlekDeckNXT2VerifyFunction
+}
+
+private func FlekDeckNXT2HostSigner() -> FlekDeckNXT2HostServices? {
     // A dedicated, safely loadable dylib contains pinned Nyxian signing.c,
     // cdhash.c and key.c. Loading the guest System/Rom/init here executes
     // pre-bootstrap guest initializers and previously crashed iOS 27.
@@ -1791,7 +1803,8 @@ private func FlekDeckNXT2HostSigner() -> FlekDeckNXT2SignFunction? {
         return nil
     }
     guard let ready = dlsym(handle, "FlekDeckNXT2SignerReady"),
-          let signingFunction = dlsym(handle, "trust_nxt2_sign") else {
+          let signingFunction = dlsym(handle, "trust_nxt2_sign"),
+          let verifyFunction = dlsym(handle, "FlekDeckNXT2VerifySignedPath") else {
         FlekDeckBootTrace.mark("procursus-nxt2-native-signer-symbols-missing")
         return nil
     }
@@ -1801,7 +1814,9 @@ private func FlekDeckNXT2HostSigner() -> FlekDeckNXT2SignFunction? {
         return nil
     }
     FlekDeckBootTrace.mark("procursus-nxt2-native-signer-and-key-ready")
-    return unsafeBitCast(signingFunction, to: FlekDeckNXT2SignFunction.self)
+    return FlekDeckNXT2HostServices(
+        sign: unsafeBitCast(signingFunction, to: FlekDeckNXT2SignFunction.self),
+        verify: unsafeBitCast(verifyFunction, to: FlekDeckNXT2VerifyFunction.self))
 }
 
 private func FlekDeckNXT2Sign(hostSigner: FlekDeckNXT2SignFunction,

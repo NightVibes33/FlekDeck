@@ -294,11 +294,12 @@ jobs:
           test -s "$CRYPTO/OpenSSL.framework/OpenSSL"
           xcrun --sdk iphoneos clang \
             -target arm64-apple-ios18.0 -isysroot "$SDK" \
-            -dynamiclib -O2 -fvisibility=default \
+            -dynamiclib -O2 -fvisibility=default -fobjc-arc \
             -DHOST_ENV=1 -D__NXTOOL=0 -UCLIENT_ENV \
             -I "$NX_ROOT" -I "$NX_ROOT/Nyxian" \
             -F "$CRYPTO" \
             build/nxt2/FlekDeckNXT2Signer.c \
+            build/nxt2/FlekDeckNXT2Keychain.m \
             "$NX_ROOT/Nyxian/LindChain/ProcEnvironment/Surface/trust/cdhash.c" \
             "$NX_ROOT/Nyxian/LindChain/ProcEnvironment/Surface/key.c" \
             -framework CoreFoundation -framework Security -framework Foundation \
@@ -309,6 +310,12 @@ jobs:
           nm -gU build/nxt2/FlekDeckNXT2Signer.dylib > build/nxt2/signer-symbols.txt
           grep -q '_trust_nxt2_sign' build/nxt2/signer-symbols.txt
           grep -q '_FlekDeckNXT2SignerReady' build/nxt2/signer-symbols.txt
+          grep -q '_FlekDeckNXT2VerifySignedPath' build/nxt2/signer-symbols.txt
+          grep -q '_trust_nxt2_read' build/nxt2/signer-symbols.txt
+          grep -q '_trust_nxt2_public_key_read' build/nxt2/signer-symbols.txt
+          grep -q '_trust_nxt2_generate_rootca_keypair' build/nxt2/signer-symbols.txt
+          grep -q '_ksurface_keychain_update' build/nxt2/signer-symbols.txt
+          grep -q '_ksurface_keychain_match' build/nxt2/signer-symbols.txt
           test -s build/nxt2/FlekDeckNXT2Signer.dylib
           echo "Real Nyxian NXT2 EC signer and persistent-key code linked"
 
