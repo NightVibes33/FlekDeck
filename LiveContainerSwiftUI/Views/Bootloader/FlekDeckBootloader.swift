@@ -2019,6 +2019,20 @@ private final class FlekDeckBootViewController: UIViewController {
                 return
             }
 
+            // NXSlotInit executes inside the guest dylib's Mach-O initializer.
+            // It can abort before dlopen returns if PE bootstrap fails.
+            // Arm the persistent boot guard BEFORE loading the ROM.
+            do {
+                try FlekDeckBootPaths.setSessionActive(true)
+                FlekDeckBootTrace.mark("rom-slot-dlopen-crash-guard-armed")
+            } catch {
+                FlekDeckBootTrace.mark("rom-slot-guard-failed \(error.localizedDescription)")
+                DispatchQueue.main.async { self.transition(to: self.builtinController) }
+                return
+            }
+            // Collect genuine extension diagnostics before the fatal
+            // initializer: never fake a PE process or bypass trust.
+            FlekDeckTraceROMProcessEnvironment()
             FlekDeckBootTrace.mark("rom-slot-load-enter")
             let slot = loadSlot(loadSuperslotForcefully: false)
             FlekDeckBootTrace.mark("rom-slot-load-return")
@@ -2027,6 +2041,7 @@ private final class FlekDeckBootViewController: UIViewController {
                 guard case let .loaded(name, slotMain, slotDidAppear, slotCreateWindow) = slot else {
                     if case let .failed(message) = slot {
                         FlekDeckBootTrace.mark("rom-slot-load-failed \(message)")
+                        try? FlekDeckBootPaths.setSessionActive(false)
                         self.enterRecovery(error: "ERROR: \(message)")
                     }
                     return
@@ -2039,7 +2054,7 @@ private final class FlekDeckBootViewController: UIViewController {
                         missingAssets.joined(separator: ", ") +
                         ". Install a complete FlekDeck build; the flashed ROM was not modified."
                     FlekDeckBootTrace.mark("rom-runtime-preflight-failed \(message)")
-                    // Never lock the whole FlekDeck host behind a broken guest.
+                    try? FlekDeckBootPaths.setSessionActive(false)
                     self.transition(to: self.builtinController)
                     return
                 }
@@ -2051,12 +2066,8 @@ private final class FlekDeckBootViewController: UIViewController {
                 }
                 FlekDeckBootTrace.mark("rom-runtime-preflight-ready")
 
-                do {
-                    try FlekDeckBootPaths.setSessionActive(true)
-                } catch {
-                    self.enterRecovery(error: "ERROR: Could not activate ROM boot: " + error.localizedDescription)
-                    return
-                }
+                // Session already armed before ROM dlopen. Keep it armed
+                // until the guest has reached the real SpringBoard.
 
                 // Preserve Nyxian's upstream FBProcessManager registration
                 // path. A previous iOS 27 constructor compatibility hook
@@ -2066,17 +2077,14 @@ private final class FlekDeckBootViewController: UIViewController {
                 FlekDeckBootTrace.mark("rom-frontboard-upstream-path-ready")
                 FlekDeckBootTrace.mark("rom-nyxian-kmsg-in-documents-captured-on-next-launch")
 
-                // FlekDeck remains the *only* visible Home Screen. The ROM's
-                // genuine SpringBoard is an internal userspace service,
-                // not a second launcher or an overlay covering FlekDeck.
-                FlekDeckBootTrace.mark("procursus-host-shell-enter")
-                self.transition(to: self.builtinController, style: .crossfade) {
-                    self.startIntegratedSpringBoard(
-                        name: name,
-                        slotMain: slotMain,
-                        slotDidAppear: slotDidAppear,
-                        slotCreateWindow: slotCreateWindow)
-                }
+                // Once the real ROM boots it OWNS the visible Home screen.
+                // FlekDeck's launcher is retained as a safe-mode fallback.
+                FlekDeckBootTrace.mark("procursus-real-springboard-boot-enter")
+                self.startIntegratedSpringBoard(
+                    name: name,
+                    slotMain: slotMain,
+                    slotDidAppear: slotDidAppear,
+                    slotCreateWindow: slotCreateWindow)
             }
         }
     }
@@ -2090,6 +2098,7 @@ private final class FlekDeckBootViewController: UIViewController {
         guard let slotCreateWindow else {
             FlekDeckBootTrace.mark("integrated-springboard-window-hook-missing")
             try? FlekDeckBootPaths.setSessionActive(false)
+            self.transition(to: self.builtinController)
             return
         }
         let extensionPresent = FileManager.default.fileExists(
@@ -2102,6 +2111,7 @@ private final class FlekDeckBootViewController: UIViewController {
         guard let raw = slotMain() else {
             FlekDeckBootTrace.mark("integrated-nxslotmain-returned-nil")
             try? FlekDeckBootPaths.setSessionActive(false)
+            self.transition(to: self.builtinController)
             return
         }
         FlekDeckBootTrace.mark("integrated-nxslotmain-return")
@@ -2112,24 +2122,22 @@ private final class FlekDeckBootViewController: UIViewController {
             try? FlekDeckBootPaths.setSessionActive(false)
             return
         }
-        guard let hostWindow = view.window else {
+        guard view.window != nil else {
             FlekDeckBootTrace.mark("procursus-host-window-unavailable")
             try? FlekDeckBootPaths.setSessionActive(false)
+            self.transition(to: self.builtinController)
             return
         }
 
-        // A window is needed by the ROM's NXWindowServer and its guest
-        // SpringBoard process. Keeping it *below* FlekDeck's existing window
-        // lets those services run while the exact original FlekDeck Home,
-        // dock, Installer and gestures retain every on-screen touch.
+        // Present the actual Nyxian/Procursus guest UIWindow, not the
+        // FlekDeck SwiftUI launcher and not a fake SpringBoard replica.
         activeSlotWindow = guestWindow
-        guestWindow.rootViewController = guestRoot
-        guestWindow.windowLevel = .normal - 1
-        guestWindow.makeKeyAndVisible()
-        guestRoot.view.layoutIfNeeded()
-        hostWindow.makeKeyAndVisible()
-        FlekDeckBootTrace.mark("procursus-backend-window-under-flekdeck-home")
-        completeROMBoot(didAppear: slotDidAppear)
+        guestWindow.windowLevel = .normal
+        FlekDeckBootTrace.mark("procursus-real-springboard-window-transition")
+        self.transition(into: guestWindow, root: guestRoot) {
+            FlekDeckBootTrace.mark("procursus-real-springboard-visible")
+            self.completeROMBoot(didAppear: slotDidAppear)
+        }
     }
 
     // A real guest app is displayed only after a successful workspace launch.
