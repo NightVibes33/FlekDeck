@@ -415,8 +415,14 @@ jobs:
           grep -q 'FlekDeckRetryBundledProcursus' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           grep -q 'FlekDeckProcursusInstallFailed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'Retry bundled setup' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
-          grep -q 'FlekDeckRestartAfterProcursusInstall' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
-          grep -q 'func FlekDeckRestartAfterProcursusInstall' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckActivateProcursusAfterInstall' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'FlekDeckActivateProcursusAfterInstall' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'func FlekDeckActivateProcursusAfterInstall' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          ! grep -q 'FlekDeckRestartAfterProcursusInstall' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          ! grep -q 'FlekDeckRestartAfterProcursusInstall' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          grep -q 'procursus-integrated-backend-window-ready' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'rom-slot-dlopen-crash-guard-armed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          ! grep -q 'procursus-real-springboard-window-transition' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'simulator-host-smoke-only-real-rom-unsupported' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           plutil -lint LiveProcess/LiveProcess.entitlements LiveProcess/LiveProcessRelease.entitlements
           grep -q FlekDeckRunPERequest LiveProcess/main.m
@@ -426,9 +432,9 @@ jobs:
           grep -q 'rom-registration-get-task-allow-denied' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'previous-nyxian-kmsg.log' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'recordCommittedROM' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
-          grep -q 'procursus-real-springboard-window-transition' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
-          grep -q 'rom-slot-dlopen-crash-guard-armed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
-          ! grep -q 'procursus-backend-window-under-flekdeck-home' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'procursus-integrated-backend-window-ready' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'procursus-live-dlopen-enter' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          ! grep -q 'procursus-real-springboard-window-transition' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckLaunchProcursusApp' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'procursus-reusing-flekdeck-app-signing-identity' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           ! grep -q 'FlekROMCertificateFromBuiltinSideStore' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
