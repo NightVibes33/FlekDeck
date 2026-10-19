@@ -518,10 +518,14 @@ private enum SlotLoadResult: @unchecked Sendable {
 
 private typealias RestartSelfFn = @convention(c) () -> Void
 
-// Public API used by the existing FlekDeck Home after the ROM install
-// completed; the actual restart primitive remains private to this file.
-func FlekDeckRestartAfterProcursusInstall() {
-    restartSelf()
+// In-place activation keeps FlekDeck's Home, Settings and app lifecycle
+// intact. Procursus is a guest runtime installed *inside* FlekDeck, not a
+// separate jailbroken phone UI or a relaunch into Nyxian.
+@MainActor
+func FlekDeckActivateProcursusAfterInstall() {
+    NotificationCenter.default.post(
+        name: Notification.Name("FlekDeckActivateInstalledProcursus"),
+        object: nil)
 }
 
 private func restartSelf() {
@@ -1909,6 +1913,10 @@ private final class FlekDeckBootViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(presentProcursusGuest),
             name: Self.showGuestName, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(activateInstalledProcursus),
+            name: Notification.Name("FlekDeckActivateInstalledProcursus"),
+            object: nil)
         
         self.view.backgroundColor = .systemBackground
         
@@ -2077,14 +2085,68 @@ private final class FlekDeckBootViewController: UIViewController {
                 FlekDeckBootTrace.mark("rom-frontboard-upstream-path-ready")
                 FlekDeckBootTrace.mark("rom-nyxian-kmsg-in-documents-captured-on-next-launch")
 
-                // Once the real ROM boots it OWNS the visible Home screen.
-                // FlekDeck's launcher is retained as a safe-mode fallback.
-                FlekDeckBootTrace.mark("procursus-real-springboard-boot-enter")
-                self.startIntegratedSpringBoard(
-                    name: name,
-                    slotMain: slotMain,
-                    slotDidAppear: slotDidAppear,
-                    slotCreateWindow: slotCreateWindow)
+                // Procursus installs INTO the existing FlekDeck experience:
+                // its SpringBoard and launch services run natively inside
+                // the ROM while FlekDeck remains the visible and interactive
+                // launcher, app manager, settings and package entrypoint.
+                FlekDeckBootTrace.mark("procursus-integrated-services-boot-enter")
+                self.transition(to: self.builtinController, style: .crossfade) {
+                    self.startIntegratedSpringBoard(
+                        name: name,
+                        slotMain: slotMain,
+                        slotDidAppear: slotDidAppear,
+                        slotCreateWindow: slotCreateWindow)
+                }
+            }
+        }
+    }
+
+    // Activate the installed ROM within the SAME running FlekDeck app.
+    // The native constructor can abort before returning from dlopen;
+    // persist a crash-guard marker first and never retry automatically
+    // after the corresponding crash. No fake process state is reported.
+    @objc private func activateInstalledProcursus() {
+        guard FlekDeckHasInstalledProcursusROM() else {
+            FlekDeckBootTrace.mark("procursus-live-activation-no-committed-rom")
+            return
+        }
+        guard !UserDefaults.standard.bool(forKey: Self.guestBootCrashGuardKey) else {
+            FlekDeckBootTrace.mark("procursus-live-activation-crash-guard-blocked")
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            if FlekDeckBootPaths.previousSessionWasActive() {
+                FlekDeckBootTrace.mark("procursus-live-activation-already-active")
+                return
+            }
+            do {
+                try FlekDeckBootPaths.setSessionActive(true)
+            } catch {
+                FlekDeckBootTrace.mark("procursus-live-activation-session-error \(error.localizedDescription)")
+                return
+            }
+            FlekDeckTraceROMProcessEnvironment()
+            FlekDeckBootTrace.mark("procursus-live-dlopen-enter")
+            let result = loadSlot(loadSuperslotForcefully: false)
+            FlekDeckBootTrace.mark("procursus-live-dlopen-return")
+            DispatchQueue.main.async {
+                switch result {
+                case let .failed(error):
+                    try? FlekDeckBootPaths.setSessionActive(false)
+                    FlekDeckBootTrace.mark("procursus-live-dlopen-failed \(error)")
+                case let .loaded(name, main, appeared, createWindow):
+                    let missing = FlekDeckBootPaths.missingNyxianBootAssets()
+                    guard missing.isEmpty else {
+                        try? FlekDeckBootPaths.setSessionActive(false)
+                        FlekDeckBootTrace.mark("procursus-live-missing-assets \(missing.joined(separator: ","))")
+                        return
+                    }
+                    FlekDeckBootTrace.mark("procursus-live-integrated-boot-enter")
+                    self.startIntegratedSpringBoard(name: name,
+                        slotMain: main,
+                        slotDidAppear: appeared,
+                        slotCreateWindow: createWindow)
+                }
             }
         }
     }
@@ -2129,15 +2191,19 @@ private final class FlekDeckBootViewController: UIViewController {
             return
         }
 
-        // Present the actual Nyxian/Procursus guest UIWindow, not the
-        // FlekDeck SwiftUI launcher and not a fake SpringBoard replica.
+        // Retain Nyxian's real WindowServer / SpringBoard UIKit view so the
+        // guest processes can run, but DO NOT replace the FlekDeck host UI
+        // with a second "jailbroken phone" display. Actual guest apps
+        // (including Sileo once installed by apt) are enumerated through
+        // LDEApplicationWorkspace and appear in FlekDeck's existing Home.
         activeSlotWindow = guestWindow
-        guestWindow.windowLevel = .normal
-        FlekDeckBootTrace.mark("procursus-real-springboard-window-transition")
-        self.transition(into: guestWindow, root: guestRoot) {
-            FlekDeckBootTrace.mark("procursus-real-springboard-visible")
-            self.completeROMBoot(didAppear: slotDidAppear)
-        }
+        guestWindow.rootViewController = guestRoot
+        guestWindow.windowLevel = .normal - 1
+        guestWindow.makeKeyAndVisible()
+        guestRoot.view.layoutIfNeeded()
+        view.window?.makeKeyAndVisible()
+        FlekDeckBootTrace.mark("procursus-integrated-backend-window-ready")
+        completeROMBoot(didAppear: slotDidAppear)
     }
 
     // A real guest app is displayed only after a successful workspace launch.
