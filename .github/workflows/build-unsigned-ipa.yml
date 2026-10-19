@@ -748,6 +748,32 @@ jobs:
           set -euo pipefail
           mkdir -p build/sim-smoke
           xcrun simctl list devices available > build/sim-smoke/available-devices.txt
+          # The upstream iOS-device hook contains an ARM-only kernel trap.
+          # Substitute a fail-closed x86 simulator stub AFTER the device IPA
+          # has been archived. Never use this simulator-only code on device.
+          python3 - <<'PY_SIM_HOST'
+          from pathlib import Path
+          path = Path("LiveContainer/dyld_bypass_validation.m")
+          source = path.read_text()
+          begin = source.find("ASM(\n.global _builtin_vm_protect")
+          if begin == -1:
+              raise SystemExit("Expected ARM-only dyld hook not found; no simulator patch applied")
+          end = source.find("\n);", begin)
+          if end == -1:
+              raise SystemExit("Expected ARM-only dyld hook terminator not found")
+          end += len("\n);")
+          arm_only = source[begin:end]
+          shim = (
+              "#if defined(__aarch64__)\n" + arm_only + "\n#else\n"
+              "kern_return_t builtin_vm_protect(mach_port_name_t task, "
+              "mach_vm_address_t address, mach_vm_size_t size, "
+              "boolean_t set_max, vm_prot_t new_prot) {\n"
+              "    return KERN_FAILURE; /* Simulator host only: no trap emulation. */\n"
+              "}\n#endif"
+          )
+          path.write_text(source[:begin] + shim + source[end:])
+          print("Simulator-only kernel-trap stub applied; real iOS build remains unchanged")
+          PY_SIM_HOST
           set +e
           xcodebuild build \
             -project LiveContainer.xcodeproj \
