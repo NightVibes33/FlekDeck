@@ -340,6 +340,7 @@ private let romQueue = DispatchQueue(label: "org.emexlabs.nyxian.bootloader.rom"
 private var romOperationInProgress = false
 
 /// Each update represents actual completed installation work, not elapsed time.
+private let procursusInstallInFlightKey = "FlekDeckProcursusInstallInFlight"
 private let procursusProgressKey = "FlekDeckProcursusProgressSnapshot"
 private let procursusProgressName = Notification.Name("FlekDeckProcursusInstallProgress")
 
@@ -1339,6 +1340,11 @@ func FlekDeckInstallBundledProcursus(
         return
     }
     romOperationInProgress = true
+    // A native SIGKILL/SIGABRT does not run Swift's catch block. Persist the
+    // attempt before native signing so the next launch can stop a crash loop.
+    UserDefaults.standard.set(true, forKey: procursusInstallInFlightKey)
+    UserDefaults.standard.synchronize()
+    FlekDeckBootTrace.mark("procursus-attempt-marker-armed")
     reportProcursusProgress(0, title: "Preparing Procursus",
                             detail: "Starting installation")
     FlekDeckBootTrace.mark("procursus-embedded-install-enter")
@@ -1357,6 +1363,9 @@ func FlekDeckInstallBundledProcursus(
         }
         DispatchQueue.main.async {
             romOperationInProgress = false
+            UserDefaults.standard.removeObject(forKey: procursusInstallInFlightKey)
+            UserDefaults.standard.synchronize()
+            FlekDeckBootTrace.mark("procursus-attempt-marker-cleared")
             switch outcome {
             case .success:
                 UserDefaults.standard.removeObject(forKey: "FlekDeckProcursusLastInstallError")
@@ -1816,6 +1825,22 @@ private final class FlekDeckBootViewController: UIViewController {
         didStartBoot = true
         BootConfig.registerDefaults()
         FlekDeckBootTrace.begin()
+        // A prior SIGKILL does not invoke the installer completion handler.
+        // Do not automatically repeat a fatal native crash on every launch.
+        if UserDefaults.standard.bool(forKey: procursusInstallInFlightKey) {
+            let manifestURL = flashedSlotURL().appendingPathComponent("manifest.plist")
+            let wasCommitted = FileManager.default.fileExists(atPath: manifestURL.path)
+            UserDefaults.standard.removeObject(forKey: procursusInstallInFlightKey)
+            if !wasCommitted {
+                UserDefaults.standard.set(
+                    "The previous Procursus installation terminated unexpectedly before the ROM was committed. Open Boot Logs for the last recorded operation, then retry setup.",
+                    forKey: "FlekDeckProcursusLastInstallError")
+                FlekDeckBootTrace.mark("procursus-interrupted-install-detected-auto-retry-paused")
+            } else {
+                FlekDeckBootTrace.mark("procursus-interrupted-install-but-rom-committed")
+            }
+            UserDefaults.standard.synchronize()
+        }
         // Do not display stale in-progress UI after a terminated app process.
         UserDefaults.standard.removeObject(forKey: procursusProgressKey)
         NotificationCenter.default.addObserver(
@@ -1909,7 +1934,10 @@ private final class FlekDeckBootViewController: UIViewController {
                 forKey: "FlekDeckProcursusLastInstallError")
             let previousEpoch = UserDefaults.standard.string(
                 forKey: Self.romAutoRepairKey)
+            let interruptedInstall = oldInstallError?.contains(
+                "previous Procursus installation terminated unexpectedly") == true
             let canRepairOldFailure = oldInstallError != nil
+                && !interruptedInstall
                 && previousEpoch != Self.romAutoRepairEpoch
             let autoInstallPaused = oldInstallError != nil && !canRepairOldFailure
             if let oldInstallError {
