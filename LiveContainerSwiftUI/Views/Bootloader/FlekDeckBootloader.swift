@@ -1975,6 +1975,9 @@ private final class FlekDeckBootViewController: UIViewController {
                 // instead, keeping the user's installed ROM untouched.
                 if previousActive {
                     UserDefaults.standard.set(true, forKey: Self.guestBootCrashGuardKey)
+                    UserDefaults.standard.set(
+                        "The previous Procursus guest launch exited before startup finished. The ROM files are preserved; inspect the Nyxian kernel log and LiveProcess diagnostics before retrying.",
+                        forKey: "FlekDeckProcursusLastBootError")
                     FlekDeckBootTrace.mark("integrated-guest-crash-guard-armed")
                 }
                 try FlekDeckBootPaths.recoverInterruptedInstall()
@@ -2075,6 +2078,18 @@ private final class FlekDeckBootViewController: UIViewController {
                 DispatchQueue.main.async { self.guestActivationInProgress = false }
                 return
             }
+            if let reason = FlekDeckROMProcessExtensionFailureReason() {
+                UserDefaults.standard.set(reason, forKey: "FlekDeckProcursusLastBootError")
+                FlekDeckBootTrace.mark("procursus-live-extension-preflight-failed \(reason)")
+                DispatchQueue.main.async {
+                    self.guestActivationInProgress = false
+                    NotificationCenter.default.post(
+                        name: Notification.Name("FlekDeckProcursusRuntimeFailed"),
+                        object: nil)
+                }
+                return
+            }
+            FlekDeckBootTrace.mark("procursus-live-extension-preflight-passed")
             do {
                 try FlekDeckBootPaths.setSessionActive(true)
                 FlekDeckBootTrace.mark("procursus-live-dlopen-crash-guard-armed")
@@ -2092,7 +2107,11 @@ private final class FlekDeckBootViewController: UIViewController {
                 switch result {
                 case let .failed(error):
                     try? FlekDeckBootPaths.setSessionActive(false)
+                    UserDefaults.standard.set(error, forKey: "FlekDeckProcursusLastBootError")
                     FlekDeckBootTrace.mark("procursus-live-dlopen-failed \(error)")
+                    NotificationCenter.default.post(
+                        name: Notification.Name("FlekDeckProcursusRuntimeFailed"),
+                        object: nil)
                 case let .loaded(name, main, appeared, createWindow):
                     FlekDeckBootTrace.mark("procursus-live-integrated-boot-enter")
                     self.startIntegratedSpringBoard(name: name,
@@ -2204,6 +2223,7 @@ private final class FlekDeckBootViewController: UIViewController {
         do {
             try FlekDeckBootPaths.setSessionActive(false)
             UserDefaults.standard.set(false, forKey: Self.guestBootCrashGuardKey)
+            UserDefaults.standard.removeObject(forKey: "FlekDeckProcursusLastBootError")
             FlekDeckBootTrace.mark("rom-boot-ui-ready")
             NotificationCenter.default.post(
                 name: Notification.Name("FlekDeckProcursusRuntimeReady"),

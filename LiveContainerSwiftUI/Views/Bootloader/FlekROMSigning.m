@@ -135,6 +135,48 @@ void FlekDeckTraceROMProcessEnvironment(void)
 }
 
 
+// Mirrors the actual prerequisite in pinned Nyxian PEUserspaceManager:
+// PEGetLiveProcessBundle() != nil && PEExtensionHasGetTaskAllowed() == YES.
+// Never infer runtime signing entitlements from the unsigned IPA's plist;
+// users may re-sign the extension independently through SideStore / ESign.
+NSString *FlekDeckROMProcessExtensionFailureReason(void)
+{
+    NSString *extensionPath = [NSBundle.mainBundle.builtInPlugInsPath
+        stringByAppendingPathComponent:@"LiveProcess.appex"];
+    NSBundle *bundle = [NSBundle bundleWithPath:extensionPath];
+    if (bundle == nil || ![bundle isLoaded] && ![[NSFileManager defaultManager]
+            fileExistsAtPath:bundle.executablePath]) {
+        return @"The installed FlekDeck LiveProcess.appex is missing or unreadable. Install the IPA with its extension included.";
+    }
+    Class extensionClass = NSClassFromString(@"NSExtension");
+    SEL factory = NSSelectorFromString(@"extensionWithIdentifier:error:");
+    if (!extensionClass || ![extensionClass respondsToSelector:factory]) {
+        return @"iOS cannot resolve the NSExtension API required by Nyxian's process launcher.";
+    }
+    NSError *error = nil;
+    id extension = ((id (*)(id, SEL, id, NSError **))objc_msgSend)(
+        extensionClass, factory, bundle.bundleIdentifier, &error);
+    if (!extension || error) {
+        return @"iOS cannot register the installed LiveProcess extension. Verify the extension's bundle ID and signing.";
+    }
+    SEL pluginSel = NSSelectorFromString(@"_plugIn");
+    if (![extension respondsToSelector:pluginSel]) {
+        return @"The installed LiveProcess extension has no accessible PlugIn entitlement interface.";
+    }
+    id plugin = ((id (*)(id, SEL))objc_msgSend)(extension, pluginSel);
+    SEL entsSel = NSSelectorFromString(@"entitlements");
+    if (!plugin || ![plugin respondsToSelector:entsSel]) {
+        return @"Cannot read the installed LiveProcess signing entitlements.";
+    }
+    id entitlements = ((id (*)(id, SEL))objc_msgSend)(plugin, entsSel);
+    if (![entitlements isKindOfClass:NSDictionary.class] ||
+        ![entitlements[@"get-task-allow"] isKindOfClass:NSNumber.class] ||
+        ![entitlements[@"get-task-allow"] boolValue]) {
+        return @"The installed LiveProcess extension does not have get-task-allow. Nyxian's PEUserspaceManager requires that entitlement. Sign FlekDeck and LiveProcess with a valid development identity that preserves it; changing the ROM or .deb packages cannot fix this.";
+    }
+    return nil;
+}
+
 static void FlekROMTraceSigningPath(const char *phase, NSString *path)
 {
     // Never log host signing credentials, contents, P12 passwords, or tokens.

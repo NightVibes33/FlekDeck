@@ -42,6 +42,7 @@ struct LCSettingsView: View {
     @State private var procursusInstalled = false
     @State private var procursusInstalling = false
     @State private var procursusInstallStatus = ""
+    @State private var procursusBootError = ""
     @State private var procursusProgress: [String: Any] = [:]
     
     @StateObject private var certificateImportAlert = YesNoHelper()
@@ -166,6 +167,12 @@ struct LCSettingsView: View {
                 Text("Procursus was installed into FlekDeck's local ROM slot. The guest process, package manager and Sileo appear only after the real runtime boots. FlekDeck does not restart into another phone interface.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if !procursusBootError.isEmpty {
+                    Label(procursusBootError, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                }
                 if UserDefaults.standard.bool(forKey: "FlekDeckGuestSpringBoardCrashGuard") {
                     Label("Previous guest boot aborted. FlekDeck remains usable; review Boot Logs before retrying.", systemImage: "exclamationmark.triangle")
                         .font(.footnote)
@@ -533,6 +540,7 @@ struct LCSettingsView: View {
             certificateDataFound = LCUtils.certificateData() != nil && LCSharedUtils.certificatePassword() != nil
             procursusInstalled = FlekDeckHasInstalledProcursusROM()
             procursusInstallStatus = UserDefaults.standard.string(forKey: "FlekDeckProcursusLastInstallError") ?? ""
+            procursusBootError = UserDefaults.standard.string(forKey: "FlekDeckProcursusLastBootError") ?? ""
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .settings, let link = sharedModel.deepLink else { return }
                 sharedModel.deepLink = nil
@@ -541,6 +549,10 @@ struct LCSettingsView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("FlekDeckProcursusRuntimeFailed"))) { _ in
+            procursusBootError = UserDefaults.standard.string(forKey: "FlekDeckProcursusLastBootError") ?? ""
+        }
         .onReceive(NotificationCenter.default.publisher(
             for: Notification.Name("FlekDeckProcursusInstallProgress"))) { notification in
             guard let event = notification.userInfo as? [String: Any],

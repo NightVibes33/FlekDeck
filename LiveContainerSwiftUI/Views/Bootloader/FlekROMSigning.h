@@ -16,6 +16,11 @@ FOUNDATION_EXPORT BOOL FlekDeckSignROMFilesWithZSign(NSArray<NSURL *> *files,
 /// Log bundled LiveProcess readiness without changing Nyxian registration.
 FOUNDATION_EXPORT void FlekDeckTraceROMProcessEnvironment(void);
 
+/// Checks Nyxian's required NSExtension and get-task-allow entitlement
+/// against the installed, re-signed LiveProcess extension itself.
+/// Nil means the required extension is present and correctly entitled.
+FOUNDATION_EXPORT NSString * _Nullable FlekDeckROMProcessExtensionFailureReason(void);
+
 /// Returns the ROM store shared by FlekDeck and its LiveProcess extension.
 /// Returns nil when the signed app has no usable application-group entitlement.
 FOUNDATION_EXPORT NSURL * _Nullable FlekDeckBootSharedRootURL(void);

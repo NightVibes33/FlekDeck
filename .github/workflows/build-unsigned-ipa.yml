@@ -424,6 +424,9 @@ jobs:
           grep -q 'procursus-live-dlopen-crash-guard-armed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'procursus-home-first-activation' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'procursus-live-activation-already-running' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckROMProcessExtensionFailureReason' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          grep -q 'procursus-live-extension-preflight-failed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
+          grep -q 'FlekDeckProcursusLastBootError' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           ! grep -q 'rom-slot-load-enter' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'procursus-real-springboard-window-transition' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'simulator-host-smoke-only-real-rom-unsupported' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
