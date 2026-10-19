@@ -116,12 +116,15 @@ def main():
     # iOS host, enforce the same cap using the device's active VM page size.
     signer = once(signer, "    if(len > PAGE_SIZE)",
                   "    if(len > (size_t)getpagesize())", "host page-size bound")
-    # Nyxian's guest compilation context defines PAGE_SIZE internally.
-    # The iOS host SDK doesn't expose that constant here; getpagesize()
-    # preserves the on-device limit without assuming 4K or 16K pages.
+    # Preserve Nyxian's exact PAGE_SIZE comparison. Import Apple's real
+    # Darwin virtual-memory parameter header instead of replacing or
+    # hardcoding its check (arm64 userland exposes vm_page_size here).
     signer = once(
-        signer, "    if(len > PAGE_SIZE)",
-        "    if(len > (size_t)getpagesize())", "NXT2 blob page bound"
+        signer,
+        "#include <sys/param.h>\\n#include <unistd.h>\\n#include <fcntl.h>\\n",
+        "#include <sys/param.h>\\n#include <mach/vm_param.h>\\n"
+        "#include <unistd.h>\\n#include <fcntl.h>\\n",
+        "native PAGE_SIZE declaration"
     )
     signer = once(
         signer,
