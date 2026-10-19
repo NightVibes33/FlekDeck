@@ -1184,39 +1184,60 @@ private func flashROM(archive: URL, log: RomLog,
         guard FlekDeckSignROMFilesWithZSign(signingURLs, &signingError) else {
             throw signingError ?? romError("FlekDeck could not sign the ROM binaries")
         }
-        for file in signFiles {
-            log.info("signed \(file.path)")
-        }
-        
-        log.info("refreshing signed files")
-        for file in signFiles {
-            guard refreshVnode(atPath: try slotFile(file.path, in: slot).path) else {
-                throw romError("failed to refresh \(file.path)")
+        FlekDeckBootTrace.mark("procursus-zsign-complete count=\(signFiles.count)")
+        // ZSigner already copy/renames each signed Mach-O to invalidate vnode
+        // signature caches; it reports success only after all those refreshes.
+        // Do NOT perform a second unlink + fclonefileat here. On a jailed iOS
+        // process that extra operation can terminate the app after signing.
+        // Verify all signed paths are still readable without mutating them.
+        for (index, file) in signFiles.enumerated() {
+            let signedURL = try slotFile(file.path, in: slot)
+            guard fm.isReadableFile(atPath: signedURL.path),
+                  let size = (try fm.attributesOfItem(atPath: signedURL.path))[.size] as? NSNumber,
+                  size.int64Value > 0 else {
+                throw romError("Signed ROM executable missing or empty: \(file.path)")
             }
-            log.info("refreshed \(file.path)")
+            FlekDeckBootTrace.mark("procursus-signed-file-verified \(index + 1)/\(signFiles.count) \(file.path)")
         }
+        FlekDeckBootTrace.mark("procursus-post-zsign-file-verification-complete")
         
         log.info("adding NXT2 entitlements if needed")
         let nxt2Files = signFiles.filter { $0.codesigning.neededNXT2 }
+        FlekDeckBootTrace.mark("procursus-nxt2-required count=\(nxt2Files.count)")
         if !nxt2Files.isEmpty {
+            stage(3, "Applying NXT2 entitlements",
+                  "Preparing Nyxian trust services for \(nxt2Files.count) executables")
+            FlekDeckBootTrace.mark("procursus-nxt2-runtime-load-enter \(manifest.executable)")
             let runtimeHandle = try openROMRuntimeImage(at: executable)
+            FlekDeckBootTrace.mark("procursus-nxt2-runtime-load-returned")
+            FlekDeckBootTrace.mark("procursus-nxt2-capability-check-enter")
             let missing = missingNXT2RuntimeCapabilities(for: manifest, imageHandle: runtimeHandle)
+            FlekDeckBootTrace.mark("procursus-nxt2-capability-check-returned missing=\(missing.count)")
             guard missing.isEmpty else {
                 throw romError("\(manifest.name) does not expose its NXT2 runtime: \(missing.joined(separator: ", "))")
             }
-            for file in nxt2Files {
+            for (index, file) in nxt2Files.enumerated() {
+                FlekDeckBootTrace.mark("procursus-nxt2-sign-enter \(index + 1)/\(nxt2Files.count) \(file.path)")
+                let target = try slotFile(file.path, in: slot)
                 let kr = FlekDeckNXT2Sign(imageHandle: runtimeHandle,
-                                          path: try slotFile(file.path, in: slot).path,
+                                          path: target.path,
                                           entitlements: file.codesigning.nxt2 as CFDictionary)
+                FlekDeckBootTrace.mark("procursus-nxt2-sign-result \(index + 1)/\(nxt2Files.count) kr=\(kr)")
                 guard kr == KERN_SUCCESS else {
                     throw romError("failed to add NXT2 entitlements to \(file.path): \(String(cString: mach_error_string(kr)))")
                 }
-                guard refreshVnode(atPath: try slotFile(file.path, in: slot).path) else {
+                FlekDeckBootTrace.mark("procursus-nxt2-refresh-enter \(file.path)")
+                guard refreshVnode(atPath: target.path) else {
                     throw romError("failed to refresh NXT2-signed file \(file.path)")
                 }
+                FlekDeckBootTrace.mark("procursus-nxt2-refresh-done \(file.path)")
+                stage(3, "Applying NXT2 entitlements",
+                      "Signed \(index + 1) of \(nxt2Files.count) guest processes",
+                      current: index + 1, total: nxt2Files.count)
                 log.info("added NXT2 entitlements to \(file.path)")
             }
         }
+        FlekDeckBootTrace.mark("procursus-nxt2-complete")
         
         log.info("refixing sign files permissions")
         for file in signFiles {
@@ -1224,6 +1245,7 @@ private func flashROM(archive: URL, log: RomLog,
         }
     }
     
+    FlekDeckBootTrace.mark("procursus-post-sign-permissions-complete")
     stage(4, "Running ROM installer",
           manifest.installer == nil ? "No additional ROM installer required" :
               "Executing the Procursus installer; completion time is unknown")
@@ -1240,6 +1262,7 @@ private func flashROM(archive: URL, log: RomLog,
         log.info("installer finished")
     }
     
+    FlekDeckBootTrace.mark("procursus-rom-installer-finished")
     stage(5, "Committing ROM", "Moving verified staging slot into place")
     let hadPreviousSlot = fm.fileExists(atPath: finalSlot.path)
     if hadPreviousSlot {
