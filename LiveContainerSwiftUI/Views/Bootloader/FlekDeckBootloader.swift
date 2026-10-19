@@ -1175,6 +1175,19 @@ private func flashROM(archive: URL, log: RomLog,
         }
     }
     
+    // Native crash prevention: NXT2 must be supplied by the host runtime.
+    // dlopen(System/Rom/init) during installation executes the guest's Mach-O
+    // initializers in FlekDeck and terminated iOS 27 before dlopen returned.
+    // Require a genuine, already-linked host trust function before mutating or
+    // signing the staged ROM. A missing build capability is a recoverable setup
+    // error, not a reason to crash the app or claim installation succeeded.
+    let requiredNXT2 = signFiles.filter { $0.codesigning.neededNXT2 }
+    FlekDeckBootTrace.mark("procursus-nxt2-host-preflight requested=\(requiredNXT2.count)")
+    if !requiredNXT2.isEmpty && FlekDeckNXT2HostSigner() == nil {
+        FlekDeckBootTrace.mark("procursus-nxt2-host-signer-unavailable")
+        throw romError("Procursus could not be installed: this FlekDeck build lacks the native Nyxian NXT2 trust signer. The ROM was not committed. This is a runtime integration issue, not a .p12 certificate problem.")
+    }
+    FlekDeckBootTrace.mark("procursus-nxt2-host-preflight-passed")
     stage(3, "Signing executables",
           signFiles.isEmpty ? "No executable signing requested by ROM manifest" :
               "Signing \(signFiles.count) executables with the configured identity")
@@ -1203,24 +1216,19 @@ private func flashROM(archive: URL, log: RomLog,
         FlekDeckBootTrace.mark("procursus-post-zsign-file-verification-complete")
         
         log.info("adding NXT2 entitlements if needed")
-        let nxt2Files = signFiles.filter { $0.codesigning.neededNXT2 }
+        let nxt2Files = requiredNXT2
         FlekDeckBootTrace.mark("procursus-nxt2-required count=\(nxt2Files.count)")
         if !nxt2Files.isEmpty {
             stage(3, "Applying NXT2 entitlements",
-                  "Preparing Nyxian trust services for \(nxt2Files.count) executables")
-            FlekDeckBootTrace.mark("procursus-nxt2-runtime-load-enter \(manifest.executable)")
-            let runtimeHandle = try openROMRuntimeImage(at: executable)
-            FlekDeckBootTrace.mark("procursus-nxt2-runtime-load-returned")
-            FlekDeckBootTrace.mark("procursus-nxt2-capability-check-enter")
-            let missing = missingNXT2RuntimeCapabilities(for: manifest, imageHandle: runtimeHandle)
-            FlekDeckBootTrace.mark("procursus-nxt2-capability-check-returned missing=\(missing.count)")
-            guard missing.isEmpty else {
-                throw romError("\(manifest.name) does not expose its NXT2 runtime: \(missing.joined(separator: ", "))")
+                  "Using the host NXT2 signer for \(nxt2Files.count) executables")
+            guard let hostSign = FlekDeckNXT2HostSigner() else {
+                throw romError("The native NXT2 signer became unavailable during installation.")
             }
+            FlekDeckBootTrace.mark("procursus-nxt2-host-signer-ready")
             for (index, file) in nxt2Files.enumerated() {
                 FlekDeckBootTrace.mark("procursus-nxt2-sign-enter \(index + 1)/\(nxt2Files.count) \(file.path)")
                 let target = try slotFile(file.path, in: slot)
-                let kr = FlekDeckNXT2Sign(imageHandle: runtimeHandle,
+                let kr = FlekDeckNXT2Sign(hostSigner: hostSign,
                                           path: target.path,
                                           entitlements: file.codesigning.nxt2 as CFDictionary)
                 FlekDeckBootTrace.mark("procursus-nxt2-sign-result \(index + 1)/\(nxt2Files.count) kr=\(kr)")
@@ -1750,25 +1758,22 @@ private enum FlekDeckBootPaths {
 private typealias FlekDeckNXT2SignFunction =
     @convention(c) (UnsafePointer<CChar>, CFDictionary, Bool, UnsafePointer<CChar>?) -> Int32
 
-private func openROMRuntimeImage(at executable: URL) throws -> UnsafeMutableRawPointer {
-    guard let handle = dlopen(executable.path, RTLD_NOW | RTLD_NODELETE | RTLD_GLOBAL) else {
-        throw romError("could not load ROM runtime image: \(lastDlError())")
+private func FlekDeckNXT2HostSigner() -> FlekDeckNXT2SignFunction? {
+    // Resolve the real Nyxian trust implementation *only* from libraries
+    // already loaded into FlekDeck. Never load guest System/Rom/init here:
+    // its static initializers are not safe before the ROM bootstrap exists.
+    let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2)
+    guard let symbol = dlsym(defaultHandle, "trust_nxt2_sign") else {
+        return nil
     }
-    guard dlsym(handle, "NXSlotMain") != nil else {
-        throw romError("ROM runtime image does not export NXSlotMain")
-    }
-    return handle
+    return unsafeBitCast(symbol, to: FlekDeckNXT2SignFunction.self)
 }
 
-private func FlekDeckNXT2Sign(imageHandle: UnsafeMutableRawPointer,
+private func FlekDeckNXT2Sign(hostSigner: FlekDeckNXT2SignFunction,
                               path: String,
                               entitlements: CFDictionary) -> Int32 {
-    guard let symbol = dlsym(imageHandle, "trust_nxt2_sign") else {
-        return KERN_FAILURE
-    }
-    let sign = unsafeBitCast(symbol, to: FlekDeckNXT2SignFunction.self)
     return path.withCString { pathPointer in
-        sign(pathPointer, entitlements, true, nil)
+        hostSigner(pathPointer, entitlements, true, nil)
     }
 }
 
