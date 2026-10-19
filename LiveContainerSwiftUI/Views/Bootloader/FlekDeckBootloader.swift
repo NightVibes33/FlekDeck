@@ -339,6 +339,53 @@ private let nxRomLogFD: Int32 = 27
 private let romQueue = DispatchQueue(label: "org.emexlabs.nyxian.bootloader.rom", qos: .userInitiated)
 private var romOperationInProgress = false
 
+/// Each update represents actual completed installation work, not elapsed time.
+private let procursusProgressKey = "FlekDeckProcursusProgressSnapshot"
+private let procursusProgressName = Notification.Name("FlekDeckProcursusInstallProgress")
+
+private func reportProcursusProgress(
+    _ completedStages: Int, title: String, detail: String,
+    current: Int = 0, total: Int = 0, status: String = "running"
+) {
+    let event: [String: Any] = [
+        "pid": Int(ProcessInfo.processInfo.processIdentifier),
+        "completedStages": min(6, max(0, completedStages)),
+        "title": title,
+        "detail": String(detail.prefix(240)),
+        "current": current,
+        "total": total,
+        "status": status
+    ]
+    if current == 0 || current == total || current % 10 == 0 {
+        FlekDeckBootTrace.mark(
+            "procursus-progress stage=\(completedStages)/6 status=\(status) " +
+            "\(title) \(current)/\(total) \(String(detail.prefix(100)))")
+    }
+    DispatchQueue.main.async {
+        UserDefaults.standard.set(event, forKey: procursusProgressKey)
+        NotificationCenter.default.post(
+            name: procursusProgressName, object: nil, userInfo: event)
+    }
+}
+
+private func reportProcursusFailure(_ error: Error) {
+    let message = error.localizedDescription
+    FlekDeckBootTrace.mark("procursus-progress-failed \(message)")
+    DispatchQueue.main.async {
+        var event = UserDefaults.standard.dictionary(
+            forKey: procursusProgressKey) ?? [:]
+        event["pid"] = Int(ProcessInfo.processInfo.processIdentifier)
+        event["title"] = "Installation failed"
+        event["detail"] = message
+        event["status"] = "failed"
+        event["current"] = 0
+        event["total"] = 0
+        UserDefaults.standard.set(event, forKey: procursusProgressKey)
+        NotificationCenter.default.post(
+            name: procursusProgressName, object: nil, userInfo: event)
+    }
+}
+
 private struct RomLog {
     let controller: NXRecoveryViewController?
 
@@ -994,7 +1041,8 @@ func recoveryShowUnflash(recoveryController c: NXRecoveryViewController) {
 
 /// Restore symlinks only after copying signed IPA resources to writable
 /// staging storage. The unsigned IPA itself must never include symlinks.
-private func restoreEmbeddedProcursusROM(from source: URL, into slot: URL) throws {
+private func restoreEmbeddedProcursusROM(from source: URL, into slot: URL,
+                                         onLink: ((Int, Int) -> Void)? = nil) throws {
     let fm = FileManager.default
     guard let expected = FlekDeckBootPaths.embeddedProcursusRoot,
           source.standardizedFileURL == expected.standardizedFileURL else {
@@ -1023,7 +1071,9 @@ private func restoreEmbeddedProcursusROM(from source: URL, into slot: URL) throw
     }
     FlekDeckBootTrace.mark("procursus-staged-with-resigned-binaries")
     let root = slot.standardizedFileURL.path
-    for (relative, target) in links.sorted(by: { $0.key < $1.key }) {
+    for (index, linkEntry) in links.sorted(by: { $0.key < $1.key }).enumerated() {
+        let relative = linkEntry.key
+        let target = linkEntry.value
         guard validRelative(relative), !target.isEmpty,
               !target.hasPrefix("/"), !target.contains("\\") else {
             throw romError("Unsafe embedded ROM symlink: \(relative)")
@@ -1037,11 +1087,19 @@ private func restoreEmbeddedProcursusROM(from source: URL, into slot: URL) throw
             throw romError("ROM symlink outside staging slot: \(relative)")
         }
         try fm.createSymbolicLink(atPath: link.path, withDestinationPath: target)
+        onLink?(index + 1, links.count)
     }
     FlekDeckBootTrace.mark("procursus-extracted-rom-symlinks-restored")
 }
 
-private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
+private func flashROM(archive: URL, log: RomLog,
+                      reportsProgress: Bool = false) throws -> ROMManifest {
+    func stage(_ completed: Int, _ title: String, _ detail: String,
+               current: Int = 0, total: Int = 0) {
+        guard reportsProgress else { return }
+        reportProcursusProgress(completed, title: title, detail: detail,
+                                current: current, total: total)
+    }
     let fm = FileManager.default
     let finalSlot = flashedSlotURL()
     let slot = FlekDeckBootPaths.stagingSlot
@@ -1049,7 +1107,8 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
     
     log.info("\n-- Flashing rom...")
     log.info("selected rom: \(archive.lastPathComponent)")
-    
+    stage(0, "Preparing ROM", "Recovering staging directory and preparing files")
+
     try FlekDeckBootPaths.recoverInterruptedInstall()
     try fm.createDirectory(at: finalSlot.deletingLastPathComponent(), withIntermediateDirectories: true)
     if fm.fileExists(atPath: slot.path) {
@@ -1058,7 +1117,11 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
     try fm.createDirectory(at: slot, withIntermediateDirectories: true, attributes: [:])
     
     if archive.hasDirectoryPath {
-        try restoreEmbeddedProcursusROM(from: archive, into: slot)
+        stage(0, "Copying ROM files", "Copying bundled files into writable storage")
+        try restoreEmbeddedProcursusROM(from: archive, into: slot) { done, total in
+            stage(1, "Restoring filesystem links", "Restored \(done) of \(total) links",
+                  current: done, total: total)
+        }
     } else {
         var extractionError: NSError?
         guard FlekDeckExtractROMArchive(archive, slot, &extractionError) else {
@@ -1067,6 +1130,7 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
     }
     
     log.info("extracted rom")
+    stage(2, "Configuring permissions", "ROM filesystem staged; reading manifest")
     
     let manifest: ROMManifest = try ROMManifest(manifestPlistURL: slot.appendingPathComponent("manifest.plist"))
 
@@ -1097,8 +1161,10 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
     
     log.info("setting up explicit path permissions and configurations")
     var signFiles: [ROMPath] = []
-    for path in manifest.paths {
+    for (index, path) in manifest.paths.enumerated() {
         log.info("setting up \(path.path)")
+        stage(2, "Configuring permissions", "\(path.path)",
+              current: index + 1, total: manifest.paths.count)
         
         if path.codesigning.needed {
             signFiles.append(path)
@@ -1108,6 +1174,9 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
         }
     }
     
+    stage(3, "Signing executables",
+          signFiles.isEmpty ? "No executable signing requested by ROM manifest" :
+              "Signing \(signFiles.count) executables with the configured identity")
     if !signFiles.isEmpty {
         log.info("signing files")
         let signingURLs = try signFiles.map { try slotFile($0.path, in: slot) }
@@ -1155,16 +1224,23 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
         }
     }
     
+    stage(4, "Running ROM installer",
+          manifest.installer == nil ? "No additional ROM installer required" :
+              "Executing the Procursus installer; completion time is unknown")
     if let installer = manifest.installer {
         log.info("running installer")
         do {
-            try runRomGeneric(installer, symbol: "NXRomInstall", slot: slot, onLine: log.rom)
+            try runRomGeneric(installer, symbol: "NXRomInstall", slot: slot) { line in
+                log.rom(line)
+                stage(4, "Running ROM installer", String(line.prefix(180)))
+            }
         } catch {
             throw romError("installer failed: \(error.localizedDescription)")
         }
         log.info("installer finished")
     }
     
+    stage(5, "Committing ROM", "Moving verified staging slot into place")
     let hadPreviousSlot = fm.fileExists(atPath: finalSlot.path)
     if hadPreviousSlot {
         try fm.moveItem(at: finalSlot, to: backup)
@@ -1186,6 +1262,7 @@ private func flashROM(archive: URL, log: RomLog) throws -> ROMManifest {
         throw romError("ROM commit validation failed: slot manifest identity changed")
     }
     try FlekDeckBootPaths.recordCommittedROM(verified)
+    stage(6, "ROM installed", "\(verified.name) \(verified.version) committed")
     return verified
 }
 
@@ -1239,16 +1316,20 @@ func FlekDeckInstallBundledProcursus(
         return
     }
     romOperationInProgress = true
+    reportProcursusProgress(0, title: "Preparing Procursus",
+                            detail: "Starting installation")
     FlekDeckBootTrace.mark("procursus-embedded-install-enter")
     romQueue.async {
         let outcome: Result<String, Error>
         do {
-            let manifest = try flashROM(archive: source, log: RomLog(controller: nil))
+            let manifest = try flashROM(archive: source, log: RomLog(controller: nil),
+                                        reportsProgress: true)
             FlekDeckBootTrace.mark("procursus-embedded-install-committed")
             outcome = .success("\(manifest.name) \(manifest.version) installed. Restart FlekDeck to initialize the virtual environment.")
         } catch {
             try? FileManager.default.removeItem(at: FlekDeckBootPaths.stagingSlot)
             FlekDeckBootTrace.mark("procursus-embedded-install-failed \(error.localizedDescription)")
+            reportProcursusFailure(error)
             outcome = .failure(error)
         }
         DispatchQueue.main.async {
@@ -1683,7 +1764,7 @@ private final class FlekDeckBootViewController: UIViewController {
     private static let guestBootCrashGuardKey = "FlekDeckGuestSpringBoardCrashGuard"
     // New integration build permits ONE transparent retry of older failed ROM
     // installs. Subsequent failures require a user-initiated retry.
-    private static let romAutoRepairEpoch = "expanded-rom-signing-20261018-v2"
+    private static let romAutoRepairEpoch = "rom-checksum-removal-progress-20261019-v3"
     private static let romAutoRepairKey = "FlekDeckProcursusAutoRepairEpoch"
     // An embedded Procursus ROM boots as part of FlekDeck itself. The old
     // manual Settings opt-in has been retired; recovery is still available.
@@ -1712,6 +1793,8 @@ private final class FlekDeckBootViewController: UIViewController {
         didStartBoot = true
         BootConfig.registerDefaults()
         FlekDeckBootTrace.begin()
+        // Do not display stale in-progress UI after a terminated app process.
+        UserDefaults.standard.removeObject(forKey: procursusProgressKey)
         NotificationCenter.default.addObserver(
             self, selector: #selector(presentProcursusGuest),
             name: Self.showGuestName, object: nil)

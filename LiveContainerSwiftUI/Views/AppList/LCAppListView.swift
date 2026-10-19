@@ -124,6 +124,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State private var procursusInstallFailure = ""
     @State private var showProcursusRetry = false
     @State private var retryingProcursus = false
+    @State private var procursusProgressVisible = false
+    @State private var procursusProgress: [String: Any] = [:]
 
     @EnvironmentObject private var sharedModel : SharedModel
     @EnvironmentObject private var sharedAppSortManager : LCAppSortManager
@@ -370,6 +372,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 .transition(.opacity)
             }
         }
+        .overlay {
+            if procursusProgressVisible {
+                procursusInstallationOverlay
+            }
+        }
         .animation(.easeOut(duration: 0.25), value: showSearch)
         .onAppear {
             homeBottomSafeInset = LCDeviceSafeArea.bottomInset()
@@ -384,11 +391,18 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
             rebuildOrderedHomeItems()
             refreshVirtualApps()
+            restoreProcursusProgressSnapshot()
             presentPendingProcursusFailure()
         }
         .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("FlekDeckProcursusInstallProgress"))) { event in
+            if let progress = event.userInfo as? [String: Any] {
+                updateProcursusProgress(progress)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
             for: Notification.Name("FlekDeckProcursusInstallFailed"))) { _ in
-            presentPendingProcursusFailure()
+            if !procursusProgressVisible { presentPendingProcursusFailure() }
         }
         .onReceive(NotificationCenter.default.publisher(
             for: Notification.Name("FlekDeckProcursusRuntimeReady"))) { _ in
@@ -1132,8 +1146,127 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
 
 
+
+    // A stage is counted only after the corresponding installer work completes.
+    // Indeterminate work (ROM copying, signing, native installer) uses a spinner,
+    // never a fabricated elapsed-time percentage.
+    private var procursusInstallationOverlay: some View {
+        let status = procursusProgress["status"] as? String ?? "running"
+        let title = procursusProgress["title"] as? String ?? "Preparing Procursus"
+        let detail = procursusProgress["detail"] as? String ?? ""
+        let completed = max(0, min(6, procursusProgress["completedStages"] as? Int ?? 0))
+        let current = procursusProgress["current"] as? Int ?? 0
+        let total = procursusProgress["total"] as? Int ?? 0
+        return ZStack {
+            Color.black.opacity(0.55).ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 12) {
+                        Image(systemName: status == "failed" ? "exclamationmark.triangle.fill" :
+                              status == "complete" ? "checkmark.circle.fill" : "square.stack.3d.up.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(status == "failed" ? Color.orange : Color.accentColor)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Procursus installation")
+                                .font(.headline)
+                            Text(status == "failed" ? "Installation stopped" :
+                                 status == "complete" ? "Installed successfully" : "Installing virtual environment")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(title).font(.title3.bold())
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+
+                    ProgressView(value: Double(completed), total: 6)
+                        .tint(status == "failed" ? .orange : .accentColor)
+                    Text("\(completed) of 6 installation stages completed")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+
+                    if status == "running" {
+                        HStack(spacing: 12) {
+                            if total > 0 {
+                                ProgressView(value: Double(min(current, total)), total: Double(total))
+                                    .frame(maxWidth: .infinity)
+                                Text("\(current) / \(total)")
+                                    .font(.caption.monospacedDigit())
+                            } else {
+                                ProgressView().controlSize(.small)
+                                Text("Working — duration depends on device and signing")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Divider()
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("Installation stages").font(.subheadline.bold())
+                        ForEach(Array([
+                            "Stage ROM files", "Restore filesystem links",
+                            "Configure permissions", "Sign executables",
+                            "Run ROM installer", "Commit ROM"
+                        ].enumerated()), id: \.offset) { index, step in
+                            HStack(spacing: 10) {
+                                Image(systemName: index < completed ? "checkmark.circle.fill" :
+                                      (index == completed && status == "running") ? "circle.dotted" : "circle")
+                                    .foregroundStyle(index < completed ? Color.green : Color.secondary)
+                                Text(step).font(.caption)
+                                Spacer()
+                            }
+                        }
+                    }
+                    if status == "failed" {
+                        HStack {
+                            Button("Retry installation") {
+                                retryProcursusInstallation()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            Button("Close") {
+                                procursusProgressVisible = false
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    } else if status == "complete" {
+                        Text("Restarting to initialize Procursus.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Stage counts reflect completed operations, not a time estimate. Detailed events are saved in FlekDeck boot logs.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(22)
+                .frame(maxWidth: 420)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
+                .padding(20)
+            }
+            .frame(maxHeight: 650)
+        }
+        .zIndex(100)
+    }
+
+    private func updateProcursusProgress(_ event: [String: Any]) {
+        guard (event["pid"] as? Int) == Int(ProcessInfo.processInfo.processIdentifier) else { return }
+        procursusProgress = event
+        procursusProgressVisible = true
+        if (event["status"] as? String) == "running" {
+            showProcursusRetry = false
+        }
+    }
+
+    private func restoreProcursusProgressSnapshot() {
+        guard let event = UserDefaults.standard.dictionary(
+            forKey: "FlekDeckProcursusProgressSnapshot") else { return }
+        updateProcursusProgress(event)
+    }
+
     private func presentPendingProcursusFailure() {
-        guard !retryingProcursus,
+        guard !retryingProcursus, !procursusProgressVisible,
               let error = UserDefaults.standard.string(
                 forKey: "FlekDeckProcursusLastInstallError"),
               !error.isEmpty else { return }
@@ -1143,7 +1276,16 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
     private func retryProcursusInstallation() {
         guard !retryingProcursus else { return }
+        showProcursusRetry = false
         retryingProcursus = true
+        procursusProgressVisible = true
+        procursusProgress = [
+            "pid": Int(ProcessInfo.processInfo.processIdentifier),
+            "completedStages": 0,
+            "title": "Preparing Procursus",
+            "detail": "Starting installation",
+            "status": "running", "current": 0, "total": 0
+        ]
         FlekDeckRetryBundledProcursus { outcome in
             retryingProcursus = false
             switch outcome {
@@ -1154,7 +1296,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 FlekDeckRestartAfterProcursusInstall()
             case .failure(let error):
                 procursusInstallFailure = error.localizedDescription
-                showProcursusRetry = true
+                if !procursusProgressVisible {
+                    showProcursusRetry = true
+                }
             }
         }
     }
