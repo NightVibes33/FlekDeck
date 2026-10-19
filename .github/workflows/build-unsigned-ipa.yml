@@ -448,6 +448,11 @@ jobs:
           grep -q 'case virtualApp(FlekVirtualApp)' LiveContainerSwiftUI/FlekDeck/Home/FlekDeckModel.swift
           grep -q 'FlekDeckListProcursusApps()' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
           grep -q 'FlekDeckLaunchProcursusApp(app.id)' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'FlekDeckProcursusAppsChanged' LiveContainerSwiftUI/Views/AppList/LCAppListView.swift
+          grep -q 'applicationWasInstalled:' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          grep -q 'applicationInitialPopulationDone' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          grep -q 'applicationWithBundleIdentifierWasUninstalled:' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
+          ! grep -q 'bundleID.*org.coolstar.sileo' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'FlekDeckCardBackgroundVisibilityChanged' LiveContainerSwiftUI/FlekDeck/Springboard/LCSpringboardViewController.swift
           xcrun swiftc -frontend -parse LiveContainerSwiftUI/FlekDeck/Settings/FlekPersonalizationView.swift
           ! grep -q 'homeSwitcherWindow' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
