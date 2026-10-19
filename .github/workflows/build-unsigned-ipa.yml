@@ -835,6 +835,11 @@ jobs:
           print("Simulator-only Vibe x86 assembler/header conflicts patched")
           PY_SIM_VIBE_ARCH
           set +e
+          # The hosted macOS 26 runner is Apple Silicon. Explicitly target
+          # its native arm64 Simulator architecture; the original project
+          # settings otherwise force x86_64 and reject ARM guest headers.
+          uname -m | tee build/sim-smoke/host-architecture.txt
+          test "$(uname -m)" = "arm64"
           xcodebuild build \
             -project LiveContainer.xcodeproj \
             -scheme LiveContainer \
@@ -842,6 +847,7 @@ jobs:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/SimulatorDerived \
+            ARCHS=arm64 EXCLUDED_ARCHS='' ONLY_ACTIVE_ARCH=NO \
             CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
             > build/sim-smoke/compile.log 2>&1
           result=$?
