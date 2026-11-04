@@ -427,6 +427,13 @@ jobs:
           grep -q 'FlekDeckROMProcessExtensionFailureReason' LiveContainerSwiftUI/Views/Bootloader/FlekROMSigning.m
           grep -q 'procursus-live-extension-preflight-failed' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'FlekDeckProcursusLastBootError' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          # Keep FlekDeck's ORIGINAL Installer menu, Files picker and URL alert.
+          grep -Fq 'choosingIPA = true' LiveContainerSwiftUI/FlekDeck/Install/FlekInstallerView.swift
+          grep -Fq 'Task { _ = await importUrlHelper.open() }' LiveContainerSwiftUI/FlekDeck/Install/FlekInstallerView.swift
+          grep -Fq '.betterFileImporter(isPresented: $choosingIPA' LiveContainerSwiftUI/FlekDeck/Install/FlekInstallerView.swift
+          grep -Fq '.textFieldAlert(' LiveContainerSwiftUI/FlekDeck/Install/FlekInstallerView.swift
+          grep -Fq 'LCOriginalModalWindowAnchor' LiveContainerSwiftUI/Utilities/ViewExtensions.swift
+          grep -Fq 'LCOriginalModalPresenter.topController' LiveContainerSwiftUI/Utilities/ViewExtensions.swift
           ! grep -q 'rom-slot-load-enter' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           ! grep -q 'procursus-real-springboard-window-transition' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
           grep -q 'simulator-host-smoke-only-real-rom-unsupported' LiveContainerSwiftUI/Views/Bootloader/FlekDeckBootloader.swift
