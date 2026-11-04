@@ -74,9 +74,64 @@ extension View {
     }
 }
 
+// Keep the original UIDocumentPicker / UIAlertController experience, but
+// resolve its presenter from the *view's actual window*. FlekDeck presents
+// Settings and Installer in a managed internal page/scene, which is not always
+// SceneDelegate.window; presenting from the latter made both actions silent.
+private struct LCOriginalModalWindowAnchor: UIViewRepresentable {
+    let onResolve: (UIWindow) -> Void
+
+    func makeUIView(context: Context) -> LCOriginalModalWindowProbe {
+        let view = LCOriginalModalWindowProbe()
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        view.onResolve = onResolve
+        return view
+    }
+
+    func updateUIView(_ view: LCOriginalModalWindowProbe, context: Context) {
+        view.onResolve = onResolve
+        view.resolve()
+    }
+}
+
+private final class LCOriginalModalWindowProbe: UIView {
+    var onResolve: ((UIWindow) -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        resolve()
+    }
+
+    func resolve() {
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            self.onResolve?(window)
+        }
+    }
+}
+
+private enum LCOriginalModalPresenter {
+    static func topController(in sourceWindow: UIWindow?, fallbackWindow: UIWindow?) -> UIViewController? {
+        let visibleWindow = sourceWindow
+            ?? UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first(where: { $0.isKeyWindow })
+            ?? fallbackWindow
+        guard var controller = visibleWindow?.rootViewController else { return nil }
+        while let presented = controller.presentedViewController, !presented.isBeingDismissed {
+            controller = presented
+        }
+        return controller
+    }
+}
+
 public struct DocModifier: ViewModifier {
     @EnvironmentObject var sceneDelegate: SceneDelegate
     @State private var docController: UIDocumentPickerViewController?
+    @State private var presentationWindow: UIWindow?
     @State private var delegate : UIDocumentPickerDelegate
     
     @Binding var isPresented: Bool
@@ -96,22 +151,34 @@ public struct DocModifier: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
-        content.onChange(of: isPresented) { isPresented in
-            if isPresented, docController == nil {
-                let controller = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
-                controller.allowsMultipleSelection = multiple
-                controller.delegate = delegate
-                self.docController = controller
-                var topVC = sceneDelegate.window?.rootViewController
-                while let presented = topVC?.presentedViewController {
-                    topVC = presented
+        content
+            .background(LCOriginalModalWindowAnchor { window in
+                if presentationWindow !== window { presentationWindow = window }
+            })
+            .onChange(of: isPresented) { isPresented in
+                if isPresented, docController == nil {
+                    let controller = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+                    controller.allowsMultipleSelection = multiple
+                    controller.delegate = delegate
+                    self.docController = controller
+                    // A Menu tap dismisses its own UIKit presentation first.
+                    // Present the original Files picker from the Installer's
+                    // window on the following runloop, not the boot screen.
+                    DispatchQueue.main.async {
+                        guard self.isPresented, self.docController === controller,
+                              let topVC = LCOriginalModalPresenter.topController(
+                                in: self.presentationWindow, fallbackWindow: sceneDelegate.window) else {
+                            self.docController = nil
+                            onDismiss()
+                            return
+                        }
+                        topVC.present(controller, animated: true)
+                    }
+                } else if !isPresented, let docController = docController {
+                    docController.dismiss(animated: true)
+                    self.docController = nil
                 }
-                topVC?.present(controller, animated: true)
-            } else if !isPresented, let docController = docController {
-                docController.dismiss(animated: true)
-                self.docController = nil
             }
-        }
     }
 
     private func shutdown() {
@@ -142,6 +209,7 @@ public struct DocModifier: ViewModifier {
 public struct TextFieldAlertModifier: ViewModifier {
     @EnvironmentObject var sceneDelegate: SceneDelegate
     @State private var alertController: UIAlertController?
+    @State private var presentationWindow: UIWindow?
 
     @Binding var isPresented: Bool
 
@@ -152,20 +220,29 @@ public struct TextFieldAlertModifier: ViewModifier {
     let actionCancel: (String?) -> Void
 
     public func body(content: Content) -> some View {
-        content.onChange(of: isPresented) { isPresented in
-            if isPresented, alertController == nil {
-                let alertController = makeAlertController()
-                self.alertController = alertController
-                var topVC = sceneDelegate.window?.rootViewController
-                while let presented = topVC?.presentedViewController {
-                    topVC = presented
+        content
+            .background(LCOriginalModalWindowAnchor { window in
+                if presentationWindow !== window { presentationWindow = window }
+            })
+            .onChange(of: isPresented) { isPresented in
+                if isPresented, alertController == nil {
+                    let alertController = makeAlertController()
+                    self.alertController = alertController
+                    DispatchQueue.main.async {
+                        guard self.isPresented, self.alertController === alertController,
+                              let topVC = LCOriginalModalPresenter.topController(
+                                in: self.presentationWindow, fallbackWindow: sceneDelegate.window) else {
+                            self.alertController = nil
+                            self.actionCancel(nil)
+                            return
+                        }
+                        topVC.present(alertController, animated: true)
+                    }
+                } else if !isPresented, let alertController = alertController {
+                    alertController.dismiss(animated: true)
+                    self.alertController = nil
                 }
-                topVC?.present(alertController, animated: true)
-            } else if !isPresented, let alertController = alertController {
-                alertController.dismiss(animated: true)
-                self.alertController = nil
             }
-        }
     }
 
     private func makeAlertController() -> UIAlertController {
